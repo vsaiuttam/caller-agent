@@ -67,7 +67,7 @@ services:
 
       # CORS — set to your Vercel frontend URL
       - key: CORS_ORIGINS
-        value: "https://your-app.vercel.app,http://localhost:5173"
+        value: "https://frontend-nu-blond-93.vercel.app,http://localhost:5173"
 
       - key: LOG_LEVEL
         value: INFO
