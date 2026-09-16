@@ -134,6 +134,104 @@ def mask(phone: str) -> str:
 
 
 # --------------------------------------------------------------------------
+# Twilio webhook routes (mounted on the main API so they're reachable on Render)
+# --------------------------------------------------------------------------
+
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import Response as StarletteResponse
+
+
+@app.post("/twilio/voice/{room_name}")
+async def twilio_voice(room_name: str, request: StarletteRequest) -> StarletteResponse:
+    from ..voice.twilio_adapter import _active_calls, _gather_twiml
+    import asyncio
+    state = _active_calls.get(room_name)
+    if not state:
+        return StarletteResponse("<Response><Hangup/></Response>", media_type="application/xml")
+    form = await request.form()
+    state.call_sid = str(form.get("CallSid", state.call_sid))
+    state.answered.set()
+    try:
+        greeting = await asyncio.wait_for(state.response_queue.get(), timeout=15.0)
+    except asyncio.TimeoutError:
+        greeting = "Hello, please hold."
+    if greeting is None or state.ended.is_set():
+        return StarletteResponse("<Response><Hangup/></Response>", media_type="application/xml")
+    twiml = _gather_twiml(room_name, greeting)
+    return StarletteResponse(twiml, media_type="application/xml")
+
+
+@app.post("/twilio/gather/{room_name}")
+async def twilio_gather(room_name: str, request: StarletteRequest) -> StarletteResponse:
+    from ..voice.twilio_adapter import _active_calls, _gather_twiml
+    import asyncio
+    state = _active_calls.get(room_name)
+    if not state or state.ended.is_set():
+        return StarletteResponse("<Response><Hangup/></Response>", media_type="application/xml")
+    form = await request.form()
+    speech = str(form.get("SpeechResult", "")).strip()
+    if speech:
+        state.speech_started.set()
+        await state.speech_queue.put(speech)
+    try:
+        agent_text = await asyncio.wait_for(state.response_queue.get(), timeout=30.0)
+    except asyncio.TimeoutError:
+        agent_text = "I need a moment, please hold."
+    if agent_text is None or state.ended.is_set():
+        return StarletteResponse(
+            "<Response><Say>Thank you for your time. Goodbye.</Say><Hangup/></Response>",
+            media_type="application/xml",
+        )
+    twiml = _gather_twiml(room_name, agent_text)
+    return StarletteResponse(twiml, media_type="application/xml")
+
+
+@app.post("/twilio/status/{room_name}")
+async def twilio_status(room_name: str, request: StarletteRequest) -> StarletteResponse:
+    from ..voice.twilio_adapter import _active_calls
+    state = _active_calls.get(room_name)
+    if not state:
+        return StarletteResponse("ok")
+    form = await request.form()
+    status = str(form.get("CallStatus", ""))
+    logger.info("Twilio call %s status: %s", room_name, status)
+    if status in ("completed", "busy", "no-answer", "canceled", "failed"):
+        state.ended.set()
+        state.speech_queue.put_nowait(None)
+        if status != "completed":
+            state.answered.set()
+    return StarletteResponse("ok")
+
+
+@app.post("/twilio/recording/{room_name}")
+async def twilio_recording(room_name: str, request: StarletteRequest) -> StarletteResponse:
+    from ..voice.twilio_adapter import _active_calls
+    state = _active_calls.get(room_name)
+    if not state:
+        return StarletteResponse("ok")
+    form = await request.form()
+    recording_url = str(form.get("RecordingUrl", ""))
+    if recording_url:
+        state.recording_url = recording_url
+        state.recording_sid = str(form.get("RecordingSid", ""))
+        state.recording_duration = int(form.get("RecordingDuration", 0) or 0)
+        logger.info("Recording ready for %s: %s", room_name, state.recording_sid)
+    return StarletteResponse("ok")
+
+
+@app.post("/twilio/amd/{room_name}")
+async def twilio_amd(room_name: str, request: StarletteRequest) -> StarletteResponse:
+    from ..voice.twilio_adapter import _active_calls
+    state = _active_calls.get(room_name)
+    if not state:
+        return StarletteResponse("ok")
+    form = await request.form()
+    state.amd_result = str(form.get("AnsweredBy", ""))
+    logger.info("AMD result for %s: %s", room_name, state.amd_result)
+    return StarletteResponse("ok")
+
+
+# --------------------------------------------------------------------------
 # Templates & languages (static product content, no DB)
 # --------------------------------------------------------------------------
 

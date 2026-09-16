@@ -350,8 +350,21 @@ class TwilioTelephony:
         self._server_task: asyncio.Task | None = None
 
     async def _ensure_server(self) -> None:
-        """Start the embedded webhook server if it isn't running yet."""
+        """Start the embedded webhook server if it isn't running yet.
+
+        If the webhook URL points to the main API server (i.e. the Twilio
+        routes are mounted on FastAPI in app.py), skip starting the separate
+        Uvicorn server — the main server handles everything.
+        """
         if self._server_started:
+            return
+
+        # When deployed (Render/etc), webhook routes are on the main app —
+        # no need for a separate server on port 8765.
+        api_url = os.getenv("RENDER_EXTERNAL_URL", "")
+        if api_url and api_url in self._webhook_url:
+            self._server_started = True
+            logger.info("Twilio webhooks served by main API at %s", self._webhook_url)
             return
 
         import uvicorn
