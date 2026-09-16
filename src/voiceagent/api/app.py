@@ -891,7 +891,35 @@ _PHONE_HEADERS = {"phone", "phone_e164", "number", "mobile", "telephone", "conta
 _TZ_HEADERS = {"timezone", "tz", "time_zone"}
 
 
+def _looks_like_phone(value: str) -> bool:
+    """Return True if *value* smells like a phone number (not a header)."""
+    cleaned = value.strip().lstrip("+").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+    return cleaned.isdigit() and len(cleaned) >= 7
+
+
 def _rows_to_contacts(rows: list[list[str]], dial_code: str) -> dict:
+    if not rows:
+        raise HTTPException(400, "The file needs at least one contact")
+
+    # --- Auto-detect missing header row -----------------------------------
+    # If the first row has no recognised header AND one cell looks like a
+    # phone number, treat the file as header-less and synthesise headers.
+    first = [c.strip().lower() for c in rows[0]]
+    has_known_header = any(h in _NAME_HEADERS | _PHONE_HEADERS | _TZ_HEADERS for h in first)
+
+    if not has_known_header and any(_looks_like_phone(c) for c in rows[0]):
+        # Guess columns: the one that looks like a phone is "phone",
+        # the other is "name". For >2 columns, extras become attributes.
+        phone_idx = next(i for i, c in enumerate(rows[0]) if _looks_like_phone(c))
+        name_idx = 0 if phone_idx != 0 else 1
+        synth = [""] * len(rows[0])
+        synth[name_idx] = "name"
+        synth[phone_idx] = "phone"
+        for i in range(len(synth)):
+            if not synth[i]:
+                synth[i] = f"col_{i+1}"
+        rows = [synth] + rows  # prepend synthetic header
+
     if len(rows) < 2:
         raise HTTPException(400, "The file needs a header row and at least one contact")
 
