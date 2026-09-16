@@ -2,34 +2,33 @@
 @import "tailwindcss";
 
 /* =========================================================================
-   CallerAgent — Telnyx-inspired Theme
-   Deep navy dark mode, vivid green accents, smooth animations.
+   CallerAgent — Design System
+   Render-inspired: deep neutrals, purple accents, clean geometry.
    ========================================================================= */
 
-/* --- Tailwind theme tokens (dark defaults) ----------------------------- */
 @theme {
-  --color-plane: #0B0E11;
-  --color-surface: #131720;
-  --color-elevated: #1A2030;
+  --color-plane: #0A0A0F;
+  --color-surface: #12121A;
+  --color-elevated: #1C1C28;
 
-  --color-ink: #E8ECF4;
-  --color-ink-secondary: #8B95A8;
-  --color-ink-muted: #4E5A6E;
+  --color-ink: #ECECF1;
+  --color-ink-secondary: #8E8EA0;
+  --color-ink-muted: #55556D;
 
-  --color-brand: #00E07F;
-  --color-brand-bright: #33FFa0;
-  --color-brand-deep: #00A85E;
+  --color-brand: #7C5AFF;
+  --color-brand-bright: #9B7DFF;
+  --color-brand-deep: #5B3FCC;
 
-  --color-good: #00E07F;
-  --color-warning: #FFB224;
-  --color-serious: #FF6B3D;
-  --color-critical: #FF3B5C;
+  --color-good: #34D399;
+  --color-warning: #FBBF24;
+  --color-serious: #FB923C;
+  --color-critical: #F87171;
 
-  --color-ramp-1: #00E07F;
-  --color-ramp-2: #00C76E;
-  --color-ramp-3: #00A85E;
-  --color-ramp-4: #008A4D;
-  --color-ramp-5: #006B3D;
+  --color-ramp-1: #7C5AFF;
+  --color-ramp-2: #6D4DE6;
+  --color-ramp-3: #5B3FCC;
+  --color-ramp-4: #4A32B3;
+  --color-ramp-5: #382599;
 
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", "Menlo", monospace;
@@ -42,20 +41,20 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --surface-border: #1E2A3A;
-  --surface-border-hover: #2A3A4E;
-  --surface-hover: rgba(255, 255, 255, 0.03);
+  --surface-border: #23233A;
+  --surface-border-hover: #33335A;
+  --surface-hover: rgba(255, 255, 255, 0.025);
 
-  --shadow-1: 0 1px 3px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.4);
-  --shadow-2: 0 4px 8px rgba(0,0,0,0.5), 0 2px 4px rgba(0,0,0,0.4);
-  --shadow-3: 0 12px 24px rgba(0,0,0,0.5), 0 4px 8px rgba(0,0,0,0.4);
-  --shadow-4: 0 20px 40px rgba(0,0,0,0.6), 0 8px 16px rgba(0,0,0,0.4);
+  --shadow-1: 0 1px 2px rgba(0,0,0,0.5);
+  --shadow-2: 0 2px 8px rgba(0,0,0,0.5);
+  --shadow-3: 0 8px 24px rgba(0,0,0,0.5);
+  --shadow-4: 0 16px 48px rgba(0,0,0,0.6);
 
   --overlay-bg: rgba(0, 0, 0, 0.7);
-  --ripple-color: rgba(0, 224, 127, 0.08);
-  --selection-bg: rgba(0, 224, 127, 0.25);
-  --scrollbar-thumb: #1E2A3A;
-  --scrollbar-hover: #2A3A4E;
+  --ripple-color: rgba(124, 90, 255, 0.1);
+  --selection-bg: rgba(124, 90, 255, 0.3);
+  --scrollbar-thumb: #23233A;
+  --scrollbar-hover: #33335A;
 }
 
 /* -----------------------------------------------------------------------
@@ -64,43 +63,43 @@
 [data-theme="light"] {
   color-scheme: light;
 
-  --color-plane: #F4F6F9;
+  --color-plane: #F8F8FC;
   --color-surface: #FFFFFF;
-  --color-elevated: #EEF1F6;
+  --color-elevated: #F0F0F8;
 
-  --color-ink: #0B0E11;
-  --color-ink-secondary: #4E5A6E;
-  --color-ink-muted: #8B95A8;
+  --color-ink: #111118;
+  --color-ink-secondary: #55556D;
+  --color-ink-muted: #8E8EA0;
 
-  --color-brand: #00A85E;
-  --color-brand-bright: #00C76E;
-  --color-brand-deep: #008A4D;
+  --color-brand: #6B46E5;
+  --color-brand-bright: #7C5AFF;
+  --color-brand-deep: #5332CC;
 
-  --color-good: #00A85E;
-  --color-warning: #D49620;
-  --color-serious: #D45530;
-  --color-critical: #D43050;
+  --color-good: #16A369;
+  --color-warning: #CA9A0E;
+  --color-serious: #D97706;
+  --color-critical: #DC2626;
 
-  --color-ramp-1: #00A85E;
-  --color-ramp-2: #00C76E;
-  --color-ramp-3: #008A4D;
-  --color-ramp-4: #006B3D;
-  --color-ramp-5: #004D2D;
+  --color-ramp-1: #6B46E5;
+  --color-ramp-2: #7C5AFF;
+  --color-ramp-3: #5332CC;
+  --color-ramp-4: #4428B3;
+  --color-ramp-5: #351D99;
 
-  --surface-border: #DEE3EC;
-  --surface-border-hover: #C8CFD9;
+  --surface-border: #E4E4EF;
+  --surface-border-hover: #CDCDE0;
   --surface-hover: rgba(0, 0, 0, 0.02);
 
-  --shadow-1: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
-  --shadow-2: 0 4px 8px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
-  --shadow-3: 0 12px 24px rgba(0,0,0,0.08), 0 4px 8px rgba(0,0,0,0.04);
-  --shadow-4: 0 20px 40px rgba(0,0,0,0.1), 0 8px 16px rgba(0,0,0,0.04);
+  --shadow-1: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow-2: 0 2px 8px rgba(0,0,0,0.08);
+  --shadow-3: 0 8px 24px rgba(0,0,0,0.08);
+  --shadow-4: 0 16px 48px rgba(0,0,0,0.1);
 
-  --overlay-bg: rgba(0, 0, 0, 0.3);
-  --ripple-color: rgba(0, 168, 94, 0.08);
-  --selection-bg: rgba(0, 168, 94, 0.15);
-  --scrollbar-thumb: #C8CFD9;
-  --scrollbar-hover: #B0B8C5;
+  --overlay-bg: rgba(0, 0, 0, 0.25);
+  --ripple-color: rgba(107, 70, 229, 0.08);
+  --selection-bg: rgba(107, 70, 229, 0.15);
+  --scrollbar-thumb: #CDCDE0;
+  --scrollbar-hover: #B8B8D0;
 }
 
 /* --- Base --------------------------------------------------------------- */
@@ -109,28 +108,29 @@ html, body {
   background: var(--color-plane);
   color: var(--color-ink);
   font-family: var(--font-sans);
-  font-size: 15px;
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.55;
+  letter-spacing: -0.01em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 
-/* --- Tabular data — monospace, aligned --------------------------------- */
 .tnum {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
 /* -----------------------------------------------------------------------
-   Cards — Telnyx-style with subtle glow on hover
+   Cards
    ----------------------------------------------------------------------- */
 .card {
   background: var(--color-surface);
   border: 1px solid var(--surface-border);
-  border-radius: 12px;
+  border-radius: 10px;
   box-shadow: var(--shadow-1);
-  transition: border-color 0.2s ease, box-shadow 0.25s ease, background-color 0.3s ease, transform 0.2s ease;
+  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.3s;
 }
 
 .card:hover {
@@ -141,42 +141,39 @@ html, body {
 .card-static {
   background: var(--color-surface);
   border: 1px solid var(--surface-border);
-  border-radius: 12px;
+  border-radius: 10px;
   box-shadow: var(--shadow-1);
-  transition: background-color 0.3s ease;
+  transition: background-color 0.3s;
 }
 
-/* Accent fill — vivid green */
 .accent-fill {
   background: var(--color-brand);
-  color: #0B0E11;
+  color: #fff;
 }
 
 /* -----------------------------------------------------------------------
-   Button ripple — green tint
+   Ripple
    ----------------------------------------------------------------------- */
 .ripple {
   position: relative;
   overflow: hidden;
 }
-
 .ripple::after {
   content: "";
   position: absolute;
   inset: 0;
   background: radial-gradient(circle at var(--ripple-x, 50%) var(--ripple-y, 50%), var(--ripple-color) 0%, transparent 70%);
   opacity: 0;
-  transition: opacity 0.35s ease;
+  transition: opacity 0.3s;
   pointer-events: none;
 }
-
 .ripple:active::after {
   opacity: 1;
   transition: opacity 0s;
 }
 
 /* -----------------------------------------------------------------------
-   Elevation utilities
+   Elevation
    ----------------------------------------------------------------------- */
 .elevation-0 { box-shadow: none; }
 .elevation-1 { box-shadow: var(--shadow-1); }
@@ -185,7 +182,7 @@ html, body {
 .elevation-4 { box-shadow: var(--shadow-4); }
 
 /* -----------------------------------------------------------------------
-   Loading skeleton — Telnyx shimmer
+   Skeleton shimmer
    ----------------------------------------------------------------------- */
 @keyframes shimmer {
   0%   { background-position: -200% 0; }
@@ -200,92 +197,53 @@ html, body {
     var(--color-surface) 63%
   );
   background-size: 200% 100%;
-  animation: shimmer 1.8s ease-in-out infinite;
-  border-radius: 8px;
+  animation: shimmer 2s ease-in-out infinite;
+  border-radius: 6px;
 }
 
 /* -----------------------------------------------------------------------
-   Telnyx-style spinner
+   Spinner — clean arc
    ----------------------------------------------------------------------- */
-@keyframes telnyx-spin {
-  0%   { transform: rotate(0deg); }
+@keyframes spin-rotate {
   100% { transform: rotate(360deg); }
 }
-
-@keyframes telnyx-dash {
+@keyframes spin-dash {
   0%   { stroke-dasharray: 1, 150; stroke-dashoffset: 0; }
   50%  { stroke-dasharray: 90, 150; stroke-dashoffset: -35; }
   100% { stroke-dasharray: 90, 150; stroke-dashoffset: -124; }
 }
 
-.telnyx-spinner {
-  animation: telnyx-spin 2s linear infinite;
+.arc-spinner {
+  animation: spin-rotate 1.4s linear infinite;
 }
-
-.telnyx-spinner circle {
+.arc-spinner circle {
   stroke: var(--color-brand);
   stroke-linecap: round;
-  animation: telnyx-dash 1.5s ease-in-out infinite;
+  animation: spin-dash 1.4s ease-in-out infinite;
   fill: none;
   stroke-width: 3;
 }
 
 /* -----------------------------------------------------------------------
-   Pulse animations
+   Pulse
    ----------------------------------------------------------------------- */
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.3; }
 }
-
 .live-dot {
   animation: pulse-dot 2s ease-in-out infinite;
 }
 
-@keyframes pulse-ring {
-  0%   { transform: scale(1); opacity: 0.6; }
-  100% { transform: scale(2.2); opacity: 0; }
-}
-
-.pulse-ring::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 2px solid var(--color-brand);
-  animation: pulse-ring 1.5s ease-out infinite;
-}
-
 /* -----------------------------------------------------------------------
-   Page transition
+   Page enter
    ----------------------------------------------------------------------- */
-@keyframes fade-in-up {
-  from { opacity: 0; transform: translateY(8px); }
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-
 .page-enter {
-  animation: fade-in-up 0.3s ease-out;
-}
-
-/* -----------------------------------------------------------------------
-   Glow effects — Telnyx green glow
-   ----------------------------------------------------------------------- */
-.glow-brand {
-  border-color: var(--color-brand) !important;
-  box-shadow: 0 0 20px rgba(0, 224, 127, 0.15), 0 0 60px rgba(0, 224, 127, 0.05);
-}
-
-.glow-sm {
-  box-shadow: 0 0 10px rgba(0, 224, 127, 0.1);
-}
-
-/* Brand gradient text */
-.text-gradient {
-  background: linear-gradient(135deg, #00E07F 0%, #33FFa0 50%, #00C76E 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  animation: page-in 0.25s ease-out;
 }
 
 /* -----------------------------------------------------------------------
@@ -305,13 +263,10 @@ html, body {
 }
 *::-webkit-scrollbar { width: 5px; height: 5px; }
 *::-webkit-scrollbar-track { background: transparent; }
-*::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border-radius: 3px;
-}
+*::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
 *::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 
-/* --- Focus — green ring ------------------------------------------------ */
+/* --- Focus ------------------------------------------------------------- */
 :focus-visible {
   outline: 2px solid var(--color-brand);
   outline-offset: 2px;
@@ -323,10 +278,8 @@ html, body {
   color: var(--color-ink);
 }
 
-/* --- RTL --------------------------------------------------------------- */
 [dir="rtl"] { text-align: right; }
 
-/* --- Reduced motion ---------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
@@ -336,7 +289,7 @@ html, body {
 }
 
 /* -----------------------------------------------------------------------
-   Theme transition
+   Theme crossfade
    ----------------------------------------------------------------------- */
 .theme-transitioning,
 .theme-transitioning *,
@@ -346,14 +299,13 @@ html, body {
 }
 
 /* =======================================================================
-   BACKWARD COMPATIBILITY
+   Compat
    ======================================================================= */
-
 .glass-card {
   background: var(--color-surface);
   border: 1px solid var(--surface-border);
   box-shadow: var(--shadow-1);
-  transition: border-color 0.2s ease, box-shadow 0.25s ease;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 .glass-card:hover {
   border-color: var(--surface-border-hover);
@@ -361,8 +313,8 @@ html, body {
 }
 
 .animated-gradient {
-  background: linear-gradient(135deg, #00E07F, #00A85E);
-  color: #0B0E11;
+  background: linear-gradient(135deg, #7C5AFF, #5B3FCC);
+  color: #fff;
 }
 
 .glass {
@@ -371,3 +323,10 @@ html, body {
 }
 
 .noise-overlay::before { display: none; }
+.glow-brand { border-color: var(--color-brand) !important; }
+.text-gradient {
+  background: linear-gradient(135deg, #7C5AFF, #9B7DFF);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
