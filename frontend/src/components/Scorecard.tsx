@@ -47,14 +47,14 @@ export function ScorecardEditor({
       )}
 
       {value.map((criterion, index) => (
-        <div key={index} className="rounded-lg border border-white/10 px-3 py-2.5">
+        <div key={index} className="rounded-lg border border-[var(--surface-border)] px-3 py-2.5">
           <div className="flex items-start gap-2">
             <input
               value={criterion.name}
               onChange={(e) => update(index, { name: e.target.value })}
               placeholder="Criterion, e.g. Notice period"
               disabled={disabled}
-              className="min-w-0 flex-1 rounded-md border border-white/10 bg-surface px-2 py-1 text-sm outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15"
+              className="min-w-0 flex-1 rounded-md border border-[var(--surface-border)] bg-surface px-2 py-1 text-sm outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15"
             />
             <button
               type="button"
@@ -72,7 +72,7 @@ export function ScorecardEditor({
             onChange={(e) => update(index, { description: e.target.value })}
             placeholder="What good looks like — how you'd brief a person"
             disabled={disabled}
-            className="mt-1.5 w-full rounded-md border border-white/10 bg-surface px-2 py-1 text-xs outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15"
+            className="mt-1.5 w-full rounded-md border border-[var(--surface-border)] bg-surface px-2 py-1 text-xs outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15"
           />
 
           <div className="mt-2 flex flex-wrap items-center gap-3">
@@ -82,7 +82,7 @@ export function ScorecardEditor({
                 value={criterion.weight}
                 onChange={(e) => update(index, { weight: Number(e.target.value) })}
                 disabled={disabled}
-                className="rounded border border-white/10 bg-surface px-1.5 py-0.5 text-[11px]"
+                className="rounded border border-[var(--surface-border)] bg-surface px-1.5 py-0.5 text-[11px]"
               >
                 {[1, 2, 3, 4, 5].map((w) => (
                   <option key={w} value={w}>
@@ -202,7 +202,7 @@ export function ScorecardResult({
               return (
                 <div
                   key={entry.name}
-                  className="border-b border-white/10-soft pb-2.5 last:border-0 last:pb-0"
+                  className="border-b border-[var(--surface-border)]-soft pb-2.5 last:border-0 last:pb-0"
                 >
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="text-sm font-medium">{entry.name}</span>
@@ -226,7 +226,7 @@ export function ScorecardResult({
                     // Quoted, because this is what the person said and the
                     // distinction between their words and the model's summary
                     // is the whole basis for trusting the rating.
-                    <p className="mt-1 border-l-2 border-white/10 pl-2.5 text-xs italic leading-relaxed text-ink-secondary">
+                    <p className="mt-1 border-l-2 border-[var(--surface-border)] pl-2.5 text-xs italic leading-relaxed text-ink-secondary">
                       “{entry.evidence}”
                     </p>
                   ) : (

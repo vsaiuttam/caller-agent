@@ -52,7 +52,7 @@ export default function Templates() {
               className={`ripple rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
                 language === lang.code
                   ? "bg-brand text-plane"
-                  : "border border-white/10 text-ink-secondary hover:border-brand/20 hover:bg-white/5"
+                  : "border border-[var(--surface-border)] text-ink-secondary hover:border-brand/20 hover:bg-white/5"
               }`}
             >
               {lang.native_name}
@@ -70,7 +70,7 @@ export default function Templates() {
             className={`ripple rounded-md px-3.5 py-1.5 text-xs font-medium transition-all duration-200 ${
               category === cat
                 ? "bg-brand text-plane"
-                : "border border-white/10 text-ink-secondary hover:border-brand/20 hover:bg-white/5"
+                : "border border-[var(--surface-border)] text-ink-secondary hover:border-brand/20 hover:bg-white/5"
             }`}
           >
             {cat}
@@ -136,7 +136,7 @@ function TemplateCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="font-semibold">{template.name}</h3>
-          <span className="mt-1 inline-block rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-ink-secondary">
+          <span className="mt-1 inline-block rounded-lg border border-[var(--surface-border)] bg-elevated px-2 py-0.5 text-xs text-ink-secondary">
             {template.category}
           </span>
         </div>
@@ -150,7 +150,7 @@ function TemplateCard({
         {template.description}
       </p>
 
-      <div className="mt-3 rounded-xl border border-white/5 bg-white/3 px-3 py-2.5">
+      <div className="mt-3 rounded-xl border border-[var(--surface-border)] bg-white/3 px-3 py-2.5">
         <p className="text-[10px] font-bold uppercase tracking-wider text-ink-muted">
           Opens with
         </p>
@@ -171,7 +171,7 @@ function TemplateCard({
         <span>{template.constraints.length} guardrails</span>
       </div>
 
-      <div className="mt-4 flex gap-2 border-t border-white/5 pt-4">
+      <div className="mt-4 flex gap-2 border-t border-[var(--surface-border)] pt-4">
         <Button size="sm" onClick={onUse}>
           Use template
         </Button>
@@ -203,10 +203,10 @@ function PreviewDrawer({
       onClick={onClose}
     >
       <div
-        className="h-full w-full max-w-lg overflow-y-auto border-l border-white/10 bg-surface animate-in slide-in-from-right duration-200"
+        className="h-full w-full max-w-lg overflow-y-auto border-l border-[var(--surface-border)] bg-surface animate-in slide-in-from-right duration-200"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 flex items-start justify-between gap-4 border-b border-white/5 bg-surface/90 px-6 py-4 backdrop-blur-lg">
+        <div className="sticky top-0 flex items-start justify-between gap-4 border-b border-[var(--surface-border)] bg-surface/90 px-6 py-4 backdrop-blur-lg">
           <div>
             <h2 className="font-bold">{template.name}</h2>
             <p className="mt-0.5 text-xs text-ink-muted">{template.category}</p>
@@ -228,14 +228,14 @@ function PreviewDrawer({
           </Section>
 
           <Section title="Goal given to the agent">
-            <p className="rounded-xl border border-white/5 bg-white/3 px-4 py-3 text-sm leading-relaxed">
+            <p className="rounded-xl border border-[var(--surface-border)] bg-white/3 px-4 py-3 text-sm leading-relaxed">
               {template.goal}
             </p>
           </Section>
 
           <Section title="Opening line">
             <p
-              className="rounded-xl border border-white/5 bg-white/3 px-4 py-3 text-sm leading-relaxed italic"
+              className="rounded-xl border border-[var(--surface-border)] bg-white/3 px-4 py-3 text-sm leading-relaxed italic"
               dir={rtl ? "rtl" : "ltr"}
             >
               {greeting}
@@ -273,7 +273,7 @@ function PreviewDrawer({
           )}
         </div>
 
-        <div className="sticky bottom-0 border-t border-white/5 bg-surface/90 px-6 py-4 backdrop-blur-lg">
+        <div className="sticky bottom-0 border-t border-[var(--surface-border)] bg-surface/90 px-6 py-4 backdrop-blur-lg">
           <Button onClick={onUse}>Use this template</Button>
         </div>
       </div>

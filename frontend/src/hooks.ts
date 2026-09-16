@@ -16,14 +16,13 @@ export function useAsync<T>(
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
 
-  // Keep the latest fn without making it a dependency — callers almost always
-  // pass an inline arrow, which would otherwise refetch on every render.
   const fnRef = useRef(fn);
   fnRef.current = fn;
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setError(null);
     fnRef
       .current()
       .then((result) => {
@@ -33,7 +32,10 @@ export function useAsync<T>(
         }
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err.message);
+        if (!cancelled) {
+          setError(err?.message || "Request failed");
+          console.warn("[useAsync] fetch failed:", err);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -44,14 +46,14 @@ export function useAsync<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, nonce]);
 
-  return { data, loading, error, reload: () => setNonce((n) => n + 1) };
+  return { data, loading, error, reload: useCallback(() => setNonce((n) => n + 1), []) };
 }
 
 /**
  * Live event feed with automatic reconnect.
  *
- * Backoff is capped at 10s: an operator watching a call in progress needs the
- * stream back quickly, and the server-side cost of a reconnect is trivial.
+ * Reconnects with exponential backoff capped at 10s. Pauses reconnect
+ * attempts while the tab is hidden to avoid wasting resources.
  */
 export function useLiveFeed(onEvent?: (event: LiveEvent) => void) {
   const [connected, setConnected] = useState(false);
@@ -62,28 +64,42 @@ export function useLiveFeed(onEvent?: (event: LiveEvent) => void) {
 
   useEffect(() => {
     let socket: WebSocket | null = null;
-    let retryDelay = 500;
+    let retryDelay = 1000;
     let retryTimer: number | undefined;
     let closed = false;
+    let connectAttempt = 0;
 
     const connect = () => {
       if (closed) return;
-      socket = new WebSocket(liveFeedUrl());
+      // Don't reconnect while tab is hidden
+      if (document.hidden) {
+        retryTimer = window.setTimeout(connect, 2000);
+        return;
+      }
+
+      connectAttempt++;
+      try {
+        socket = new WebSocket(liveFeedUrl());
+      } catch {
+        // WebSocket constructor can throw if URL is invalid
+        retryTimer = window.setTimeout(connect, retryDelay);
+        retryDelay = Math.min(retryDelay * 2, 10_000);
+        return;
+      }
 
       socket.onopen = () => {
         setConnected(true);
-        retryDelay = 500;
+        retryDelay = 1000;
+        connectAttempt = 0;
       };
 
       socket.onmessage = (message) => {
         try {
           const event = JSON.parse(message.data) as LiveEvent;
-          // Cap the buffer — a long-running campaign would otherwise grow
-          // this array until the tab runs out of memory.
           setEvents((prev) => [event, ...prev].slice(0, 200));
           handlerRef.current?.(event);
-        } catch {
-          /* ignore malformed frames */
+        } catch (err) {
+          console.warn("[LiveFeed] malformed frame:", err);
         }
       };
 
@@ -94,14 +110,28 @@ export function useLiveFeed(onEvent?: (event: LiveEvent) => void) {
         retryDelay = Math.min(retryDelay * 2, 10_000);
       };
 
-      socket.onerror = () => socket?.close();
+      socket.onerror = () => {
+        // Let onclose handle reconnection
+        try { socket?.close(); } catch { /* already closing */ }
+      };
     };
 
     connect();
+
+    // Resume connection when tab becomes visible
+    const onVisibility = () => {
+      if (!document.hidden && !connected && !closed) {
+        window.clearTimeout(retryTimer);
+        connect();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
       closed = true;
+      document.removeEventListener("visibilitychange", onVisibility);
       window.clearTimeout(retryTimer);
-      socket?.close();
+      try { socket?.close(); } catch { /* already closed */ }
     };
   }, []);
 
@@ -109,11 +139,14 @@ export function useLiveFeed(onEvent?: (event: LiveEvent) => void) {
   return { connected, events, clear };
 }
 
-/** Poll a fetcher on an interval. Pauses while the tab is hidden. */
+/** Poll a fetcher on an interval. Pauses while the tab is hidden.
+ *  Tracks consecutive failures and surfaces stale state. */
 export function usePolling<T>(fn: () => Promise<T>, intervalMs: number) {
   const [data, setData] = useState<T | null>(null);
+  const [_stale, setStale] = useState(false);
   const fnRef = useRef(fn);
   fnRef.current = fn;
+  const failCount = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -122,17 +155,33 @@ export function usePolling<T>(fn: () => Promise<T>, intervalMs: number) {
       if (document.hidden) return;
       try {
         const result = await fnRef.current();
-        if (!cancelled) setData(result);
+        if (!cancelled) {
+          setData(result);
+          setStale(false);
+          failCount.current = 0;
+        }
       } catch {
-        /* transient; next tick retries */
+        failCount.current++;
+        // Mark data as stale after 3 consecutive failures
+        if (failCount.current >= 3 && !cancelled) {
+          setStale(true);
+        }
       }
     };
 
     void tick();
     const id = window.setInterval(tick, intervalMs);
+
+    // Resume polling immediately when tab becomes visible
+    const onVisibility = () => {
+      if (!document.hidden && !cancelled) void tick();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
       cancelled = true;
       window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [intervalMs]);
 

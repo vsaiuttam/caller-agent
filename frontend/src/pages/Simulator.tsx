@@ -167,7 +167,7 @@ export default function Simulator() {
                         className={`ripple w-full rounded-lg border px-4 py-3 text-left transition-colors duration-150 ${
                           p.id === persona
                             ? "border-brand/40 bg-brand/8"
-                            : "border-white/10 hover:border-brand/20 hover:bg-elevated/50"
+                            : "border-[var(--surface-border)] hover:border-brand/20 hover:bg-elevated/50"
                         }`}
                       >
                         <span className="flex items-center gap-1.5 text-xs font-semibold">
@@ -208,7 +208,7 @@ export default function Simulator() {
               />
             </Field>
 
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-white/10 px-3.5 py-3">
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-[var(--surface-border)] px-3.5 py-3">
               <input
                 type="checkbox"
                 checked={save}
@@ -228,7 +228,7 @@ export default function Simulator() {
               {running ? "Running\u2026" : "Run simulated call"}
             </Button>
 
-            <div className="border-t border-white/10 pt-4">
+            <div className="border-t border-[var(--surface-border)] pt-4">
               <Field
                 label="Or call a real phone"
                 hint="Enter your phone number in E.164 format (e.g. +1234567890) to receive a real call from the AI agent."

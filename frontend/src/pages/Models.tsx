@@ -227,7 +227,7 @@ function RoleSection({
                 className={`ripple rounded-lg border px-3 py-2 text-left text-xs transition-colors duration-150 ${
                   active
                     ? "border-brand/40 bg-brand/12 text-ink"
-                    : "border-white/10 text-ink-secondary hover:border-brand/20 hover:text-ink"
+                    : "border-[var(--surface-border)] text-ink-secondary hover:border-brand/20 hover:text-ink"
                 }`}
               >
                 <span className="font-semibold">{effort.label}</span>

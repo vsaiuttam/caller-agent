@@ -41,7 +41,7 @@ export default function OutcomeCard({
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="text-xs uppercase tracking-wide text-ink-muted">
-                <tr className="border-b border-white/10">
+                <tr className="border-b border-[var(--surface-border)]">
                   <th className="pb-2 pr-4 font-medium">Field</th>
                   <th className="pb-2 pr-4 font-medium">Value</th>
                   <th className="pb-2 font-medium">Source</th>
@@ -49,7 +49,7 @@ export default function OutcomeCard({
               </thead>
               <tbody>
                 {outcome.collected.map((f) => (
-                  <tr key={f.name} className="border-b border-white/10-soft last:border-0">
+                  <tr key={f.name} className="border-b border-[var(--surface-border)]-soft last:border-0">
                     <td className="py-2 pr-4 text-ink-secondary">{f.name}</td>
                     <td className="py-2 pr-4 font-medium">{f.value}</td>
                     <td className="py-2 text-xs text-ink-muted">
@@ -77,7 +77,7 @@ export default function OutcomeCard({
         )}
 
         {footnotes.length > 0 && (
-          <div className="flex flex-wrap gap-x-5 gap-y-1 border-t border-white/10 pt-3 text-[11px] text-ink-muted">
+          <div className="flex flex-wrap gap-x-5 gap-y-1 border-t border-[var(--surface-border)] pt-3 text-[11px] text-ink-muted">
             {footnotes.map((note) => (
               <span key={note}>{note}</span>
             ))}

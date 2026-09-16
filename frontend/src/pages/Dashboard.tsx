@@ -40,7 +40,7 @@ export default function Dashboard() {
             Rolling 24 hours, compared with the previous 24.
           </p>
         </div>
-        <div className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-xs">
+        <div className="flex items-center gap-2 rounded-lg border border-[var(--surface-border)] px-3 py-1.5 text-xs">
           {connected ? (
             <>
               <LiveDot />
@@ -166,7 +166,7 @@ export default function Dashboard() {
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-white/5 text-xs text-ink-muted">
+                    <tr className="border-b border-[var(--surface-border)] text-xs text-ink-muted">
                       <th className="px-5 py-2.5 text-left font-medium">Contact</th>
                       <th className="px-3 py-2.5 text-left font-medium">Phone</th>
                       <th className="px-3 py-2.5 text-left font-medium">Duration</th>

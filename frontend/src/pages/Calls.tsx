@@ -57,7 +57,7 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-1 rounded-lg border border-white/10 p-0.5">
+          <div className="flex items-center gap-1 rounded-lg border border-[var(--surface-border)] p-0.5">
             {(["recent", "score"] as const).map((mode) => (
               <button
                 key={mode}
@@ -78,7 +78,7 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
           <select
             value={band}
             onChange={(e) => setBand(e.target.value as QualificationBand | "")}
-            className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs outline-none transition focus:border-brand/50"
+            className="rounded-xl border border-[var(--surface-border)] bg-white/5 px-3 py-1.5 text-xs outline-none transition focus:border-brand/50"
           >
             <option value="">All results</option>
             <option value="strong">Strong only</option>
@@ -98,7 +98,7 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
           </label>
           <a
             href={api.callsExportUrl(exportParams)}
-            className="ripple inline-flex items-center gap-2 rounded-lg border border-white/10 bg-elevated px-4 py-2 text-sm font-medium transition-colors hover:border-brand/30"
+            className="ripple inline-flex items-center gap-2 rounded-lg border border-[var(--surface-border)] bg-elevated px-4 py-2 text-sm font-medium transition-colors hover:border-brand/30"
           >
             <IconDownload size={15} />
             Export CSV
@@ -187,7 +187,7 @@ function CallRow({
           <span className="flex min-w-0 items-center gap-1.5">
             {call.is_simulation && (
               <span
-                className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-1.5 py-0.5 text-[11px] font-medium text-ink-muted"
+                className="flex shrink-0 items-center gap-1 rounded-lg border border-[var(--surface-border)] bg-elevated px-1.5 py-0.5 text-[11px] font-medium text-ink-muted"
                 title="Simulated call — excluded from all metrics"
               >
                 <IconFlask size={10} /> Test
@@ -265,7 +265,7 @@ function Detail({ callId, onReviewed }: { callId: string; onReviewed: () => void
               {data.review_reason}
             </p>
             <textarea
-              className="mt-3 w-full rounded-xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm outline-none transition focus:border-brand/50 focus:ring-2 focus:ring-brand/20"
+              className="mt-3 w-full rounded-xl border border-[var(--surface-border)] bg-white/5 px-3.5 py-2.5 text-sm outline-none transition focus:border-brand/50 focus:ring-2 focus:ring-brand/20"
               rows={2}
               placeholder="Optional note for the record…"
               value={note}
@@ -336,7 +336,7 @@ function Outcome({ data }: { data: CallDetail }) {
         {data.summary && <p className="text-sm leading-relaxed">{data.summary}</p>}
 
         {outcome?.appointment && (
-          <div className="rounded-xl border border-white/10 bg-white/3 px-4 py-3">
+          <div className="rounded-xl border border-[var(--surface-border)] bg-white/3 px-4 py-3">
             <p className="flex items-center gap-1.5 text-[11px] font-medium text-ink-muted">
               <IconCalendar size={13} /> Appointment agreed
             </p>
@@ -375,7 +375,7 @@ function Outcome({ data }: { data: CallDetail }) {
         )}
 
         {dispatch && (
-          <div className="border-t border-white/5 pt-3">
+          <div className="border-t border-[var(--surface-border)] pt-3">
             <p className="mb-2 text-[11px] font-medium text-ink-muted">
               Actions taken
             </p>
@@ -400,7 +400,7 @@ function Outcome({ data }: { data: CallDetail }) {
 
         {/* Recording playback */}
         {data.recording_url && (
-          <div className="border-t border-white/5 pt-3">
+          <div className="border-t border-[var(--surface-border)] pt-3">
             <p className="mb-2 text-[11px] font-medium text-ink-muted">
               Call recording
             </p>
@@ -422,7 +422,7 @@ function Outcome({ data }: { data: CallDetail }) {
 
         {/* AMD result */}
         {data.amd_result && (
-          <div className="border-t border-white/5 pt-3">
+          <div className="border-t border-[var(--surface-border)] pt-3">
             <p className="mb-1 text-[11px] font-medium text-ink-muted">
               Answering machine detection
             </p>
@@ -448,7 +448,7 @@ function Outcome({ data }: { data: CallDetail }) {
 
         {/* SMS follow-up status */}
         {data.sms_sid && (
-          <div className="border-t border-white/5 pt-3">
+          <div className="border-t border-[var(--surface-border)] pt-3">
             <p className="mb-1 text-[11px] font-medium text-ink-muted">
               SMS follow-up
             </p>
@@ -460,7 +460,7 @@ function Outcome({ data }: { data: CallDetail }) {
         )}
 
         {(data.cost_usd > 0 || data.conversation_model) && (
-          <div className="border-t border-white/5 pt-3">
+          <div className="border-t border-[var(--surface-border)] pt-3">
             <p className="mb-2 text-[11px] font-medium text-ink-muted">
               What this call cost
             </p>

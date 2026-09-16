@@ -645,7 +645,7 @@ export default function LiveMic() {
               </div>
             </div>
 
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-white/10 px-3 py-2.5">
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-[var(--surface-border)] px-3 py-2.5">
               <input
                 type="checkbox"
                 checked={voiceOn}
@@ -663,7 +663,7 @@ export default function LiveMic() {
               </span>
             </label>
 
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-white/10 px-3 py-2.5">
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-[var(--surface-border)] px-3 py-2.5">
               <input
                 type="checkbox"
                 checked={save}
@@ -770,7 +770,7 @@ export default function LiveMic() {
 
                 {partial && (
                   <div className="flex flex-col items-end">
-                    <div className="max-w-[80%] rounded-2xl rounded-tr-md border border-dashed border-white/10 px-3.5 py-2.5 text-sm leading-relaxed text-ink-muted">
+                    <div className="max-w-[80%] rounded-2xl rounded-tr-md border border-dashed border-[var(--surface-border)] px-3.5 py-2.5 text-sm leading-relaxed text-ink-muted">
                       {partial}
                     </div>
                     <span className="mt-1 px-1 text-[11px] text-ink-muted">hearing…</span>
@@ -779,7 +779,7 @@ export default function LiveMic() {
               </div>
 
               {(live || phase === "connecting") && (
-                <div className="flex items-center gap-2 border-t border-white/10 px-5 py-3">
+                <div className="flex items-center gap-2 border-t border-[var(--surface-border)] px-5 py-3">
                   <input
                     value={typed}
                     onChange={(event) => setTyped(event.target.value)}
@@ -789,7 +789,7 @@ export default function LiveMic() {
                     placeholder={
                       SPEECH ? "…or type a reply" : "Type your reply and press enter"
                     }
-                    className="flex-1 rounded-lg border border-white/10 bg-surface px-3 py-2 text-sm outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15"
+                    className="flex-1 rounded-lg border border-[var(--surface-border)] bg-surface px-3 py-2 text-sm outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15"
                   />
                   <Button variant="secondary" size="sm" onClick={submitTyped} disabled={!live}>
                     Send
@@ -838,7 +838,7 @@ function ModeOption({
       disabled={disabled}
       aria-pressed={selected}
       className={`w-full rounded-lg border px-3 py-2 text-left transition disabled:opacity-60 ${
-        selected ? "border-brand bg-brand/10" : "border-white/10 hover:border-ink-muted/40"
+        selected ? "border-brand bg-brand/10" : "border-[var(--surface-border)] hover:border-ink-muted/40"
       }`}
     >
       <span className="flex items-center gap-1.5 text-xs font-medium">

@@ -1,13 +1,5 @@
 /**
  * Command palette (Ctrl/Cmd-K).
- *
- * Once a workspace has more than a handful of campaigns, the nav stops being
- * how anyone actually gets around. This is: type a few letters of a campaign
- * name or a page and hit enter.
- *
- * Campaigns are loaded once when the palette first opens, not on every
- * keystroke — the list is small, and a request per character would be
- * needless load for a worse experience.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -79,8 +71,6 @@ export default function CommandPalette() {
       api
         .campaigns()
         .then(setCampaigns)
-        // An empty list is the right degradation: pages still work, and a
-        // toast about a background fetch nobody asked for is noise.
         .catch(() => setCampaigns([]));
     }
   }, [open, campaigns]);
@@ -125,24 +115,26 @@ export default function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm px-4 pt-[12vh]"
+      className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh]"
+      style={{ background: "var(--overlay-bg)", backdropFilter: "blur(4px)" }}
       onClick={() => setOpen(false)}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
-        className="w-full max-w-xl overflow-hidden rounded-2xl border border-white/10 bg-surface/95 shadow-2xl backdrop-blur-xl"
+        className="w-full max-w-lg overflow-hidden rounded-xl border border-[var(--surface-border)] bg-surface shadow-2xl"
+        style={{ boxShadow: "var(--shadow-4)" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-2.5 border-b border-white/10 px-4 py-3">
+        <div className="flex items-center gap-2.5 border-b border-[var(--surface-border)] px-4 py-3">
           <span className="text-ink-muted">
-            <IconSearch size={16} />
+            <IconSearch size={15} />
           </span>
           <input
             ref={inputRef}
             value={query}
-            placeholder="Search campaigns and pages…"
+            placeholder="Search campaigns and pages\u2026"
             onChange={(e) => {
               setQuery(e.target.value);
               setActive(0);
@@ -159,22 +151,22 @@ export default function CommandPalette() {
                 go(commands[active]);
               }
             }}
-            className="w-full bg-transparent text-sm outline-none placeholder:text-ink-muted"
+            className="w-full bg-transparent text-[13px] outline-none placeholder:text-ink-muted"
           />
-          <kbd className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-ink-muted">
+          <kbd className="rounded border border-[var(--surface-border)] px-1.5 py-0.5 text-[10px] text-ink-muted">
             esc
           </kbd>
         </div>
 
-        <div className="max-h-[52vh] overflow-y-auto py-2">
+        <div className="max-h-[52vh] overflow-y-auto py-1">
           {commands.length === 0 ? (
-            <p className="px-4 py-6 text-center text-sm text-ink-muted">
-              Nothing matches “{query}”.
+            <p className="px-4 py-8 text-center text-[13px] text-ink-muted">
+              Nothing matches &ldquo;{query}&rdquo;
             </p>
           ) : (
             grouped.map(([group, items]) => (
-              <div key={group} className="mb-1">
-                <p className="px-4 py-1 text-[11px] font-medium uppercase tracking-wide text-ink-muted">
+              <div key={group} className="mb-0.5">
+                <p className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-ink-muted">
                   {group}
                 </p>
                 {items.map((command) => {
@@ -185,11 +177,11 @@ export default function CommandPalette() {
                       type="button"
                       onMouseEnter={() => setActive(index)}
                       onClick={() => go(command)}
-                      className={`flex w-full items-center gap-2.5 px-4 py-2 text-left text-sm transition ${
-                        index === active ? "bg-white/8" : ""
+                      className={`flex w-full items-center gap-2.5 px-4 py-2 text-left text-[13px] transition-colors ${
+                        index === active ? "bg-brand/8 text-ink" : "text-ink-secondary"
                       }`}
                     >
-                      <span className="text-ink-muted">{command.icon}</span>
+                      <span className={index === active ? "text-brand" : "text-ink-muted"}>{command.icon}</span>
                       <span className="flex-1 truncate">{command.label}</span>
                       <span className="truncate text-xs text-ink-muted">
                         {command.hint}

@@ -235,7 +235,7 @@ export default function NewCampaign() {
                       className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
                         form.language === lang.code
                           ? "bg-brand text-[#1a1730]"
-                          : "border border-white/10 text-ink-secondary hover:bg-white/5"
+                          : "border border-[var(--surface-border)] text-ink-secondary hover:bg-white/5"
                       }`}
                     >
                       {lang.native_name}
@@ -267,7 +267,7 @@ export default function NewCampaign() {
                 />
               </Field>
 
-              <div className="rounded-lg border border-white/10 bg-white/3 px-3.5 py-3">
+              <div className="rounded-lg border border-[var(--surface-border)] bg-white/3 px-3.5 py-3">
                 <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">
                   Agent will say
                 </p>
@@ -344,7 +344,7 @@ export default function NewCampaign() {
               subtitle="CSV with name and phone columns. Any extra columns become context the agent can reference on the call."
             />
             <div className="space-y-3 px-5 py-4">
-              <label className="flex cursor-pointer flex-col items-center gap-2 rounded-lg border border-dashed border-white/10 px-4 py-6 text-center transition hover:border-brand hover:bg-brand/6">
+              <label className="flex cursor-pointer flex-col items-center gap-2 rounded-lg border border-dashed border-[var(--surface-border)] px-4 py-6 text-center transition hover:border-brand hover:bg-brand/6">
                 <input
                   type="file"
                   accept=".csv,.xlsx,.xls,.xlsm,text/csv"
@@ -383,8 +383,8 @@ export default function NewCampaign() {
               {parseError && <ErrorNote message={parseError} />}
 
               {contacts.length > 0 && (
-                <div className="rounded-lg border border-white/10">
-                  <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+                <div className="rounded-lg border border-[var(--surface-border)]">
+                  <div className="flex items-center justify-between border-b border-[var(--surface-border)] px-3 py-2">
                     <span className="text-xs font-medium">
                       {contacts.length} contact{contacts.length === 1 ? "" : "s"} ready
                     </span>
@@ -414,12 +414,12 @@ export default function NewCampaign() {
                     ))}
                   </ul>
                   {contacts.length > 50 && (
-                    <p className="border-t border-white/10 px-3 py-1.5 text-xs text-ink-muted">
+                    <p className="border-t border-[var(--surface-border)] px-3 py-1.5 text-xs text-ink-muted">
                       …and {contacts.length - 50} more
                     </p>
                   )}
                   {attributeColumns.length > 0 && (
-                    <p className="border-t border-white/10 px-3 py-2 text-xs text-ink-muted">
+                    <p className="border-t border-[var(--surface-border)] px-3 py-2 text-xs text-ink-muted">
                       Extra context per contact:{" "}
                       <span className="text-ink-secondary">
                         {attributeColumns.join(", ")}
@@ -496,7 +496,7 @@ export default function NewCampaign() {
                         className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
                           on
                             ? "bg-brand text-white"
-                            : "border border-white/10 text-ink-muted hover:bg-white/3"
+                            : "border border-[var(--surface-border)] text-ink-muted hover:bg-white/3"
                         }`}
                       >
                         {day.label}
@@ -642,7 +642,7 @@ export default function NewCampaign() {
 
           {error && <ErrorNote message={error} />}
 
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-surface px-4 py-3">
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--surface-border)] bg-surface px-4 py-3">
             <p className="text-xs text-ink-muted">
               {contacts.length
                 ? `Creates the campaign and imports ${contacts.length} contact${contacts.length === 1 ? "" : "s"}.`
