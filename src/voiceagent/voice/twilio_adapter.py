@@ -126,8 +126,9 @@ class TwilioSpeaker:
         await self._state.response_queue.put(text)
         # In the webhook model, playback duration is handled by Twilio.
         # We approximate a wait so the session doesn't race ahead.
+        # Neural voices speak faster (~160 WPM), so reduce the per-word delay.
         words = len(text.split())
-        await asyncio.sleep(min(words * 0.15, 8.0))
+        await asyncio.sleep(min(words * 0.10, 6.0))
 
     async def stop(self) -> str:
         """Interrupt: return what was (approximately) played."""
@@ -295,8 +296,16 @@ def _build_webhook_app():
 
 
 def _gather_twiml(room_name: str, say_text: str) -> str:
-    """Build TwiML that says the agent's text and gathers the caller's reply."""
+    """Build TwiML that says the agent's text and gathers the caller's reply.
+
+    Uses Amazon Polly neural voices via Twilio for natural-sounding speech.
+    The voice can be overridden with the TWILIO_VOICE env var.
+    """
     base = os.getenv("TWILIO_WEBHOOK_URL", "http://localhost:8765")
+    # Neural voice: Polly.Joanna-Neural is warm, clear, and fast.
+    # Alternatives: Polly.Matthew-Neural (male), Polly.Amy-Neural (British)
+    voice = os.getenv("TWILIO_VOICE", "Polly.Joanna-Neural")
+    language = os.getenv("TWILIO_LANGUAGE", "en-US")
     # Escape XML special characters in the text
     safe = (
         say_text
@@ -310,8 +319,9 @@ def _gather_twiml(room_name: str, say_text: str) -> str:
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
         f'<Gather input="speech" action="{base}/twilio/gather/{room_name}" '
-        f'method="POST" speechTimeout="auto" language="en-US">'
-        f"<Say>{safe}</Say>"
+        f'method="POST" speechTimeout="auto" language="{language}" '
+        f'speechModel="phone_call" enhanced="true">'
+        f'<Say voice="{voice}">{safe}</Say>'
         "</Gather>"
         # If no speech detected, redirect back to gather
         f'<Redirect method="POST">{base}/twilio/voice/{room_name}</Redirect>'

@@ -48,13 +48,14 @@ EFFORT = DEFAULT_CONVERSATION_EFFORT
 
 # Short cap. Turns are one or two sentences by prompt; this is a backstop
 # against a runaway monologue tying up the line, not a target.
-MAX_TOKENS = 300
+MAX_TOKENS = 150
 
 # Flush a chunk to TTS at a sentence end, or at a clause break once we have
-# enough words to sound natural rather than clipped.
+# enough words to sound natural rather than clipped. Lower threshold = faster
+# first audio — the person hears something sooner.
 _SENTENCE_END = re.compile(r"[.!?]['\")\]]*\s")
 _CLAUSE_BREAK = re.compile(r"[,;:]\s")
-_MIN_CLAUSE_CHARS = 45
+_MIN_CLAUSE_CHARS = 30
 
 
 class ConversationLLM:
