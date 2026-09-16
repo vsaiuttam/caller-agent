@@ -1,0 +1,43 @@
+# Model providers. Anthropic has its own API; `openai` is the client for every
+# provider speaking the chat/completions shape — Gemini, OpenAI, Sarvam, NVIDIA
+# — which is why one adapter covers all four. See src/voiceagent/providers.py.
+anthropic>=0.116.0
+openai>=2.0
+pydantic>=2.7
+
+# API
+fastapi>=0.115
+uvicorn[standard]>=0.32
+websockets>=13.0
+httpx>=0.27
+python-dotenv>=1.0
+
+# Storage
+sqlalchemy[asyncio]>=2.0.30
+aiosqlite>=0.20          # dev
+asyncpg>=0.29            # production Postgres
+
+# Voice pipeline — LiveKit (TELEPHONY=livekit)
+livekit-agents>=0.11
+livekit-plugins-deepgram>=0.6
+livekit-plugins-cartesia>=0.4
+livekit-plugins-silero>=0.7
+
+# Voice pipeline — Twilio (TELEPHONY=twilio)
+twilio>=9.0
+
+# Voice pipeline — Telnyx (TELEPHONY=telnyx)
+starlette>=0.36
+
+# Production ASGI server
+gunicorn>=22.0
+
+# Google Calendar. Optional; mocked when credentials are absent.
+google-api-python-client>=2.130
+google-auth>=2.29
+
+openpyxl>=3.1
+python-multipart>=0.0.9
+
+# Timezone data — required on Windows where the system tz database is absent.
+tzdata>=2024.1

@@ -1,0 +1,73 @@
+# Render Blueprint — deploy backend as a web service with Postgres.
+# https://render.com/docs/blueprint-spec
+#
+# Usage:
+#   1. Push this repo to GitHub
+#   2. Go to https://dashboard.render.com/select-repo?type=blueprint
+#   3. Connect your repo — Render reads this file and creates the services
+#   4. Set the environment variables listed below in the Render dashboard
+
+databases:
+  - name: voiceagent-db
+    plan: free
+    databaseName: voiceagent
+    user: voiceagent
+
+services:
+  # ---------- API + webhook server ----------
+  - type: web
+    name: voiceagent-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn src.voiceagent.api.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      # Database — auto-filled by Render from the database above
+      - key: DATABASE_URL
+        fromDatabase:
+          name: voiceagent-db
+          property: connectionString
+        # Render gives postgresql://, SQLAlchemy async needs postgresql+asyncpg://
+        # We handle this in code with a prefix replacement.
+
+      # Model provider — set at least one
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+      # Telephony
+      - key: TELEPHONY
+        value: telnyx
+      - key: TELNYX_API_KEY
+        sync: false
+      - key: TELNYX_PHONE_NUMBER
+        sync: false
+      - key: TELNYX_CONNECTION_ID
+        sync: false
+      # Auto-set to this service's URL
+      - key: TELNYX_WEBHOOK_URL
+        fromService:
+          type: web
+          name: voiceagent-api
+          property: host
+      - key: TELNYX_WEBHOOK_PORT
+        value: "8765"
+
+      # Twilio (if using Twilio instead of Telnyx)
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+
+      # CORS — set to your Vercel frontend URL
+      - key: CORS_ORIGINS
+        value: "https://your-app.vercel.app,http://localhost:5173"
+
+      - key: LOG_LEVEL
+        value: INFO
