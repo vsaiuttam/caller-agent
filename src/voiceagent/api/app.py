@@ -1809,6 +1809,22 @@ async def test_call(body: TestCallRequest, db: AsyncSession = Depends(get_sessio
             result_payload["recording_url"] = state.recording_url
             result_payload["recording_sid"] = state.recording_sid
 
+        # SMS follow-up — send a summary text after the call
+        sms_enabled = setup.campaign and getattr(setup.campaign, "sms_followup", False)
+        if sms_enabled:
+            from ..sms import send_sms_followup
+            sms_sid = await send_sms_followup(
+                to=body.phone_number,
+                contact_name=body.contact_name or "there",
+                campaign_name=setup.campaign.name if setup.campaign else "CallerAgent",
+                disposition=outcome.disposition or "completed",
+                summary=outcome.summary or "",
+                appointment_text=getattr(outcome, "appointment", None),
+            )
+            if sms_sid:
+                result_payload["sms_sid"] = sms_sid
+                result_payload["sms_status"] = "sent"
+
         return result_payload
 
     except HTTPException:
