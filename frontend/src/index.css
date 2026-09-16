@@ -1,39 +1,38 @@
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap");
 @import "tailwindcss";
 
 /* =========================================================================
-   CallerAgent — Control Room Theme
-   Two modes: warm dark (default) and clean light.
-   Material-inspired elevation, crisp transitions, no decoration.
+   CallerAgent — Telnyx-inspired Theme
+   Deep navy dark mode, vivid green accents, smooth animations.
    ========================================================================= */
 
 /* --- Tailwind theme tokens (dark defaults) ----------------------------- */
 @theme {
-  --color-plane: #111110;
-  --color-surface: #1C1B19;
-  --color-elevated: #262523;
+  --color-plane: #0B0E11;
+  --color-surface: #131720;
+  --color-elevated: #1A2030;
 
-  --color-ink: #E8E5DD;
-  --color-ink-secondary: #A8A49A;
-  --color-ink-muted: #6B6860;
+  --color-ink: #E8ECF4;
+  --color-ink-secondary: #8B95A8;
+  --color-ink-muted: #4E5A6E;
 
-  --color-brand: #D4943A;
-  --color-brand-bright: #E8A948;
-  --color-brand-deep: #8C6424;
+  --color-brand: #00E07F;
+  --color-brand-bright: #33FFa0;
+  --color-brand-deep: #00A85E;
 
-  --color-good: #3D9A5F;
-  --color-warning: #C28A1E;
-  --color-serious: #D4693A;
-  --color-critical: #C94040;
+  --color-good: #00E07F;
+  --color-warning: #FFB224;
+  --color-serious: #FF6B3D;
+  --color-critical: #FF3B5C;
 
-  --color-ramp-1: #D4943A;
-  --color-ramp-2: #B87D30;
-  --color-ramp-3: #9A6726;
-  --color-ramp-4: #7D521E;
-  --color-ramp-5: #5F3D16;
+  --color-ramp-1: #00E07F;
+  --color-ramp-2: #00C76E;
+  --color-ramp-3: #00A85E;
+  --color-ramp-4: #008A4D;
+  --color-ramp-5: #006B3D;
 
-  --font-sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
-  --font-mono: "IBM Plex Mono", "Menlo", monospace;
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Menlo", monospace;
 }
 
 /* -----------------------------------------------------------------------
@@ -43,21 +42,20 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --surface-border: #2E2D2A;
-  --surface-border-hover: #3A3835;
+  --surface-border: #1E2A3A;
+  --surface-border-hover: #2A3A4E;
   --surface-hover: rgba(255, 255, 255, 0.03);
 
-  /* Material elevation shadows — warm tint */
-  --shadow-1: 0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
-  --shadow-2: 0 3px 6px rgba(0,0,0,0.4), 0 2px 4px rgba(0,0,0,0.3);
-  --shadow-3: 0 10px 20px rgba(0,0,0,0.4), 0 3px 6px rgba(0,0,0,0.3);
-  --shadow-4: 0 15px 25px rgba(0,0,0,0.5), 0 5px 10px rgba(0,0,0,0.3);
+  --shadow-1: 0 1px 3px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-2: 0 4px 8px rgba(0,0,0,0.5), 0 2px 4px rgba(0,0,0,0.4);
+  --shadow-3: 0 12px 24px rgba(0,0,0,0.5), 0 4px 8px rgba(0,0,0,0.4);
+  --shadow-4: 0 20px 40px rgba(0,0,0,0.6), 0 8px 16px rgba(0,0,0,0.4);
 
-  --overlay-bg: rgba(0, 0, 0, 0.6);
-  --ripple-color: rgba(255, 255, 255, 0.08);
-  --selection-bg: rgba(212, 148, 58, 0.3);
-  --scrollbar-thumb: #2E2D2A;
-  --scrollbar-hover: #3A3835;
+  --overlay-bg: rgba(0, 0, 0, 0.7);
+  --ripple-color: rgba(0, 224, 127, 0.08);
+  --selection-bg: rgba(0, 224, 127, 0.25);
+  --scrollbar-thumb: #1E2A3A;
+  --scrollbar-hover: #2A3A4E;
 }
 
 /* -----------------------------------------------------------------------
@@ -66,43 +64,43 @@
 [data-theme="light"] {
   color-scheme: light;
 
-  --color-plane: #F5F4F1;
+  --color-plane: #F4F6F9;
   --color-surface: #FFFFFF;
-  --color-elevated: #F0EFEC;
+  --color-elevated: #EEF1F6;
 
-  --color-ink: #1A1918;
-  --color-ink-secondary: #5C5A55;
-  --color-ink-muted: #94918A;
+  --color-ink: #0B0E11;
+  --color-ink-secondary: #4E5A6E;
+  --color-ink-muted: #8B95A8;
 
-  --color-brand: #B07D2E;
-  --color-brand-bright: #C88F35;
-  --color-brand-deep: #8C6424;
+  --color-brand: #00A85E;
+  --color-brand-bright: #00C76E;
+  --color-brand-deep: #008A4D;
 
-  --color-good: #2E7D4A;
-  --color-warning: #A0720F;
-  --color-serious: #BD5A2D;
-  --color-critical: #B53636;
+  --color-good: #00A85E;
+  --color-warning: #D49620;
+  --color-serious: #D45530;
+  --color-critical: #D43050;
 
-  --color-ramp-1: #B07D2E;
-  --color-ramp-2: #C28A1E;
-  --color-ramp-3: #9A6726;
-  --color-ramp-4: #7D521E;
-  --color-ramp-5: #5F3D16;
+  --color-ramp-1: #00A85E;
+  --color-ramp-2: #00C76E;
+  --color-ramp-3: #008A4D;
+  --color-ramp-4: #006B3D;
+  --color-ramp-5: #004D2D;
 
-  --surface-border: #E2E0DB;
-  --surface-border-hover: #D0CEC8;
+  --surface-border: #DEE3EC;
+  --surface-border-hover: #C8CFD9;
   --surface-hover: rgba(0, 0, 0, 0.02);
 
-  --shadow-1: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
-  --shadow-2: 0 3px 6px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.06);
-  --shadow-3: 0 10px 20px rgba(0,0,0,0.1), 0 3px 6px rgba(0,0,0,0.06);
-  --shadow-4: 0 15px 25px rgba(0,0,0,0.12), 0 5px 10px rgba(0,0,0,0.06);
+  --shadow-1: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-2: 0 4px 8px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+  --shadow-3: 0 12px 24px rgba(0,0,0,0.08), 0 4px 8px rgba(0,0,0,0.04);
+  --shadow-4: 0 20px 40px rgba(0,0,0,0.1), 0 8px 16px rgba(0,0,0,0.04);
 
   --overlay-bg: rgba(0, 0, 0, 0.3);
-  --ripple-color: rgba(0, 0, 0, 0.06);
-  --selection-bg: rgba(176, 125, 46, 0.2);
-  --scrollbar-thumb: #D0CEC8;
-  --scrollbar-hover: #B8B5AE;
+  --ripple-color: rgba(0, 168, 94, 0.08);
+  --selection-bg: rgba(0, 168, 94, 0.15);
+  --scrollbar-thumb: #C8CFD9;
+  --scrollbar-hover: #B0B8C5;
 }
 
 /* --- Base --------------------------------------------------------------- */
@@ -115,7 +113,7 @@ html, body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  transition: background-color 0.25s ease, color 0.25s ease;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 /* --- Tabular data — monospace, aligned --------------------------------- */
@@ -125,14 +123,14 @@ html, body {
 }
 
 /* -----------------------------------------------------------------------
-   Cards — Material-style elevation
+   Cards — Telnyx-style with subtle glow on hover
    ----------------------------------------------------------------------- */
 .card {
   background: var(--color-surface);
   border: 1px solid var(--surface-border);
-  border-radius: 8px;
+  border-radius: 12px;
   box-shadow: var(--shadow-1);
-  transition: border-color 0.15s ease, box-shadow 0.2s ease, background-color 0.25s ease;
+  transition: border-color 0.2s ease, box-shadow 0.25s ease, background-color 0.3s ease, transform 0.2s ease;
 }
 
 .card:hover {
@@ -143,19 +141,19 @@ html, body {
 .card-static {
   background: var(--color-surface);
   border: 1px solid var(--surface-border);
-  border-radius: 8px;
+  border-radius: 12px;
   box-shadow: var(--shadow-1);
-  transition: background-color 0.25s ease;
+  transition: background-color 0.3s ease;
 }
 
-/* Accent fill — solid amber */
+/* Accent fill — vivid green */
 .accent-fill {
   background: var(--color-brand);
-  color: #111110;
+  color: #0B0E11;
 }
 
 /* -----------------------------------------------------------------------
-   Material-style button ripple (CSS-only)
+   Button ripple — green tint
    ----------------------------------------------------------------------- */
 .ripple {
   position: relative;
@@ -168,7 +166,7 @@ html, body {
   inset: 0;
   background: radial-gradient(circle at var(--ripple-x, 50%) var(--ripple-y, 50%), var(--ripple-color) 0%, transparent 70%);
   opacity: 0;
-  transition: opacity 0.3s ease;
+  transition: opacity 0.35s ease;
   pointer-events: none;
 }
 
@@ -178,7 +176,7 @@ html, body {
 }
 
 /* -----------------------------------------------------------------------
-   Material elevation utilities
+   Elevation utilities
    ----------------------------------------------------------------------- */
 .elevation-0 { box-shadow: none; }
 .elevation-1 { box-shadow: var(--shadow-1); }
@@ -187,7 +185,7 @@ html, body {
 .elevation-4 { box-shadow: var(--shadow-4); }
 
 /* -----------------------------------------------------------------------
-   Loading skeleton
+   Loading skeleton — Telnyx shimmer
    ----------------------------------------------------------------------- */
 @keyframes shimmer {
   0%   { background-position: -200% 0; }
@@ -198,24 +196,101 @@ html, body {
   background: linear-gradient(
     90deg,
     var(--color-surface) 25%,
-    var(--color-elevated) 50%,
-    var(--color-surface) 75%
+    var(--color-elevated) 37%,
+    var(--color-surface) 63%
   );
   background-size: 200% 100%;
-  animation: shimmer 1.5s ease-in-out infinite;
+  animation: shimmer 1.8s ease-in-out infinite;
+  border-radius: 8px;
 }
 
-/* --- Live pulse -------------------------------------------------------- */
+/* -----------------------------------------------------------------------
+   Telnyx-style spinner
+   ----------------------------------------------------------------------- */
+@keyframes telnyx-spin {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes telnyx-dash {
+  0%   { stroke-dasharray: 1, 150; stroke-dashoffset: 0; }
+  50%  { stroke-dasharray: 90, 150; stroke-dashoffset: -35; }
+  100% { stroke-dasharray: 90, 150; stroke-dashoffset: -124; }
+}
+
+.telnyx-spinner {
+  animation: telnyx-spin 2s linear infinite;
+}
+
+.telnyx-spinner circle {
+  stroke: var(--color-brand);
+  stroke-linecap: round;
+  animation: telnyx-dash 1.5s ease-in-out infinite;
+  fill: none;
+  stroke-width: 3;
+}
+
+/* -----------------------------------------------------------------------
+   Pulse animations
+   ----------------------------------------------------------------------- */
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
-  50%      { opacity: 0.35; }
+  50%      { opacity: 0.3; }
 }
 
 .live-dot {
   animation: pulse-dot 2s ease-in-out infinite;
 }
 
-/* --- Chart crosshair --------------------------------------------------- */
+@keyframes pulse-ring {
+  0%   { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
+.pulse-ring::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--color-brand);
+  animation: pulse-ring 1.5s ease-out infinite;
+}
+
+/* -----------------------------------------------------------------------
+   Page transition
+   ----------------------------------------------------------------------- */
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.page-enter {
+  animation: fade-in-up 0.3s ease-out;
+}
+
+/* -----------------------------------------------------------------------
+   Glow effects — Telnyx green glow
+   ----------------------------------------------------------------------- */
+.glow-brand {
+  border-color: var(--color-brand) !important;
+  box-shadow: 0 0 20px rgba(0, 224, 127, 0.15), 0 0 60px rgba(0, 224, 127, 0.05);
+}
+
+.glow-sm {
+  box-shadow: 0 0 10px rgba(0, 224, 127, 0.1);
+}
+
+/* Brand gradient text */
+.text-gradient {
+  background: linear-gradient(135deg, #00E07F 0%, #33FFa0 50%, #00C76E 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* -----------------------------------------------------------------------
+   Chart crosshair
+   ----------------------------------------------------------------------- */
 .crosshair-line {
   stroke: var(--surface-border);
   stroke-width: 1;
@@ -236,7 +311,7 @@ html, body {
 }
 *::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 
-/* --- Focus — visible, accessible --------------------------------------- */
+/* --- Focus — green ring ------------------------------------------------ */
 :focus-visible {
   outline: 2px solid var(--color-brand);
   outline-offset: 2px;
@@ -261,25 +336,24 @@ html, body {
 }
 
 /* -----------------------------------------------------------------------
-   Theme transition — smooth crossfade on toggle
+   Theme transition
    ----------------------------------------------------------------------- */
 .theme-transitioning,
 .theme-transitioning *,
 .theme-transitioning *::before,
 .theme-transitioning *::after {
-  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease !important;
+  transition: background-color 0.35s ease, border-color 0.35s ease, color 0.35s ease, box-shadow 0.35s ease !important;
 }
 
 /* =======================================================================
    BACKWARD COMPATIBILITY
-   Classes used across pages, mapped to the new system.
    ======================================================================= */
 
 .glass-card {
   background: var(--color-surface);
   border: 1px solid var(--surface-border);
   box-shadow: var(--shadow-1);
-  transition: border-color 0.15s ease, box-shadow 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.25s ease;
 }
 .glass-card:hover {
   border-color: var(--surface-border-hover);
@@ -287,8 +361,8 @@ html, body {
 }
 
 .animated-gradient {
-  background: var(--color-brand);
-  color: #111110;
+  background: linear-gradient(135deg, #00E07F, #00A85E);
+  color: #0B0E11;
 }
 
 .glass {
@@ -297,5 +371,3 @@ html, body {
 }
 
 .noise-overlay::before { display: none; }
-
-.glow-brand { border-color: var(--color-brand) !important; }

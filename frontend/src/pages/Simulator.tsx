@@ -30,6 +30,7 @@ import {
   Field,
   PageWrapper,
   Skeleton,
+  Spinner,
   inputClass,
 } from "../components/ui";
 import { useAsync } from "../hooks";
@@ -266,15 +267,18 @@ export default function Simulator() {
           {error && <ErrorNote message={error} />}
 
           {running && (
-            <Card className="p-5" hover={false}>
-              <p className="text-sm font-semibold">
-                Calling {contactName || "them"}\u2026
-              </p>
-              <p className="mt-1 text-xs text-ink-muted">
-                Each exchange is two model round-trips. Ten exchanges takes
-                around half a minute.
-              </p>
-              <div className="mt-4 space-y-2">
+            <Card className="p-8" hover={false}>
+              <div className="flex flex-col items-center text-center">
+                <Spinner size={40} />
+                <p className="mt-4 text-sm font-semibold">
+                  Calling {contactName || "them"}\u2026
+                </p>
+                <p className="mt-1.5 text-xs text-ink-muted">
+                  Each exchange is two model round-trips. Ten exchanges takes
+                  around half a minute.
+                </p>
+              </div>
+              <div className="mt-6 space-y-2">
                 {[0, 1, 2, 3].map((i) => (
                   <Skeleton
                     key={i}
