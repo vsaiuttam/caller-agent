@@ -39,9 +39,9 @@ services:
       - key: OPENAI_API_KEY
         sync: false
 
-      # Telephony — set to twilio or telnyx
+      # Telephony
       - key: TELEPHONY
-        value: twilio
+        value: telnyx
       - key: TELNYX_API_KEY
         sync: false
       - key: TELNYX_PHONE_NUMBER
@@ -57,40 +57,15 @@ services:
       - key: TELNYX_WEBHOOK_PORT
         value: "8765"
 
-      # Twilio
+      # Twilio (if using Twilio instead of Telnyx)
       - key: TWILIO_ACCOUNT_SID
         sync: false
       - key: TWILIO_AUTH_TOKEN
         sync: false
       - key: TWILIO_PHONE_NUMBER
         sync: false
-      - key: TWILIO_API_KEY_SID
-        sync: false
-      - key: TWILIO_API_KEY_SECRET
-        sync: false
-      - key: TWILIO_WEBHOOK_URL
-        fromService:
-          type: web
-          name: voiceagent-api
-          property: host
 
-      # Google Calendar (post-call appointment booking)
-      - key: GOOGLE_CALENDAR_ID
-        sync: false
-      - key: GOOGLE_CREDENTIALS_PATH
-        sync: false
-
-      # Records/CRM API (post-call data sync)
-      - key: RECORDS_API_URL
-        sync: false
-      - key: RECORDS_API_KEY
-        sync: false
-
-      # Webhook signing secret (HMAC-SHA256)
-      - key: WEBHOOK_SIGNING_SECRET
-        sync: false
-
-      # CORS — set to your Vercel frontend URL
+      # CORS — your Vercel frontend URL + local dev
       - key: CORS_ORIGINS
         value: "https://frontend-nu-blond-93.vercel.app,http://localhost:5173"
 

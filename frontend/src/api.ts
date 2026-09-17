@@ -644,14 +644,16 @@ export const api = {
 };
 
 /**
- * Backend origin for WebSocket connections.
- * In dev, Vite proxies /api so same-origin works.
- * In production on Vercel, we must connect directly to the Render backend
- * because Vercel does NOT proxy WebSocket upgrades.
+ * The backend origin for WebSocket connections.
+ *
+ * In development Vite proxies everything, so same-origin works. In production
+ * the frontend is on Vercel and the backend on Render — Vercel cannot proxy
+ * WebSockets, so we connect directly to the backend origin.
+ *
+ * Set VITE_API_ORIGIN in the Vercel environment to your Render service URL
+ * (e.g. "https://voiceagent-api.onrender.com"). When unset, same-origin is used.
  */
-const WS_BACKEND =
-  import.meta.env.VITE_API_URL          // explicit override (e.g. "https://voiceagent-api-vzpp.onrender.com")
-  ?? (import.meta.env.DEV ? undefined : "https://voiceagent-api-vzpp.onrender.com");
+const API_ORIGIN: string = import.meta.env.VITE_API_ORIGIN ?? "";
 
 /** WebSocket URL for the live feed. */
 export function liveFeedUrl(): string {
@@ -664,13 +666,11 @@ export function liveCallUrl(): string {
 }
 
 function wsUrl(path: string): string {
-  if (WS_BACKEND) {
-    // Production: connect directly to backend
-    const url = new URL(path, WS_BACKEND);
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    return url.toString();
+  if (API_ORIGIN) {
+    const proto = API_ORIGIN.startsWith("https") ? "wss:" : "ws:";
+    const host = API_ORIGIN.replace(/^https?:\/\//, "");
+    return `${proto}//${host}${path}`;
   }
-  // Dev: same-origin (Vite proxy handles it)
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${location.host}${path}`;
 }
