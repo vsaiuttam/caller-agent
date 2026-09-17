@@ -19,8 +19,8 @@ export function Logo({ size = 28 }: { size?: number }) {
       <path d="M19 12.5C20 13 21 13.8 21.2 15" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.5" />
       <defs>
         <linearGradient id="logo-grad" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#6E56CF" />
-          <stop offset="1" stopColor="#5B44B2" />
+          <stop stopColor="#F97316" />
+          <stop offset="1" stopColor="#EA580C" />
         </linearGradient>
       </defs>
     </svg>

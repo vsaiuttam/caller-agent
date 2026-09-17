@@ -15,20 +15,20 @@
   --color-ink-secondary: #A0A0B0;
   --color-ink-muted: #5C5C72;
 
-  --color-brand: #6E56CF;
-  --color-brand-bright: #8B72FF;
-  --color-brand-deep: #5B44B2;
+  --color-brand: #F97316;
+  --color-brand-bright: #FB923C;
+  --color-brand-deep: #EA580C;
 
   --color-good: #30A46C;
   --color-warning: #E5A100;
   --color-serious: #E5750F;
   --color-critical: #E5484D;
 
-  --color-ramp-1: #6E56CF;
-  --color-ramp-2: #5B44B2;
-  --color-ramp-3: #4A3699;
-  --color-ramp-4: #3A2980;
-  --color-ramp-5: #2B1D66;
+  --color-ramp-1: #F97316;
+  --color-ramp-2: #EA580C;
+  --color-ramp-3: #C2410C;
+  --color-ramp-4: #9A3412;
+  --color-ramp-5: #7C2D12;
 
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", "Menlo", monospace;
@@ -51,8 +51,8 @@
   --shadow-4: 0 20px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04);
 
   --overlay-bg: rgba(0, 0, 0, 0.75);
-  --ripple-color: rgba(110, 86, 207, 0.08);
-  --selection-bg: rgba(110, 86, 207, 0.3);
+  --ripple-color: rgba(249, 115, 22, 0.08);
+  --selection-bg: rgba(249, 115, 22, 0.25);
   --scrollbar-thumb: rgba(255,255,255,0.08);
   --scrollbar-hover: rgba(255,255,255,0.14);
 }
@@ -71,20 +71,20 @@
   --color-ink-secondary: #52525B;
   --color-ink-muted: #A1A1AA;
 
-  --color-brand: #6E56CF;
-  --color-brand-bright: #5B44B2;
-  --color-brand-deep: #4A3699;
+  --color-brand: #EA580C;
+  --color-brand-bright: #C2410C;
+  --color-brand-deep: #9A3412;
 
   --color-good: #18794E;
   --color-warning: #AD7700;
   --color-serious: #BD4B00;
   --color-critical: #CE2C31;
 
-  --color-ramp-1: #6E56CF;
-  --color-ramp-2: #5B44B2;
-  --color-ramp-3: #4A3699;
-  --color-ramp-4: #3A2980;
-  --color-ramp-5: #2B1D66;
+  --color-ramp-1: #EA580C;
+  --color-ramp-2: #C2410C;
+  --color-ramp-3: #9A3412;
+  --color-ramp-4: #7C2D12;
+  --color-ramp-5: #6C2710;
 
   --surface-border: rgba(0, 0, 0, 0.08);
   --surface-border-hover: rgba(0, 0, 0, 0.14);
@@ -96,8 +96,8 @@
   --shadow-4: 0 20px 60px rgba(0,0,0,0.1), 0 0 0 1px rgba(0,0,0,0.04);
 
   --overlay-bg: rgba(0, 0, 0, 0.3);
-  --ripple-color: rgba(110, 86, 207, 0.06);
-  --selection-bg: rgba(110, 86, 207, 0.12);
+  --ripple-color: rgba(234, 88, 12, 0.06);
+  --selection-bg: rgba(234, 88, 12, 0.15);
   --scrollbar-thumb: rgba(0,0,0,0.08);
   --scrollbar-hover: rgba(0,0,0,0.14);
 }
@@ -317,7 +317,7 @@ html, body {
 }
 
 .animated-gradient {
-  background: linear-gradient(135deg, var(--color-brand), var(--color-brand-deep));
+  background: linear-gradient(135deg, #F97316, #EA580C);
   color: #fff;
 }
 
@@ -329,7 +329,7 @@ html, body {
 .noise-overlay::before { display: none; }
 .glow-brand { border-color: var(--color-brand) !important; }
 .text-gradient {
-  background: linear-gradient(135deg, var(--color-brand), var(--color-brand-bright));
+  background: linear-gradient(135deg, #F97316, #FB923C);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
