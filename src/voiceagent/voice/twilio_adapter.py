@@ -126,9 +126,8 @@ class TwilioSpeaker:
         await self._state.response_queue.put(text)
         # In the webhook model, playback duration is handled by Twilio.
         # We approximate a wait so the session doesn't race ahead.
-        # Neural voices speak faster (~160 WPM), so reduce the per-word delay.
         words = len(text.split())
-        await asyncio.sleep(min(words * 0.10, 6.0))
+        await asyncio.sleep(min(words * 0.15, 8.0))
 
     async def stop(self) -> str:
         """Interrupt: return what was (approximately) played."""
@@ -296,16 +295,8 @@ def _build_webhook_app():
 
 
 def _gather_twiml(room_name: str, say_text: str) -> str:
-    """Build TwiML that says the agent's text and gathers the caller's reply.
-
-    Uses Amazon Polly neural voices via Twilio for natural-sounding speech.
-    The voice can be overridden with the TWILIO_VOICE env var.
-    """
+    """Build TwiML that says the agent's text and gathers the caller's reply."""
     base = os.getenv("TWILIO_WEBHOOK_URL", "http://localhost:8765")
-    # Neural voice: Polly.Joanna-Neural is warm, clear, and fast.
-    # Alternatives: Polly.Matthew-Neural (male), Polly.Amy-Neural (British)
-    voice = os.getenv("TWILIO_VOICE", "Polly.Joanna-Neural")
-    language = os.getenv("TWILIO_LANGUAGE", "en-US")
     # Escape XML special characters in the text
     safe = (
         say_text
@@ -319,9 +310,8 @@ def _gather_twiml(room_name: str, say_text: str) -> str:
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
         f'<Gather input="speech" action="{base}/twilio/gather/{room_name}" '
-        f'method="POST" speechTimeout="auto" language="{language}" '
-        f'speechModel="phone_call" enhanced="true">'
-        f'<Say voice="{voice}">{safe}</Say>'
+        f'method="POST" speechTimeout="auto" language="en-US">'
+        f"<Say>{safe}</Say>"
         "</Gather>"
         # If no speech detected, redirect back to gather
         f'<Redirect method="POST">{base}/twilio/voice/{room_name}</Redirect>'
@@ -352,7 +342,16 @@ class TwilioTelephony:
         self._sid = account_sid or os.environ["TWILIO_ACCOUNT_SID"]
         self._token = auth_token or os.environ["TWILIO_AUTH_TOKEN"]
         self._from = from_number or os.environ["TWILIO_PHONE_NUMBER"]
-        self._webhook_url = webhook_url or os.getenv("TWILIO_WEBHOOK_URL", "http://localhost:8765")
+        # When running on a single-port host (Render, Railway), the webhook
+        # routes are mounted on the main FastAPI app at /twilio/*. The
+        # TWILIO_WEBHOOK_URL should be the public URL of the main app, and
+        # we use the same port — no separate webhook server needed.
+        self._webhook_url = (
+            webhook_url
+            or os.getenv("TWILIO_WEBHOOK_URL")
+            or os.getenv("RENDER_EXTERNAL_URL")  # Render auto-sets this
+            or "http://localhost:8765"
+        )
         self._webhook_port = webhook_port or int(os.getenv("TWILIO_WEBHOOK_PORT", "8765"))
         self._answer_timeout = answer_timeout
         self._client = Client(self._sid, self._token)
@@ -362,19 +361,19 @@ class TwilioTelephony:
     async def _ensure_server(self) -> None:
         """Start the embedded webhook server if it isn't running yet.
 
-        If the webhook URL points to the main API server (i.e. the Twilio
-        routes are mounted on FastAPI in app.py), skip starting the separate
-        Uvicorn server — the main server handles everything.
+        When TWILIO_WEBHOOK_URL points to the main app (e.g. on Render where
+        the routes are mounted at /twilio/* on the FastAPI app), skip starting
+        a separate server — the main app already handles the webhooks.
         """
         if self._server_started:
             return
 
-        # When deployed (Render/etc), webhook routes are on the main app —
-        # no need for a separate server on port 8765.
-        api_url = os.getenv("RENDER_EXTERNAL_URL", "")
-        if api_url and api_url in self._webhook_url:
+        # If the webhook URL matches the main app (Render, etc.), the routes
+        # are already mounted on the main FastAPI app — no separate server.
+        port_str = str(self._webhook_port)
+        if self._webhook_url and "localhost" not in self._webhook_url and f":{port_str}" not in self._webhook_url:
             self._server_started = True
-            logger.info("Twilio webhooks served by main API at %s", self._webhook_url)
+            logger.info("Twilio webhooks routed through main app at %s", self._webhook_url)
             return
 
         import uvicorn

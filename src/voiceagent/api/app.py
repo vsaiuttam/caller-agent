@@ -134,104 +134,6 @@ def mask(phone: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# Twilio webhook routes (mounted on the main API so they're reachable on Render)
-# --------------------------------------------------------------------------
-
-from starlette.requests import Request as StarletteRequest
-from starlette.responses import Response as StarletteResponse
-
-
-@app.post("/twilio/voice/{room_name}")
-async def twilio_voice(room_name: str, request: StarletteRequest) -> StarletteResponse:
-    from ..voice.twilio_adapter import _active_calls, _gather_twiml
-    import asyncio
-    state = _active_calls.get(room_name)
-    if not state:
-        return StarletteResponse("<Response><Hangup/></Response>", media_type="application/xml")
-    form = await request.form()
-    state.call_sid = str(form.get("CallSid", state.call_sid))
-    state.answered.set()
-    try:
-        greeting = await asyncio.wait_for(state.response_queue.get(), timeout=15.0)
-    except asyncio.TimeoutError:
-        greeting = "Hello, please hold."
-    if greeting is None or state.ended.is_set():
-        return StarletteResponse("<Response><Hangup/></Response>", media_type="application/xml")
-    twiml = _gather_twiml(room_name, greeting)
-    return StarletteResponse(twiml, media_type="application/xml")
-
-
-@app.post("/twilio/gather/{room_name}")
-async def twilio_gather(room_name: str, request: StarletteRequest) -> StarletteResponse:
-    from ..voice.twilio_adapter import _active_calls, _gather_twiml
-    import asyncio
-    state = _active_calls.get(room_name)
-    if not state or state.ended.is_set():
-        return StarletteResponse("<Response><Hangup/></Response>", media_type="application/xml")
-    form = await request.form()
-    speech = str(form.get("SpeechResult", "")).strip()
-    if speech:
-        state.speech_started.set()
-        await state.speech_queue.put(speech)
-    try:
-        agent_text = await asyncio.wait_for(state.response_queue.get(), timeout=30.0)
-    except asyncio.TimeoutError:
-        agent_text = "I need a moment, please hold."
-    if agent_text is None or state.ended.is_set():
-        return StarletteResponse(
-            "<Response><Say>Thank you for your time. Goodbye.</Say><Hangup/></Response>",
-            media_type="application/xml",
-        )
-    twiml = _gather_twiml(room_name, agent_text)
-    return StarletteResponse(twiml, media_type="application/xml")
-
-
-@app.post("/twilio/status/{room_name}")
-async def twilio_status(room_name: str, request: StarletteRequest) -> StarletteResponse:
-    from ..voice.twilio_adapter import _active_calls
-    state = _active_calls.get(room_name)
-    if not state:
-        return StarletteResponse("ok")
-    form = await request.form()
-    status = str(form.get("CallStatus", ""))
-    logger.info("Twilio call %s status: %s", room_name, status)
-    if status in ("completed", "busy", "no-answer", "canceled", "failed"):
-        state.ended.set()
-        state.speech_queue.put_nowait(None)
-        if status != "completed":
-            state.answered.set()
-    return StarletteResponse("ok")
-
-
-@app.post("/twilio/recording/{room_name}")
-async def twilio_recording(room_name: str, request: StarletteRequest) -> StarletteResponse:
-    from ..voice.twilio_adapter import _active_calls
-    state = _active_calls.get(room_name)
-    if not state:
-        return StarletteResponse("ok")
-    form = await request.form()
-    recording_url = str(form.get("RecordingUrl", ""))
-    if recording_url:
-        state.recording_url = recording_url
-        state.recording_sid = str(form.get("RecordingSid", ""))
-        state.recording_duration = int(form.get("RecordingDuration", 0) or 0)
-        logger.info("Recording ready for %s: %s", room_name, state.recording_sid)
-    return StarletteResponse("ok")
-
-
-@app.post("/twilio/amd/{room_name}")
-async def twilio_amd(room_name: str, request: StarletteRequest) -> StarletteResponse:
-    from ..voice.twilio_adapter import _active_calls
-    state = _active_calls.get(room_name)
-    if not state:
-        return StarletteResponse("ok")
-    form = await request.form()
-    state.amd_result = str(form.get("AnsweredBy", ""))
-    logger.info("AMD result for %s: %s", room_name, state.amd_result)
-    return StarletteResponse("ok")
-
-
-# --------------------------------------------------------------------------
 # Templates & languages (static product content, no DB)
 # --------------------------------------------------------------------------
 
@@ -388,7 +290,7 @@ async def health(db: AsyncSession = Depends(get_session)) -> dict:
         "sms": bool(os.getenv("TWILIO_ACCOUNT_SID") and os.getenv("TWILIO_AUTH_TOKEN") and os.getenv("TWILIO_PHONE_NUMBER")),
         "speech_to_text": bool(os.getenv("DEEPGRAM_API_KEY") or os.getenv("TWILIO_ACCOUNT_SID")),
         "text_to_speech": bool(os.getenv("CARTESIA_API_KEY") or os.getenv("TWILIO_ACCOUNT_SID")),
-        "calendar": bool(os.getenv("GOOGLE_CALENDAR_ID") and os.getenv("GOOGLE_CREDENTIALS_PATH")),
+        "calendar": bool(os.getenv("GOOGLE_CALENDAR_CREDENTIALS")),
         "records_api": bool(os.getenv("RECORDS_API_URL")),
         "webhook_signing": bool(os.getenv("WEBHOOK_SIGNING_SECRET")),
     }
@@ -989,35 +891,7 @@ _PHONE_HEADERS = {"phone", "phone_e164", "number", "mobile", "telephone", "conta
 _TZ_HEADERS = {"timezone", "tz", "time_zone"}
 
 
-def _looks_like_phone(value: str) -> bool:
-    """Return True if *value* smells like a phone number (not a header)."""
-    cleaned = value.strip().lstrip("+").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
-    return cleaned.isdigit() and len(cleaned) >= 7
-
-
 def _rows_to_contacts(rows: list[list[str]], dial_code: str) -> dict:
-    if not rows:
-        raise HTTPException(400, "The file needs at least one contact")
-
-    # --- Auto-detect missing header row -----------------------------------
-    # If the first row has no recognised header AND one cell looks like a
-    # phone number, treat the file as header-less and synthesise headers.
-    first = [c.strip().lower() for c in rows[0]]
-    has_known_header = any(h in _NAME_HEADERS | _PHONE_HEADERS | _TZ_HEADERS for h in first)
-
-    if not has_known_header and any(_looks_like_phone(c) for c in rows[0]):
-        # Guess columns: the one that looks like a phone is "phone",
-        # the other is "name". For >2 columns, extras become attributes.
-        phone_idx = next(i for i, c in enumerate(rows[0]) if _looks_like_phone(c))
-        name_idx = 0 if phone_idx != 0 else 1
-        synth = [""] * len(rows[0])
-        synth[name_idx] = "name"
-        synth[phone_idx] = "phone"
-        for i in range(len(synth)):
-            if not synth[i]:
-                synth[i] = f"col_{i+1}"
-        rows = [synth] + rows  # prepend synthetic header
-
     if len(rows) < 2:
         raise HTTPException(400, "The file needs a header row and at least one contact")
 
@@ -1809,22 +1683,6 @@ async def test_call(body: TestCallRequest, db: AsyncSession = Depends(get_sessio
             result_payload["recording_url"] = state.recording_url
             result_payload["recording_sid"] = state.recording_sid
 
-        # SMS follow-up — send a summary text after the call
-        sms_enabled = setup.campaign and getattr(setup.campaign, "sms_followup", False)
-        if sms_enabled:
-            from ..sms import send_sms_followup
-            sms_sid = await send_sms_followup(
-                to=body.phone_number,
-                contact_name=body.contact_name or "there",
-                campaign_name=setup.campaign.name if setup.campaign else "CallerAgent",
-                disposition=outcome.disposition or "completed",
-                summary=outcome.summary or "",
-                appointment_text=getattr(outcome, "appointment", None),
-            )
-            if sms_sid:
-                result_payload["sms_sid"] = sms_sid
-                result_payload["sms_status"] = "sent"
-
         return result_payload
 
     except HTTPException:
@@ -2052,6 +1910,19 @@ class _suppress_all:
         return self
     def __exit__(self, *exc):
         return True
+
+
+# --------------------------------------------------------------------------
+# Twilio webhook routes (mounted on main app so they work on single-port hosts)
+# --------------------------------------------------------------------------
+
+try:
+    from ..voice.twilio_adapter import _build_webhook_app as _build_twilio_app
+    _twilio_app = _build_twilio_app()
+    app.mount("/twilio", _twilio_app)
+    logger.info("Twilio webhook routes mounted at /twilio/*")
+except Exception:
+    logger.debug("Twilio webhook routes not mounted (twilio adapter not available)")
 
 
 # --------------------------------------------------------------------------
