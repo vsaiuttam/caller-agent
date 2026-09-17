@@ -37,10 +37,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
+
+VOICE_PROVIDER = os.getenv("VOICE_PROVIDER", "twilio").lower()
+# Language for Twilio's <Gather> STT — "hi-IN" for Hindi, "en-US" for English.
+GATHER_LANGUAGE = os.getenv("SARVAM_STT_LANGUAGE", "hi-IN") if VOICE_PROVIDER == "sarvam" else "en-US"
+
+# In-memory cache for Sarvam-synthesized audio, keyed by a short-lived UUID.
+# Entries are popped on first fetch so they don't accumulate.
+_audio_cache: dict[str, bytes] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +219,10 @@ def _build_webhook_app():
                     "<Hangup/></Response>"
                 )
 
-            twiml = _gather_twiml(room_name, greeting)
+            audio_id = None
+            if VOICE_PROVIDER == "sarvam":
+                audio_id = await _synthesize_sarvam(greeting)
+            twiml = _gather_twiml(room_name, greeting, audio_id)
             return _safe_xml(twiml)
         except Exception:
             logger.exception("voice_handler crashed for %s", room_name)
@@ -247,7 +259,10 @@ def _build_webhook_app():
                     "<Hangup/></Response>"
                 )
 
-            twiml = _gather_twiml(room_name, agent_text)
+            audio_id = None
+            if VOICE_PROVIDER == "sarvam":
+                audio_id = await _synthesize_sarvam(agent_text)
+            twiml = _gather_twiml(room_name, agent_text, audio_id)
             return _safe_xml(twiml)
         except Exception:
             logger.exception("gather_handler crashed for %s", room_name)
@@ -275,7 +290,10 @@ def _build_webhook_app():
                     "<Hangup/></Response>"
                 )
 
-            twiml = _gather_twiml(room_name, agent_text)
+            audio_id = None
+            if VOICE_PROVIDER == "sarvam":
+                audio_id = await _synthesize_sarvam(agent_text)
+            twiml = _gather_twiml(room_name, agent_text, audio_id)
             return _safe_xml(twiml)
         except Exception:
             logger.exception("wait_handler crashed for %s", room_name)
@@ -347,6 +365,14 @@ def _build_webhook_app():
             logger.exception("amd_handler crashed")
         return Response("ok")
 
+    async def audio_handler(request: Request) -> Response:
+        """Serve Sarvam-synthesized audio for Twilio's <Play> verb."""
+        audio_id = request.path_params["audio_id"]
+        wav = _audio_cache.pop(audio_id, None)
+        if wav is None:
+            return Response("not found", status_code=404)
+        return Response(wav, media_type="audio/wav")
+
     routes = [
         Route("/twilio/voice/{room_name}", voice_handler, methods=["POST"]),
         Route("/twilio/gather/{room_name}", gather_handler, methods=["POST"]),
@@ -354,31 +380,63 @@ def _build_webhook_app():
         Route("/twilio/status/{room_name}", status_handler, methods=["POST"]),
         Route("/twilio/recording/{room_name}", recording_handler, methods=["POST"]),
         Route("/twilio/amd/{room_name}", amd_handler, methods=["POST"]),
+        Route("/twilio/audio/{audio_id}", audio_handler, methods=["GET"]),
     ]
 
     return Starlette(routes=routes)
 
 
-def _gather_twiml(room_name: str, say_text: str) -> str:
-    """Build TwiML that says the agent's text and gathers the caller's reply."""
+async def _synthesize_sarvam(text: str) -> str | None:
+    """Call Sarvam Bulbul TTS, cache the WAV, return the audio_id."""
+    from .sarvam_voice import SarvamTTS, _pcm_to_wav
+
+    tts = SarvamTTS()
+    try:
+        pcm = await tts.synthesize(text)
+        if not pcm:
+            return None
+        wav = _pcm_to_wav(pcm, sample_rate=22050, channels=1, sample_width=2)
+        audio_id = uuid.uuid4().hex[:12]
+        _audio_cache[audio_id] = wav
+        return audio_id
+    except Exception:
+        logger.exception("Sarvam TTS failed, falling back to <Say>")
+        return None
+    finally:
+        await tts.close()
+
+
+def _gather_twiml(room_name: str, say_text: str, audio_id: str | None = None) -> str:
+    """Build TwiML that speaks the agent's text and gathers the caller's reply.
+
+    When `audio_id` is provided (Sarvam path), uses <Play> to stream the
+    pre-synthesized audio instead of Twilio's built-in <Say>.
+    """
     base = os.getenv("TWILIO_WEBHOOK_URL", "http://localhost:8765")
-    voice = os.getenv("TWILIO_VOICE", "Polly.Joanna-Neural")
-    # Escape XML special characters in the text
-    safe = (
-        say_text
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&apos;")
-    )
+
+    if audio_id:
+        # Sarvam TTS: play pre-synthesized audio
+        speak_verb = f'<Play>{base}/twilio/audio/{audio_id}</Play>'
+    else:
+        # Twilio built-in TTS
+        voice = os.getenv("TWILIO_VOICE", "Polly.Joanna-Neural")
+        safe = (
+            say_text
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&apos;")
+        )
+        speak_verb = f'<Say voice="{voice}">{safe}</Say>'
+
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
         f'<Gather input="speech" action="{base}/twilio/gather/{room_name}" '
-        f'method="POST" speechTimeout="auto" language="en-US" '
+        f'method="POST" speechTimeout="auto" language="{GATHER_LANGUAGE}" '
         f'enhanced="true">'
-        f'<Say voice="{voice}">{safe}</Say>'
+        f'{speak_verb}'
         "</Gather>"
         # If no speech detected, redirect back to gather
         f'<Redirect method="POST">{base}/twilio/voice/{room_name}</Redirect>'

@@ -1,4 +1,8 @@
-"""LiveKit + Deepgram + Cartesia adapter.
+"""LiveKit + STT/TTS adapter.
+
+Supports two voice backends:
+  - **deepgram+cartesia** (default): Deepgram streaming STT, Cartesia TTS.
+  - **sarvam**: Sarvam Saarika STT + Bulbul TTS. Set VOICE_PROVIDER=sarvam.
 
 ⚠️ This is the one version-sensitive file in the project. LiveKit's agents SDK
 has changed its plugin surface across 0.x and 1.x releases, so the two spots
@@ -21,7 +25,9 @@ import os
 from collections.abc import AsyncIterator
 
 from livekit import api, rtc
-from livekit.plugins import cartesia, deepgram, silero
+from livekit.plugins import silero
+
+VOICE_PROVIDER = os.getenv("VOICE_PROVIDER", "deepgram").lower()
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +44,15 @@ class LiveKitListener:
         # VERIFY: event enum name. Recent versions expose
         # `SpeechEventType.FINAL_TRANSCRIPT`; some 0.x releases used
         # `is_final` on the event instead.
+        from livekit.plugins import deepgram as _dg
+
         async for event in self._stt:
-            if event.type == deepgram.SpeechEventType.FINAL_TRANSCRIPT:
+            if event.type == _dg.SpeechEventType.FINAL_TRANSCRIPT:
                 text = event.alternatives[0].text.strip()
                 if text:
                     self._speech_started.clear()
                     yield text
-            elif event.type == deepgram.SpeechEventType.START_OF_SPEECH:
+            elif event.type == _dg.SpeechEventType.START_OF_SPEECH:
                 self._speech_started.set()
 
     async def wait_for_speech_start(self) -> None:
@@ -172,6 +180,34 @@ class LiveKitTelephony:
 
         track = await _wait_for_audio_track(room, timeout=self._answer_timeout)
 
+        source = rtc.AudioSource(sample_rate=24_000, num_channels=1)
+        outbound = rtc.LocalAudioTrack.create_audio_track("agent-voice", source)
+        await room.local_participant.publish_track(
+            outbound, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        )
+
+        control = LiveKitControl(room)
+
+        if VOICE_PROVIDER == "sarvam":
+            listener, speaker, pump_task = await self._setup_sarvam(track, source)
+        else:
+            listener, speaker, pump_task = await self._setup_deepgram_cartesia(track, source)
+
+        original_hangup = control.hangup
+
+        async def hangup_and_cleanup() -> None:
+            pump_task.cancel()
+            await lkapi.aclose()
+            await original_hangup()
+
+        control.hangup = hangup_and_cleanup  # type: ignore[method-assign]
+
+        return (listener, speaker, control, room_name)
+
+    async def _setup_deepgram_cartesia(self, track, source):
+        """Wire Deepgram STT + Cartesia TTS (the original path)."""
+        from livekit.plugins import cartesia, deepgram
+
         stt = deepgram.STT(model="nova-3", interim_results=True)
         tts = cartesia.TTS(model="sonic-2")
         vad = silero.VAD.load()
@@ -186,29 +222,45 @@ class LiveKitTelephony:
                 vad_stream.push_frame(event.frame)
 
         pump_task = asyncio.create_task(pump())
+        return LiveKitListener(stt_stream, vad_stream), LiveKitSpeaker(tts, source), pump_task
 
-        source = rtc.AudioSource(sample_rate=24_000, num_channels=1)
-        outbound = rtc.LocalAudioTrack.create_audio_track("agent-voice", source)
-        await room.local_participant.publish_track(
-            outbound, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-        )
+    async def _setup_sarvam(self, track, source):
+        """Wire Sarvam Saarika STT + Bulbul TTS."""
+        from .sarvam_voice import SarvamLiveKitListener, SarvamLiveKitSpeaker, SarvamSTT, SarvamTTS
 
-        control = LiveKitControl(room)
-        original_hangup = control.hangup
+        sarvam_stt = SarvamSTT()
+        sarvam_tts = SarvamTTS(target_sample_rate=24000)
+        vad = silero.VAD.load()
+        vad_stream = vad.stream()
+        audio_stream = rtc.AudioStream(track)
 
-        async def hangup_and_cleanup() -> None:
-            pump_task.cancel()
-            await lkapi.aclose()
-            await original_hangup()
+        listener = SarvamLiveKitListener(sarvam_stt, vad_stream)
 
-        control.hangup = hangup_and_cleanup  # type: ignore[method-assign]
+        async def pump() -> None:
+            speaking = False
+            async for event in audio_stream:
+                frame_bytes = bytes(event.frame.data)
+                vad_stream.push_frame(event.frame)
+                sarvam_stt.push_audio(frame_bytes)
 
-        return (
-            LiveKitListener(stt_stream, vad_stream),
-            LiveKitSpeaker(tts, source),
-            control,
-            room_name,
-        )
+                try:
+                    vad_event = vad_stream.__anext__()
+                    done = asyncio.ensure_future(vad_event)
+                    if done.done():
+                        ve = done.result()
+                        if hasattr(ve, "type"):
+                            vtype = str(ve.type)
+                            if "START" in vtype:
+                                speaking = True
+                                listener.signal_speech()
+                            elif "END" in vtype and speaking:
+                                speaking = False
+                                await sarvam_stt.flush()
+                except (StopAsyncIteration, asyncio.CancelledError):
+                    pass
+
+        pump_task = asyncio.create_task(pump())
+        return listener, SarvamLiveKitSpeaker(sarvam_tts, source), pump_task
 
 
 async def _wait_for_audio_track(room: rtc.Room, timeout: float) -> rtc.Track:
