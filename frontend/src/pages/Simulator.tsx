@@ -388,7 +388,7 @@ function Result({ result }: { result: SimulationResult }) {
         footnotes={[
           `On the call: ${result.conversation_model}`,
           `After: ${result.extraction_model}`,
-          `Persona: ${result.persona.replace("_", " ")}`,
+          `Persona: ${(result.persona || persona || "unknown").replace("_", " ")}`,
         ]}
       />
     </>
