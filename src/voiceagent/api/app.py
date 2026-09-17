@@ -1919,8 +1919,9 @@ class _suppress_all:
 try:
     from ..voice.twilio_adapter import _build_webhook_app as _build_twilio_app
     _twilio_app = _build_twilio_app()
-    app.mount("/twilio", _twilio_app)
-    logger.info("Twilio webhook routes mounted at /twilio/*")
+    # Routes inside already have /twilio/ prefix, so mount at root
+    app.mount("", _twilio_app)
+    logger.info("Twilio webhook routes mounted")
 except Exception:
     logger.debug("Twilio webhook routes not mounted (twilio adapter not available)")
 
