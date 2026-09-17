@@ -145,7 +145,8 @@ class TwilioControl:
 
     async def hangup(self) -> None:
         self._state.ended.set()
-        self._state.speech_queue.put_nowait(None)  # unblock Listener
+        self._state.speech_queue.put_nowait(None)   # unblock Listener
+        self._state.response_queue.put_nowait(None)  # unblock webhook handler
         if self._state.call_sid:
             try:
                 await asyncio.to_thread(
@@ -168,164 +169,182 @@ def _build_webhook_app():
     from starlette.responses import Response
     from starlette.routing import Route
 
+    def _safe_xml(text: str) -> Response:
+        return Response(text, media_type="application/xml")
+
+    def _error_twiml(room_name: str) -> Response:
+        """Fallback TwiML when a handler crashes. Never let Twilio see a 500."""
+        base = os.getenv("TWILIO_WEBHOOK_URL", "http://localhost:8765")
+        return _safe_xml(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            '<Pause length="2"/>'
+            f'<Redirect method="POST">{base}/twilio/wait/{room_name}</Redirect>'
+            "</Response>"
+        )
+
     async def voice_handler(request: Request) -> Response:
         """Initial webhook when call connects. Wait for greeting, return TwiML."""
         room_name = request.path_params["room_name"]
-        state = _active_calls.get(room_name)
-        if not state:
-            return Response("<Response><Hangup/></Response>", media_type="application/xml")
-
-        # Mark call as answered
-        form = await request.form()
-        state.call_sid = str(form.get("CallSid", state.call_sid))
-        state.answered.set()
-
-        # Wait for the greeting from Speaker.say() — must respond within
-        # Twilio's webhook timeout (~15s), so cap at 10s.
         try:
-            greeting = await asyncio.wait_for(state.response_queue.get(), timeout=10.0)
-        except asyncio.TimeoutError:
-            greeting = "Hello, please hold while I connect."
+            state = _active_calls.get(room_name)
+            if not state:
+                logger.warning("voice_handler: no state for %s", room_name)
+                return _safe_xml("<Response><Hangup/></Response>")
 
-        if greeting is None or state.ended.is_set():
-            return Response("<Response><Hangup/></Response>", media_type="application/xml")
+            # Mark call as answered
+            form = await request.form()
+            state.call_sid = str(form.get("CallSid", state.call_sid))
+            state.answered.set()
 
-        twiml = _gather_twiml(room_name, greeting)
-        return Response(twiml, media_type="application/xml")
+            # Wait for the greeting from Speaker.say() — must respond within
+            # Twilio's webhook timeout (~15s), so cap at 10s.
+            try:
+                greeting = await asyncio.wait_for(state.response_queue.get(), timeout=10.0)
+            except asyncio.TimeoutError:
+                greeting = "Hello, please hold while I connect you."
+
+            if greeting is None or state.ended.is_set():
+                return _safe_xml(
+                    "<Response><Say>Thank you for your time. Goodbye.</Say>"
+                    "<Hangup/></Response>"
+                )
+
+            twiml = _gather_twiml(room_name, greeting)
+            return _safe_xml(twiml)
+        except Exception:
+            logger.exception("voice_handler crashed for %s", room_name)
+            return _error_twiml(room_name)
 
     async def gather_handler(request: Request) -> Response:
-        """Receives speech result, queues it, then enters the keep-alive loop.
-
-        Instead of blocking on the LLM, we queue the speech and immediately
-        redirect to the /twilio/wait/ heartbeat loop. That loop polls for
-        the response every few seconds and keeps Twilio alive indefinitely
-        with short Pause + Redirect cycles — no webhook ever blocks long
-        enough for Twilio to time out.
-        """
+        """Receives speech result, queues it, then enters the keep-alive loop."""
         room_name = request.path_params["room_name"]
-        state = _active_calls.get(room_name)
-        if not state or state.ended.is_set():
-            return Response("<Response><Hangup/></Response>", media_type="application/xml")
-
-        form = await request.form()
-        speech = str(form.get("SpeechResult", "")).strip()
-
-        if speech:
-            state.speech_started.set()
-            await state.speech_queue.put(speech)
-
-        # Quick check — if the agent already has a response queued, return it
-        # immediately (common when the LLM is fast or response was pre-computed).
         try:
-            agent_text = await asyncio.wait_for(state.response_queue.get(), timeout=2.0)
-        except asyncio.TimeoutError:
-            # Not ready yet — enter the keep-alive heartbeat loop
-            base = os.getenv("TWILIO_WEBHOOK_URL", "http://localhost:8765")
-            return _heartbeat_twiml(base, room_name)
+            state = _active_calls.get(room_name)
+            if not state or state.ended.is_set():
+                return _safe_xml("<Response><Hangup/></Response>")
 
-        if agent_text is None or state.ended.is_set():
-            return Response(
-                "<Response><Say>Thank you for your time. Goodbye.</Say><Hangup/></Response>",
-                media_type="application/xml",
-            )
+            form = await request.form()
+            speech = str(form.get("SpeechResult", "")).strip()
+            logger.info("gather_handler %s: speech=%r", room_name, speech[:80] if speech else "")
 
-        twiml = _gather_twiml(room_name, agent_text)
-        return Response(twiml, media_type="application/xml")
+            if speech:
+                state.speech_started.set()
+                await state.speech_queue.put(speech)
+
+            # Quick check — if the agent already has a response queued, return it
+            # immediately (common when the LLM is fast or response was pre-computed).
+            try:
+                agent_text = await asyncio.wait_for(state.response_queue.get(), timeout=2.0)
+            except asyncio.TimeoutError:
+                # Not ready yet — enter the keep-alive heartbeat loop
+                base = os.getenv("TWILIO_WEBHOOK_URL", "http://localhost:8765")
+                return _heartbeat_twiml(base, room_name)
+
+            if agent_text is None or state.ended.is_set():
+                return _safe_xml(
+                    "<Response><Say>Thank you for your time. Goodbye.</Say>"
+                    "<Hangup/></Response>"
+                )
+
+            twiml = _gather_twiml(room_name, agent_text)
+            return _safe_xml(twiml)
+        except Exception:
+            logger.exception("gather_handler crashed for %s", room_name)
+            return _error_twiml(room_name)
 
     async def wait_handler(request: Request) -> Response:
-        """Keep-alive heartbeat: polls for the agent response every ~5s.
-
-        This endpoint forms a tight loop with Twilio:
-          1. Wait up to 3s for the LLM response
-          2. If ready → return the response as TwiML + Gather
-          3. If not ready → return a short Pause + Redirect back here
-
-        Each iteration is well under Twilio's ~15s timeout. The loop
-        runs indefinitely until the agent responds or the call ends —
-        no "application error" is ever possible.
-        """
+        """Keep-alive heartbeat: polls for the agent response every ~3s."""
         room_name = request.path_params["room_name"]
-        state = _active_calls.get(room_name)
-        if not state or state.ended.is_set():
-            return Response("<Response><Hangup/></Response>", media_type="application/xml")
-
-        # Poll for response — short timeout keeps us well under Twilio's limit
         try:
-            agent_text = await asyncio.wait_for(state.response_queue.get(), timeout=3.0)
-        except asyncio.TimeoutError:
-            # Still not ready — send another heartbeat
-            base = os.getenv("TWILIO_WEBHOOK_URL", "http://localhost:8765")
-            return _heartbeat_twiml(base, room_name)
+            state = _active_calls.get(room_name)
+            if not state or state.ended.is_set():
+                return _safe_xml("<Response><Hangup/></Response>")
 
-        if agent_text is None or state.ended.is_set():
-            return Response(
-                "<Response><Say>Thank you for your time. Goodbye.</Say><Hangup/></Response>",
-                media_type="application/xml",
-            )
+            # Poll for response — short timeout keeps us well under Twilio's limit
+            try:
+                agent_text = await asyncio.wait_for(state.response_queue.get(), timeout=3.0)
+            except asyncio.TimeoutError:
+                # Still not ready — send another heartbeat
+                base = os.getenv("TWILIO_WEBHOOK_URL", "http://localhost:8765")
+                return _heartbeat_twiml(base, room_name)
 
-        twiml = _gather_twiml(room_name, agent_text)
-        return Response(twiml, media_type="application/xml")
+            if agent_text is None or state.ended.is_set():
+                return _safe_xml(
+                    "<Response><Say>Thank you for your time. Goodbye.</Say>"
+                    "<Hangup/></Response>"
+                )
+
+            twiml = _gather_twiml(room_name, agent_text)
+            return _safe_xml(twiml)
+        except Exception:
+            logger.exception("wait_handler crashed for %s", room_name)
+            return _error_twiml(room_name)
 
     async def status_handler(request: Request) -> Response:
         """Track call status changes (ringing, answered, completed, etc.)."""
-        room_name = request.path_params["room_name"]
-        state = _active_calls.get(room_name)
-        if not state:
-            return Response("ok")
+        try:
+            room_name = request.path_params["room_name"]
+            state = _active_calls.get(room_name)
+            if not state:
+                return Response("ok")
 
-        form = await request.form()
-        status = str(form.get("CallStatus", ""))
-        logger.info("Twilio call %s status: %s", room_name, status)
+            form = await request.form()
+            status = str(form.get("CallStatus", ""))
+            logger.info("Twilio call %s status: %s", room_name, status)
 
-        if status in ("completed", "busy", "no-answer", "canceled", "failed"):
-            state.ended.set()
-            state.speech_queue.put_nowait(None)
-            if status != "completed":
-                state.answered.set()  # unblock dial() so it can raise
-
+            if status in ("completed", "busy", "no-answer", "canceled", "failed"):
+                state.ended.set()
+                state.speech_queue.put_nowait(None)
+                state.response_queue.put_nowait(None)  # unblock waiting handlers
+                if status != "completed":
+                    state.answered.set()  # unblock dial() so it can raise
+        except Exception:
+            logger.exception("status_handler crashed")
         return Response("ok")
 
     async def recording_handler(request: Request) -> Response:
         """Receives the recording callback when a call recording is ready."""
-        room_name = request.path_params["room_name"]
-        state = _active_calls.get(room_name)
-        if not state:
-            return Response("ok")
+        try:
+            room_name = request.path_params["room_name"]
+            state = _active_calls.get(room_name)
+            if not state:
+                return Response("ok")
 
-        form = await request.form()
-        recording_url = str(form.get("RecordingUrl", ""))
-        recording_sid = str(form.get("RecordingSid", ""))
-        recording_duration = int(form.get("RecordingDuration", 0) or 0)
+            form = await request.form()
+            recording_url = str(form.get("RecordingUrl", ""))
+            recording_sid = str(form.get("RecordingSid", ""))
+            recording_duration = int(form.get("RecordingDuration", 0) or 0)
 
-        if recording_url:
-            # Twilio serves recordings at the URL with .mp3/.wav extension
-            state.recording_url = recording_url
-            state.recording_sid = recording_sid
-            state.recording_duration = recording_duration
-            logger.info(
-                "Recording ready for %s: %s (%ds)",
-                room_name, recording_sid, recording_duration,
-            )
-
+            if recording_url:
+                state.recording_url = recording_url
+                state.recording_sid = recording_sid
+                state.recording_duration = recording_duration
+                logger.info(
+                    "Recording ready for %s: %s (%ds)",
+                    room_name, recording_sid, recording_duration,
+                )
+        except Exception:
+            logger.exception("recording_handler crashed")
         return Response("ok")
 
     async def amd_handler(request: Request) -> Response:
         """Answering Machine Detection callback."""
-        room_name = request.path_params["room_name"]
-        state = _active_calls.get(room_name)
-        if not state:
-            return Response("ok")
+        try:
+            room_name = request.path_params["room_name"]
+            state = _active_calls.get(room_name)
+            if not state:
+                return Response("ok")
 
-        form = await request.form()
-        amd_status = str(form.get("AnsweredBy", ""))
-        state.amd_result = amd_status
-        logger.info("AMD result for %s: %s", room_name, amd_status)
+            form = await request.form()
+            amd_status = str(form.get("AnsweredBy", ""))
+            state.amd_result = amd_status
+            logger.info("AMD result for %s: %s", room_name, amd_status)
 
-        # If it's a machine, we can optionally leave a voicemail or hang up
-        if amd_status in ("machine_start", "machine_end_beep", "machine_end_silence", "fax"):
-            # Signal that this is a voicemail/machine
-            logger.info("Machine detected for %s, marking as voicemail", room_name)
-
+            if amd_status in ("machine_start", "machine_end_beep", "machine_end_silence", "fax"):
+                logger.info("Machine detected for %s, marking as voicemail", room_name)
+        except Exception:
+            logger.exception("amd_handler crashed")
         return Response("ok")
 
     routes = [

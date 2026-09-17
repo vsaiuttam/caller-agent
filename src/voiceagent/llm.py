@@ -48,14 +48,13 @@ EFFORT = DEFAULT_CONVERSATION_EFFORT
 
 # Short cap. Turns are one or two sentences by prompt; this is a backstop
 # against a runaway monologue tying up the line, not a target.
-MAX_TOKENS = 150
+MAX_TOKENS = 300
 
 # Flush a chunk to TTS at a sentence end, or at a clause break once we have
-# enough words to sound natural rather than clipped. Lower threshold = faster
-# first audio — the person hears something sooner.
+# enough words to sound natural rather than clipped.
 _SENTENCE_END = re.compile(r"[.!?]['\")\]]*\s")
 _CLAUSE_BREAK = re.compile(r"[,;:]\s")
-_MIN_CLAUSE_CHARS = 30
+_MIN_CLAUSE_CHARS = 45
 
 
 class ConversationLLM:
@@ -140,15 +139,18 @@ class ConversationLLM:
     # better to understate our own estimate than overstate it.
 
     async def _stream_anthropic(self) -> AsyncIterator[str]:
-        async with self._client.messages.stream(
+        kwargs: dict = dict(
             model=self._model,
             max_tokens=MAX_TOKENS,
             thinking={"type": "adaptive"},
             output_config={"effort": self._effort},
             system=self._system,
-            tools=self._tools,
             messages=self._messages(),
-        ) as stream:
+        )
+        # Only pass tools when non-empty — the API rejects an empty list.
+        if self._tools:
+            kwargs["tools"] = self._tools
+        async with self._client.messages.stream(**kwargs) as stream:
             async for delta in stream.text_stream:
                 yield delta
 
