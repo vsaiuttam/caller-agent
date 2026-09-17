@@ -35,7 +35,7 @@ def _api_key() -> str:
 
 def _make_client():
     """Create a SarvamAI client with the configured key."""
-    from sarvamapi import SarvamAI
+    from sarvamai import SarvamAI
     return SarvamAI(api_subscription_key=_api_key())
 
 
