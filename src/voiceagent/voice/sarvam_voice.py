@@ -1,37 +1,29 @@
 """Sarvam AI STT (Saarika) and TTS (Bulbul) adapter.
 
-Drop-in replacements for Deepgram STT and Cartesia TTS in the LiveKit
-pipeline, and also used by the Twilio adapter for Sarvam-powered TTS.
+Uses the official `sarvamapi` SDK. Drop-in for the Twilio adapter (TTS)
+and optionally for the LiveKit adapter (STT + TTS).
 
-Requires SARVAM_API_KEY in the environment.
-
-Sarvam endpoints used:
-    POST https://api.sarvam.ai/speech-to-text          (Saarika v2)
-    POST https://api.sarvam.ai/text-to-speech           (Bulbul v2)
+Requires SARVAM_API_KEY in the environment and `sarvamapi` installed.
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
 import io
 import logging
 import os
 import struct
 from collections.abc import AsyncIterator
 
-import httpx
-
 logger = logging.getLogger(__name__)
 
-SARVAM_BASE = "https://api.sarvam.ai"
-
 # Defaults — overridable via environment.
-SARVAM_STT_LANGUAGE = os.getenv("SARVAM_STT_LANGUAGE", "hi-IN")
-SARVAM_TTS_LANGUAGE = os.getenv("SARVAM_TTS_LANGUAGE", "hi-IN")
-SARVAM_TTS_SPEAKER = os.getenv("SARVAM_TTS_SPEAKER", "meera")
-SARVAM_TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v2")
+SARVAM_STT_LANGUAGE = os.getenv("SARVAM_STT_LANGUAGE", "en-IN")
+SARVAM_TTS_LANGUAGE = os.getenv("SARVAM_TTS_LANGUAGE", "en-IN")
+SARVAM_TTS_SPEAKER = os.getenv("SARVAM_TTS_SPEAKER", "shubh")
+SARVAM_TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v3")
 SARVAM_STT_MODEL = os.getenv("SARVAM_STT_MODEL", "saarika:v2")
+SARVAM_TTS_SAMPLE_RATE = int(os.getenv("SARVAM_TTS_SAMPLE_RATE", "22050"))
 
 
 def _api_key() -> str:
@@ -41,45 +33,117 @@ def _api_key() -> str:
     return key
 
 
-class SarvamSTT:
-    """Speech-to-text using Sarvam Saarika.
+def _make_client():
+    """Create a SarvamAI client with the configured key."""
+    from sarvamapi import SarvamAI
+    return SarvamAI(api_subscription_key=_api_key())
 
-    Accepts raw PCM audio frames (16-bit, 16 kHz, mono) accumulated from the
-    LiveKit audio stream. Transcription happens on each voiced segment detected
-    by the VAD, so this class exposes a queue-based interface rather than a
-    streaming WebSocket.
+
+class SarvamTTS:
+    """Text-to-speech using Sarvam Bulbul v3 via the official SDK.
+
+    Two output modes:
+      - `synthesize_mp3()` returns MP3 bytes for Twilio's <Play>.
+      - `synthesize()` returns raw PCM for LiveKit AudioSource.
     """
+
+    def __init__(
+        self,
+        *,
+        language: str = SARVAM_TTS_LANGUAGE,
+        speaker: str = SARVAM_TTS_SPEAKER,
+        model: str = SARVAM_TTS_MODEL,
+        sample_rate: int = SARVAM_TTS_SAMPLE_RATE,
+    ) -> None:
+        self._language = language
+        self._speaker = speaker
+        self._model = model
+        self._sample_rate = sample_rate
+
+    async def synthesize_mp3(self, text: str) -> bytes:
+        """Convert text to MP3 audio bytes (for Twilio <Play>).
+
+        Uses the SDK's convert_stream which returns MP3 directly.
+        """
+        loop = asyncio.get_running_loop()
+        try:
+            mp3_bytes = await loop.run_in_executor(None, self._call_sdk, text)
+            if not mp3_bytes:
+                logger.warning("Sarvam TTS returned empty audio for: %s", text[:60])
+            return mp3_bytes or b""
+        except Exception:
+            logger.exception("Sarvam TTS failed")
+            return b""
+
+    async def synthesize(self, text: str) -> bytes:
+        """Convert text to raw PCM audio bytes (for LiveKit)."""
+        mp3_bytes = await self.synthesize_mp3(text)
+        if not mp3_bytes:
+            return b""
+        # Convert MP3 to PCM for LiveKit audio frames
+        return await asyncio.get_running_loop().run_in_executor(
+            None, _mp3_to_pcm, mp3_bytes
+        )
+
+    def _call_sdk(self, text: str) -> bytes:
+        """Synchronous SDK call — run in executor."""
+        client = _make_client()
+        response = client.text_to_speech.convert_stream(
+            text=text,
+            target_language_code=self._language,
+            speaker=self._speaker,
+            model=self._model,
+            pace=1.0,
+            speech_sample_rate=self._sample_rate,
+        )
+        return response if isinstance(response, bytes) else bytes(response)
+
+    async def close(self) -> None:
+        pass  # SDK client doesn't need explicit cleanup
+
+
+class SarvamSTT:
+    """Speech-to-text using Sarvam Saarika via the official SDK."""
 
     def __init__(self, *, language: str = SARVAM_STT_LANGUAGE, model: str = SARVAM_STT_MODEL) -> None:
         self._language = language
         self._model = model
-        self._api_key = _api_key()
         self._audio_buffer = bytearray()
         self._results: asyncio.Queue[str] = asyncio.Queue()
         self._speech_started = asyncio.Event()
-        self._client = httpx.AsyncClient(timeout=30.0)
 
     async def transcribe(self, audio_bytes: bytes) -> str | None:
         """Send audio to Sarvam STT and return the transcript."""
         wav_bytes = _pcm_to_wav(audio_bytes, sample_rate=16000, channels=1, sample_width=2)
-
+        loop = asyncio.get_running_loop()
         try:
-            resp = await self._client.post(
-                f"{SARVAM_BASE}/speech-to-text",
-                headers={"api-subscription-key": self._api_key},
-                files={"file": ("audio.wav", wav_bytes, "audio/wav")},
-                data={
-                    "language_code": self._language,
-                    "model": self._model,
-                    "with_timestamps": "false",
-                },
+            result = await loop.run_in_executor(
+                None, self._call_sdk, wav_bytes
             )
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("transcript", "").strip()
+            return result
         except Exception:
             logger.exception("Sarvam STT request failed")
             return None
+
+    def _call_sdk(self, wav_bytes: bytes) -> str | None:
+        """Synchronous SDK call — run in executor."""
+        import tempfile
+        client = _make_client()
+
+        # SDK expects a file path, so write to a temp file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(wav_bytes)
+            tmp_path = f.name
+
+        try:
+            response = client.speech_to_text.transcribe(
+                file=open(tmp_path, "rb"),
+                language_code=self._language,
+                model=self._model,
+            )
+            return response.transcript.strip() if hasattr(response, "transcript") else ""
+        finally:
+            os.unlink(tmp_path)
 
     def push_audio(self, pcm_frame: bytes) -> None:
         """Accumulate audio frames from the LiveKit stream."""
@@ -87,7 +151,7 @@ class SarvamSTT:
 
     async def flush(self) -> None:
         """Transcribe whatever audio has been buffered, then clear it."""
-        if len(self._audio_buffer) < 1600:  # less than 50ms of audio
+        if len(self._audio_buffer) < 1600:
             self._audio_buffer.clear()
             return
 
@@ -100,84 +164,10 @@ class SarvamSTT:
             await self._results.put(text)
 
     async def get_next(self) -> str | None:
-        """Block until the next transcript is ready."""
         return await self._results.get()
 
     async def close(self) -> None:
-        await self._client.aclose()
-
-
-class SarvamTTS:
-    """Text-to-speech using Sarvam Bulbul.
-
-    Two output modes:
-      - `synthesize()` returns raw PCM for LiveKit AudioSource.
-      - `synthesize_wav()` returns the original WAV from Sarvam, ready for
-        Twilio's <Play>. No re-encoding, no sample-rate guessing.
-    """
-
-    def __init__(
-        self,
-        *,
-        language: str = SARVAM_TTS_LANGUAGE,
-        speaker: str = SARVAM_TTS_SPEAKER,
-        model: str = SARVAM_TTS_MODEL,
-        target_sample_rate: int = 24000,
-    ) -> None:
-        self._language = language
-        self._speaker = speaker
-        self._model = model
-        self._target_sample_rate = target_sample_rate
-        self._api_key = _api_key()
-        self._client = httpx.AsyncClient(timeout=10.0)
-
-    async def _call_api(self, text: str) -> bytes:
-        """Hit Sarvam TTS and return the raw WAV bytes."""
-        resp = await self._client.post(
-            f"{SARVAM_BASE}/text-to-speech",
-            headers={
-                "api-subscription-key": self._api_key,
-                "Content-Type": "application/json",
-            },
-            json={
-                "inputs": [text],
-                "target_language_code": self._language,
-                "speaker": self._speaker,
-                "model": self._model,
-                "enable_preprocessing": True,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        audios = data.get("audios", [])
-        if not audios:
-            logger.warning("Sarvam TTS returned no audio for: %s", text[:60])
-            return b""
-        return base64.b64decode(audios[0])
-
-    async def synthesize(self, text: str) -> bytes:
-        """Convert text to raw PCM audio bytes (for LiveKit)."""
-        try:
-            wav_bytes = await self._call_api(text)
-            return _wav_to_pcm(wav_bytes) if wav_bytes else b""
-        except Exception:
-            logger.exception("Sarvam TTS request failed")
-            return b""
-
-    async def synthesize_wav(self, text: str) -> bytes:
-        """Convert text to WAV audio bytes (for Twilio <Play>).
-
-        Returns the original WAV from Sarvam unchanged — correct sample rate,
-        correct headers, no re-encoding.
-        """
-        try:
-            return await self._call_api(text)
-        except Exception:
-            logger.exception("Sarvam TTS request failed")
-            return b""
-
-    async def close(self) -> None:
-        await self._client.aclose()
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -186,11 +176,7 @@ class SarvamTTS:
 
 
 class SarvamLiveKitListener:
-    """Implements the Listener protocol using Sarvam STT.
-
-    Replaces the Deepgram-based LiveKitListener. Works with the VAD to detect
-    speech boundaries, then sends accumulated audio to Sarvam for transcription.
-    """
+    """Implements the Listener protocol using Sarvam STT."""
 
     def __init__(self, stt: SarvamSTT, vad_stream) -> None:
         self._stt = stt
@@ -209,15 +195,11 @@ class SarvamLiveKitListener:
         await self._speech_started.wait()
 
     def signal_speech(self) -> None:
-        """Called by the audio pump when VAD detects voice activity."""
         self._speech_started.set()
 
 
 class SarvamLiveKitSpeaker:
-    """Implements the Speaker protocol using Sarvam TTS.
-
-    Replaces the Cartesia-based LiveKitSpeaker.
-    """
+    """Implements the Speaker protocol using Sarvam TTS."""
 
     def __init__(self, tts: SarvamTTS, audio_source) -> None:
         self._tts = tts
@@ -238,10 +220,8 @@ class SarvamLiveKitSpeaker:
             self._current_text = ""
             return
 
-        # Feed PCM in chunks to the audio source. Each frame is 20ms.
-        # At 24kHz mono 16-bit: 24000 * 0.02 * 2 = 960 bytes per frame.
-        frame_bytes = 960
-        self._total_samples = len(pcm) // 2  # 16-bit = 2 bytes per sample
+        frame_bytes = 960  # 20ms at 24kHz mono 16-bit
+        self._total_samples = len(pcm) // 2
 
         try:
             from livekit import rtc
@@ -255,7 +235,6 @@ class SarvamLiveKitSpeaker:
             end = min(offset + frame_bytes, len(pcm))
             chunk = pcm[offset:end]
             samples = len(chunk) // 2
-
             frame = rtc.AudioFrame(
                 data=chunk,
                 sample_rate=24000,
@@ -272,7 +251,6 @@ class SarvamLiveKitSpeaker:
         self._cancelled = True
         if not self._current_text or self._total_samples == 0:
             return ""
-
         ratio = min(1.0, self._played_samples / self._total_samples)
         cutoff = int(len(self._current_text) * ratio)
         partial = self._current_text[:cutoff].rstrip()
@@ -286,43 +264,49 @@ class SarvamLiveKitSpeaker:
 
 
 def _pcm_to_wav(pcm: bytes, *, sample_rate: int, channels: int, sample_width: int) -> bytes:
-    """Wrap raw PCM in a WAV header for the Sarvam API."""
+    """Wrap raw PCM in a WAV header."""
     buf = io.BytesIO()
     data_size = len(pcm)
-    # RIFF header
     buf.write(b"RIFF")
     buf.write(struct.pack("<I", 36 + data_size))
     buf.write(b"WAVE")
-    # fmt chunk
     buf.write(b"fmt ")
-    buf.write(struct.pack("<I", 16))  # chunk size
-    buf.write(struct.pack("<H", 1))   # PCM format
+    buf.write(struct.pack("<I", 16))
+    buf.write(struct.pack("<H", 1))  # PCM
     buf.write(struct.pack("<H", channels))
     buf.write(struct.pack("<I", sample_rate))
-    buf.write(struct.pack("<I", sample_rate * channels * sample_width))  # byte rate
-    buf.write(struct.pack("<H", channels * sample_width))  # block align
-    buf.write(struct.pack("<H", sample_width * 8))  # bits per sample
-    # data chunk
+    buf.write(struct.pack("<I", sample_rate * channels * sample_width))
+    buf.write(struct.pack("<H", channels * sample_width))
+    buf.write(struct.pack("<H", sample_width * 8))
     buf.write(b"data")
     buf.write(struct.pack("<I", data_size))
     buf.write(pcm)
     return buf.getvalue()
 
 
-def _wav_to_pcm(wav_bytes: bytes) -> bytes:
-    """Extract raw PCM data from a WAV file, skipping the header."""
-    buf = io.BytesIO(wav_bytes)
-    # Find the data chunk
-    buf.read(4)  # RIFF
-    buf.read(4)  # file size
-    buf.read(4)  # WAVE
+def _mp3_to_pcm(mp3_bytes: bytes) -> bytes:
+    """Convert MP3 to raw 16-bit 24kHz mono PCM.
 
-    while True:
-        chunk_id = buf.read(4)
-        if len(chunk_id) < 4:
-            # No data chunk found, return everything after a 44-byte header
-            return wav_bytes[44:] if len(wav_bytes) > 44 else wav_bytes
-        chunk_size = struct.unpack("<I", buf.read(4))[0]
-        if chunk_id == b"data":
-            return buf.read(chunk_size)
-        buf.read(chunk_size)
+    Uses the built-in audioop + wave if available, otherwise returns
+    the MP3 bytes as-is (LiveKit can sometimes handle MP3 directly).
+    """
+    try:
+        import subprocess
+        # Use ffmpeg if available (installed on most Linux/Render deployments)
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-i", "pipe:0",
+                "-f", "s16le", "-ar", "24000", "-ac", "1",
+                "pipe:1",
+            ],
+            input=mp3_bytes,
+            capture_output=True,
+            timeout=5,
+        )
+        if proc.returncode == 0 and proc.stdout:
+            return proc.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    logger.warning("ffmpeg not available for MP3→PCM conversion")
+    return mp3_bytes

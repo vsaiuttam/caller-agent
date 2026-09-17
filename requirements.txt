@@ -26,6 +26,9 @@ livekit-plugins-silero>=0.7
 # Voice pipeline — Twilio (TELEPHONY=twilio)
 twilio>=9.0
 
+# Sarvam AI — Indic TTS (Bulbul) and STT (Saarika)
+sarvamapi>=0.1
+
 # Voice pipeline — Telnyx (TELEPHONY=telnyx)
 starlette>=0.36
 

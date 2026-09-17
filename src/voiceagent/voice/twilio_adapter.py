@@ -366,12 +366,12 @@ def _build_webhook_app():
         return Response("ok")
 
     async def audio_handler(request: Request) -> Response:
-        """Serve Sarvam-synthesized audio for Twilio's <Play> verb."""
+        """Serve Sarvam-synthesized MP3 audio for Twilio's <Play> verb."""
         audio_id = request.path_params["audio_id"]
-        wav = _audio_cache.pop(audio_id, None)
-        if wav is None:
+        audio = _audio_cache.pop(audio_id, None)
+        if audio is None:
             return Response("not found", status_code=404)
-        return Response(wav, media_type="audio/wav")
+        return Response(audio, media_type="audio/mpeg")
 
     routes = [
         Route("/twilio/voice/{room_name}", voice_handler, methods=["POST"]),
@@ -387,20 +387,20 @@ def _build_webhook_app():
 
 
 async def _synthesize_sarvam(text: str) -> str | None:
-    """Call Sarvam Bulbul TTS, cache the WAV, return the audio_id.
+    """Call Sarvam Bulbul TTS via official SDK, cache the MP3, return audio_id.
 
-    Uses the original WAV from Sarvam directly — no re-encoding.
-    Timeout is 8s so we stay well under Twilio's ~15s webhook limit.
+    Uses bulbul:v3 with shubh voice. Timeout is 8s so we stay well under
+    Twilio's ~15s webhook limit. Falls back to Twilio <Say> on failure.
     """
     from .sarvam_voice import SarvamTTS
 
     tts = SarvamTTS()
     try:
-        wav = await asyncio.wait_for(tts.synthesize_wav(text), timeout=8.0)
-        if not wav:
+        mp3 = await asyncio.wait_for(tts.synthesize_mp3(text), timeout=8.0)
+        if not mp3:
             return None
         audio_id = uuid.uuid4().hex[:12]
-        _audio_cache[audio_id] = wav
+        _audio_cache[audio_id] = mp3
         return audio_id
     except asyncio.TimeoutError:
         logger.warning("Sarvam TTS timed out for: %s", text[:60])
