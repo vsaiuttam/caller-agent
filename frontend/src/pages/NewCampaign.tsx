@@ -174,6 +174,7 @@ export default function NewCampaign() {
       navigate(`/campaigns/${campaign.id}`);
     } catch (err) {
       setError((err as Error).message);
+    } finally {
       setSaving(false);
     }
   };
