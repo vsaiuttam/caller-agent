@@ -290,8 +290,8 @@ async def health(db: AsyncSession = Depends(get_session)) -> dict:
         "sms": bool(os.getenv("TWILIO_ACCOUNT_SID") and os.getenv("TWILIO_AUTH_TOKEN") and os.getenv("TWILIO_PHONE_NUMBER")),
         "speech_to_text": bool(os.getenv("DEEPGRAM_API_KEY") or os.getenv("TWILIO_ACCOUNT_SID")),
         "text_to_speech": bool(os.getenv("CARTESIA_API_KEY") or os.getenv("TWILIO_ACCOUNT_SID")),
-        "calendar": bool(os.getenv("GOOGLE_CALENDAR_CREDENTIALS")),
-        "records_api": bool(os.getenv("RECORDS_API_URL")),
+        "calendar": bool(os.getenv("GOOGLE_CALENDAR_CREDENTIALS") or os.getenv("BUILTIN_CALENDAR")),
+        "records_api": bool(os.getenv("RECORDS_API_URL") or os.getenv("BUILTIN_RECORDS")),
         "webhook_signing": bool(os.getenv("WEBHOOK_SIGNING_SECRET")),
     }
 

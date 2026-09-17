@@ -162,7 +162,10 @@ def build_calendar():
 
     from .mocks import MockCalendar
 
-    logger.warning("GOOGLE_CALENDAR_ID/CREDENTIALS not set — using mock calendar")
+    if os.getenv("BUILTIN_CALENDAR"):
+        logger.info("Using built-in calendar (events stored in memory)")
+    else:
+        logger.warning("GOOGLE_CALENDAR_ID/CREDENTIALS not set — using mock calendar")
     return MockCalendar()
 
 
@@ -174,5 +177,8 @@ def build_records():
 
     from .mocks import MockRecords
 
-    logger.warning("RECORDS_API_URL/KEY not set — using mock records client")
+    if os.getenv("BUILTIN_RECORDS"):
+        logger.info("Using built-in records store (outcomes stored in memory)")
+    else:
+        logger.warning("RECORDS_API_URL/KEY not set — using mock records client")
     return MockRecords()
