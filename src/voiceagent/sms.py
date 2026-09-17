@@ -76,14 +76,17 @@ async def send_sms_followup(
         import asyncio
         from twilio.rest import Client
 
-        client = Client(
-            os.environ["TWILIO_ACCOUNT_SID"],
-            os.environ["TWILIO_AUTH_TOKEN"],
-        )
+        sid = os.getenv("TWILIO_ACCOUNT_SID")
+        token = os.getenv("TWILIO_AUTH_TOKEN")
+        from_number = os.getenv("TWILIO_PHONE_NUMBER")
+        if not (sid and token and from_number):
+            logger.warning("SMS skipped — Twilio credentials not configured")
+            return None
+        client = Client(sid, token)
         message = await asyncio.to_thread(
             client.messages.create,
             to=to,
-            from_=os.environ["TWILIO_PHONE_NUMBER"],
+            from_=from_number,
             body=body,
         )
         logger.info("SMS sent to %s....: SID %s", to[:6], message.sid)

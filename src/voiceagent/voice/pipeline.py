@@ -160,10 +160,10 @@ class CallPipeline:
                 speaker=speaker,
                 control=control,
                 greeting=_greeting(contact, campaign),
-                max_duration_seconds=campaign.max_concurrent_calls and 600,
+                max_duration_seconds=600,
             )
             transcript = await session.run()
-            disposition = Disposition.COMPLETED if transcript else Disposition.NO_ANSWER
+            disposition = Disposition.COMPLETED if transcript is not None and len(transcript) > 0 else Disposition.NO_ANSWER
         except Exception:
             logger.exception("Conversation failed for call %s", call_id)
             disposition = Disposition.FAILED
