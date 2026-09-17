@@ -36,7 +36,7 @@ export default function Suppressions() {
   };
 
   return (
-    <PageWrapper className="mx-auto max-w-4xl px-6 py-5">
+    <PageWrapper className="mx-auto max-w-4xl px-3 py-4 sm:px-6 sm:py-5">
       <header className="mb-5">
         <h1 className="text-xl font-bold tracking-tight">Do not call</h1>
         <p className="mt-0.5 text-sm text-ink-muted">

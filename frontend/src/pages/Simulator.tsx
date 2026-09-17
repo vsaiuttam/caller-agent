@@ -30,7 +30,6 @@ import {
   Field,
   PageWrapper,
   Skeleton,
-  Spinner,
   inputClass,
 } from "../components/ui";
 import { useAsync } from "../hooks";
@@ -104,7 +103,7 @@ export default function Simulator() {
   };
 
   return (
-    <PageWrapper className="mx-auto max-w-[1180px] px-6 py-5">
+    <PageWrapper className="mx-auto max-w-[1180px] px-3 py-4 sm:px-6 sm:py-5">
       <header className="mb-5">
         <h1 className="flex items-center gap-2.5 text-xl font-bold tracking-tight">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand/15 text-brand">
@@ -167,7 +166,7 @@ export default function Simulator() {
                         className={`ripple w-full rounded-lg border px-4 py-3 text-left transition-colors duration-150 ${
                           p.id === persona
                             ? "border-brand/40 bg-brand/8"
-                            : "border-[var(--surface-border)] hover:border-brand/20 hover:bg-elevated/50"
+                            : "border-white/10 hover:border-brand/20 hover:bg-elevated/50"
                         }`}
                       >
                         <span className="flex items-center gap-1.5 text-xs font-semibold">
@@ -208,7 +207,7 @@ export default function Simulator() {
               />
             </Field>
 
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-[var(--surface-border)] px-3.5 py-3">
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-white/10 px-3.5 py-3">
               <input
                 type="checkbox"
                 checked={save}
@@ -228,7 +227,7 @@ export default function Simulator() {
               {running ? "Running\u2026" : "Run simulated call"}
             </Button>
 
-            <div className="border-t border-[var(--surface-border)] pt-4">
+            <div className="border-t border-white/10 pt-4">
               <Field
                 label="Or call a real phone"
                 hint="Enter your phone number in E.164 format (e.g. +1234567890) to receive a real call from the AI agent."
@@ -267,18 +266,15 @@ export default function Simulator() {
           {error && <ErrorNote message={error} />}
 
           {running && (
-            <Card className="p-8" hover={false}>
-              <div className="flex flex-col items-center text-center">
-                <Spinner size={40} />
-                <p className="mt-4 text-sm font-semibold">
-                  Calling {contactName || "them"}\u2026
-                </p>
-                <p className="mt-1.5 text-xs text-ink-muted">
-                  Each exchange is two model round-trips. Ten exchanges takes
-                  around half a minute.
-                </p>
-              </div>
-              <div className="mt-6 space-y-2">
+            <Card className="p-5" hover={false}>
+              <p className="text-sm font-semibold">
+                Calling {contactName || "them"}\u2026
+              </p>
+              <p className="mt-1 text-xs text-ink-muted">
+                Each exchange is two model round-trips. Ten exchanges takes
+                around half a minute.
+              </p>
+              <div className="mt-4 space-y-2">
                 {[0, 1, 2, 3].map((i) => (
                   <Skeleton
                     key={i}

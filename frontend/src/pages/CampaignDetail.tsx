@@ -45,7 +45,7 @@ export default function CampaignDetail() {
 
   if (campaign.loading) {
     return (
-      <div className="mx-auto max-w-6xl space-y-3 px-8 py-7">
+      <div className="mx-auto max-w-6xl space-y-3 px-3 py-4 sm:px-8 sm:py-7">
         <Skeleton className="h-16 rounded-2xl" />
         <Skeleton className="h-64 rounded-2xl" />
       </div>
@@ -53,7 +53,7 @@ export default function CampaignDetail() {
   }
   if (campaign.error || !c) {
     return (
-      <div className="px-8 py-7">
+      <div className="px-3 py-4 sm:px-8 sm:py-7">
         <ErrorNote message={campaign.error ?? "Campaign not found"} />
       </div>
     );
@@ -62,7 +62,7 @@ export default function CampaignDetail() {
   const canStart = c.status !== "running" && c.total_contacts > 0;
 
   return (
-    <PageWrapper className="mx-auto max-w-6xl px-8 py-7">
+    <PageWrapper className="mx-auto max-w-6xl px-3 py-4 sm:px-8 sm:py-7">
       <Link
         to="/campaigns"
         className="inline-flex items-center gap-1.5 text-xs text-ink-muted transition hover:text-brand-bright"
@@ -121,7 +121,7 @@ export default function CampaignDetail() {
               ) : (
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-surface/90 text-xs text-ink-muted backdrop-blur-sm">
-                    <tr className="border-b border-[var(--surface-border)]">
+                    <tr className="border-b border-white/5">
                       <th className="px-5 py-2.5 text-left font-medium">Name</th>
                       <th className="px-3 py-2.5 text-left font-medium">Phone</th>
                       <th className="px-3 py-2.5 text-left font-medium">Status</th>
@@ -294,7 +294,7 @@ function ConversationEditor({
           />
         </Field>
 
-        <div className="rounded-lg border border-[var(--surface-border)] bg-elevated/50 px-4 py-3">
+        <div className="rounded-lg border border-white/5 bg-elevated/50 px-4 py-3">
           <p className="text-[11px] font-medium text-ink-muted">
             Agent will say
           </p>
@@ -371,7 +371,7 @@ function ImportPanel({
         subtitle="CSV with name and phone. Extra columns become context the agent can reference."
       />
       <div className="space-y-3 px-5 py-4">
-        <label className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-[var(--surface-border)] px-4 py-7 text-center transition-all hover:border-brand/40 hover:bg-brand/5">
+        <label className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-white/10 px-4 py-7 text-center transition-all hover:border-brand/40 hover:bg-brand/5">
           <input
             type="file"
             accept=".csv,text/csv"

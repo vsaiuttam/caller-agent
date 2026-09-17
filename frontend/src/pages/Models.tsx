@@ -98,7 +98,7 @@ export default function Models() {
   };
 
   return (
-    <PageWrapper className="mx-auto max-w-[1180px] px-6 py-5">
+    <PageWrapper className="mx-auto max-w-[1180px] px-3 py-4 sm:px-6 sm:py-5">
       <header className="mb-5 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold tracking-tight">Models</h1>
@@ -227,7 +227,7 @@ function RoleSection({
                 className={`ripple rounded-lg border px-3 py-2 text-left text-xs transition-colors duration-150 ${
                   active
                     ? "border-brand/40 bg-brand/12 text-ink"
-                    : "border-[var(--surface-border)] text-ink-secondary hover:border-brand/20 hover:text-ink"
+                    : "border-white/10 text-ink-secondary hover:border-brand/20 hover:text-ink"
                 }`}
               >
                 <span className="font-semibold">{effort.label}</span>

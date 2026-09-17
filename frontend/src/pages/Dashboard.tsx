@@ -31,7 +31,7 @@ export default function Dashboard() {
   const pct = (n: number) => `${Math.round(n * 100)}%`;
 
   return (
-    <PageWrapper className="px-6 py-5">
+    <PageWrapper className="px-3 py-4 sm:px-6 sm:py-5">
       {/* Header */}
       <header className="mb-5 flex flex-wrap items-end justify-between gap-4">
         <div>
@@ -40,7 +40,7 @@ export default function Dashboard() {
             Rolling 24 hours, compared with the previous 24.
           </p>
         </div>
-        <div className="flex items-center gap-2 rounded-lg border border-[var(--surface-border)] px-3 py-1.5 text-xs">
+        <div className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-xs">
           {connected ? (
             <>
               <LiveDot />
@@ -166,12 +166,12 @@ export default function Dashboard() {
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-[var(--surface-border)] text-xs text-ink-muted">
-                      <th className="px-5 py-2.5 text-left font-medium">Contact</th>
-                      <th className="px-3 py-2.5 text-left font-medium">Phone</th>
+                    <tr className="border-b border-white/5 text-xs text-ink-muted">
+                      <th className="px-3 py-2.5 text-left font-medium sm:px-5">Contact</th>
+                      <th className="hidden px-3 py-2.5 text-left font-medium sm:table-cell">Phone</th>
                       <th className="px-3 py-2.5 text-left font-medium">Duration</th>
-                      <th className="px-3 py-2.5 text-left font-medium">Time</th>
-                      <th className="px-5 py-2.5 text-right font-medium">Outcome</th>
+                      <th className="hidden px-3 py-2.5 text-left font-medium md:table-cell">Time</th>
+                      <th className="px-3 py-2.5 text-right font-medium sm:px-5">Outcome</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
@@ -180,17 +180,17 @@ export default function Dashboard() {
                         key={call.id}
                         className="transition-colors hover:bg-elevated/50"
                       >
-                        <td className="px-5 py-2.5 font-medium">{call.contact_name}</td>
-                        <td className="tnum px-3 py-2.5 text-ink-secondary">
+                        <td className="px-3 py-2.5 font-medium sm:px-5">{call.contact_name}</td>
+                        <td className="tnum hidden px-3 py-2.5 text-ink-secondary sm:table-cell">
                           {call.phone_masked}
                         </td>
                         <td className="tnum px-3 py-2.5 text-ink-secondary">
                           {formatDuration(call.duration_seconds)}
                         </td>
-                        <td className="tnum px-3 py-2.5 text-ink-muted">
+                        <td className="tnum hidden px-3 py-2.5 text-ink-muted md:table-cell">
                           {formatTime(call.started_at)}
                         </td>
-                        <td className="px-5 py-2.5 text-right">
+                        <td className="px-3 py-2.5 text-right sm:px-5">
                           <DispositionBadge value={call.disposition as Disposition} />
                         </td>
                       </tr>

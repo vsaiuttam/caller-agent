@@ -15,7 +15,7 @@ export default function Campaigns() {
   const { data: campaigns, loading, error } = useAsync(() => api.campaigns());
 
   return (
-    <PageWrapper className="mx-auto max-w-5xl px-6 py-5">
+    <PageWrapper className="mx-auto max-w-5xl px-3 py-4 sm:px-6 sm:py-5">
       <header className="mb-5 flex items-start justify-between gap-6">
         <div>
           <h1 className="text-xl font-bold tracking-tight">Campaigns</h1>
