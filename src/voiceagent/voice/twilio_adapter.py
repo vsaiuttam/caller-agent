@@ -387,18 +387,24 @@ def _build_webhook_app():
 
 
 async def _synthesize_sarvam(text: str) -> str | None:
-    """Call Sarvam Bulbul TTS, cache the WAV, return the audio_id."""
-    from .sarvam_voice import SarvamTTS, _pcm_to_wav
+    """Call Sarvam Bulbul TTS, cache the WAV, return the audio_id.
+
+    Uses the original WAV from Sarvam directly — no re-encoding.
+    Timeout is 8s so we stay well under Twilio's ~15s webhook limit.
+    """
+    from .sarvam_voice import SarvamTTS
 
     tts = SarvamTTS()
     try:
-        pcm = await tts.synthesize(text)
-        if not pcm:
+        wav = await asyncio.wait_for(tts.synthesize_wav(text), timeout=8.0)
+        if not wav:
             return None
-        wav = _pcm_to_wav(pcm, sample_rate=22050, channels=1, sample_width=2)
         audio_id = uuid.uuid4().hex[:12]
         _audio_cache[audio_id] = wav
         return audio_id
+    except asyncio.TimeoutError:
+        logger.warning("Sarvam TTS timed out for: %s", text[:60])
+        return None
     except Exception:
         logger.exception("Sarvam TTS failed, falling back to <Say>")
         return None

@@ -110,8 +110,10 @@ class SarvamSTT:
 class SarvamTTS:
     """Text-to-speech using Sarvam Bulbul.
 
-    Returns raw PCM audio (16-bit, 22050 Hz or as configured) that can be
-    fed directly into a LiveKit AudioSource or wrapped in a WAV for Twilio.
+    Two output modes:
+      - `synthesize()` returns raw PCM for LiveKit AudioSource.
+      - `synthesize_wav()` returns the original WAV from Sarvam, ready for
+        Twilio's <Play>. No re-encoding, no sample-rate guessing.
     """
 
     def __init__(
@@ -127,35 +129,49 @@ class SarvamTTS:
         self._model = model
         self._target_sample_rate = target_sample_rate
         self._api_key = _api_key()
-        self._client = httpx.AsyncClient(timeout=30.0)
+        self._client = httpx.AsyncClient(timeout=10.0)
+
+    async def _call_api(self, text: str) -> bytes:
+        """Hit Sarvam TTS and return the raw WAV bytes."""
+        resp = await self._client.post(
+            f"{SARVAM_BASE}/text-to-speech",
+            headers={
+                "api-subscription-key": self._api_key,
+                "Content-Type": "application/json",
+            },
+            json={
+                "inputs": [text],
+                "target_language_code": self._language,
+                "speaker": self._speaker,
+                "model": self._model,
+                "enable_preprocessing": True,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        audios = data.get("audios", [])
+        if not audios:
+            logger.warning("Sarvam TTS returned no audio for: %s", text[:60])
+            return b""
+        return base64.b64decode(audios[0])
 
     async def synthesize(self, text: str) -> bytes:
-        """Convert text to raw PCM audio bytes."""
+        """Convert text to raw PCM audio bytes (for LiveKit)."""
         try:
-            resp = await self._client.post(
-                f"{SARVAM_BASE}/text-to-speech",
-                headers={
-                    "api-subscription-key": self._api_key,
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "inputs": [text],
-                    "target_language_code": self._language,
-                    "speaker": self._speaker,
-                    "model": self._model,
-                    "enable_preprocessing": True,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            # Sarvam returns base64-encoded WAV audio in "audios" array
-            audios = data.get("audios", [])
-            if not audios:
-                logger.warning("Sarvam TTS returned no audio")
-                return b""
-            audio_b64 = audios[0]
-            wav_bytes = base64.b64decode(audio_b64)
-            return _wav_to_pcm(wav_bytes)
+            wav_bytes = await self._call_api(text)
+            return _wav_to_pcm(wav_bytes) if wav_bytes else b""
+        except Exception:
+            logger.exception("Sarvam TTS request failed")
+            return b""
+
+    async def synthesize_wav(self, text: str) -> bytes:
+        """Convert text to WAV audio bytes (for Twilio <Play>).
+
+        Returns the original WAV from Sarvam unchanged — correct sample rate,
+        correct headers, no re-encoding.
+        """
+        try:
+            return await self._call_api(text)
         except Exception:
             logger.exception("Sarvam TTS request failed")
             return b""
