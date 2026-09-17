@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import enum
 import os
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -324,8 +325,20 @@ class Setting(Base):
 # Engine / session
 # --------------------------------------------------------------------------
 
-engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+_engine_kwargs: dict = {"echo": False, "pool_pre_ping": True}
+if DATABASE_URL.startswith("sqlite"):
+    # SQLite doesn't support pool_pre_ping or pool_size
+    _engine_kwargs = {"echo": False}
+else:
+    # Postgres production: set reasonable pool limits
+    _engine_kwargs["pool_size"] = 5
+    _engine_kwargs["max_overflow"] = 10
+
+engine = create_async_engine(DATABASE_URL, **_engine_kwargs)
 SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+_db_type = "PostgreSQL" if "postgresql" in DATABASE_URL else "SQLite"
+logging.getLogger(__name__).info("Database: %s (%s)", _db_type, DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else DATABASE_URL)
 
 
 async def init_db() -> None:

@@ -643,7 +643,17 @@ export const api = {
     }),
 };
 
-/** WebSocket URL for the live feed, same-origin so it works in dev and prod. */
+/**
+ * Backend origin for WebSocket connections.
+ * In dev, Vite proxies /api so same-origin works.
+ * In production on Vercel, we must connect directly to the Render backend
+ * because Vercel does NOT proxy WebSocket upgrades.
+ */
+const WS_BACKEND =
+  import.meta.env.VITE_API_URL          // explicit override (e.g. "https://voiceagent-api-vzpp.onrender.com")
+  ?? (import.meta.env.DEV ? undefined : "https://voiceagent-api-vzpp.onrender.com");
+
+/** WebSocket URL for the live feed. */
 export function liveFeedUrl(): string {
   return wsUrl("/api/events");
 }
@@ -654,6 +664,13 @@ export function liveCallUrl(): string {
 }
 
 function wsUrl(path: string): string {
+  if (WS_BACKEND) {
+    // Production: connect directly to backend
+    const url = new URL(path, WS_BACKEND);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url.toString();
+  }
+  // Dev: same-origin (Vite proxy handles it)
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${location.host}${path}`;
 }

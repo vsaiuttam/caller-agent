@@ -36,7 +36,7 @@ _warned = False
 def sign(body: bytes) -> str | None:
     if not _SECRET:
         return None
-    return hmac.new(_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.HMAC(_SECRET.encode(), body, hashlib.sha256).hexdigest()
 
 
 async def fire_webhook(url: str, payload: dict) -> bool:

@@ -15,6 +15,7 @@ import {
   IconPhone,
   IconReview,
   IconSearch,
+  IconSettings,
   IconSparkle,
 } from "./icons";
 
@@ -37,6 +38,7 @@ const PAGES: Command[] = [
   { id: "p-sim", label: "Test calls", hint: "Rehearse against a simulated person", to: "/simulator", icon: <IconFlask size={15} />, group: "Go to" },
   { id: "p-live", label: "Live mic", hint: "Take the call yourself", to: "/live", icon: <IconMic size={15} />, group: "Go to" },
   { id: "p-dnc", label: "Do not call", hint: "Suppression list", to: "/suppressions", icon: <IconBlock size={15} />, group: "Go to" },
+  { id: "p-set", label: "Integrations", hint: "Service connections & status", to: "/settings", icon: <IconSettings size={15} />, group: "Go to" },
   { id: "a-new", label: "New campaign", hint: "Start from scratch", to: "/campaigns/new", icon: <IconCampaign size={15} />, group: "Create" },
 ];
 

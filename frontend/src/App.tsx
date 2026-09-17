@@ -15,6 +15,7 @@ import {
   IconPhone,
   IconReview,
   IconSearch,
+  IconSettings,
   IconSparkle,
   IconSun,
 } from "./components/icons";
@@ -29,6 +30,7 @@ import LiveMic from "./pages/LiveMic";
 import Models from "./pages/Models";
 import NewCampaign from "./pages/NewCampaign";
 import Simulator from "./pages/Simulator";
+import Settings from "./pages/Settings";
 import Suppressions from "./pages/Suppressions";
 import Templates from "./pages/Templates";
 
@@ -71,6 +73,7 @@ const NAV_GROUPS: Array<{ heading: string; items: NavItem[] }> = [
     items: [
       { to: "/models", label: "Models", icon: <IconChip /> },
       { to: "/suppressions", label: "Do not call", icon: <IconBlock /> },
+      { to: "/settings", label: "Integrations", icon: <IconSettings /> },
     ],
   },
 ];
@@ -87,6 +90,7 @@ const TITLES: Array<[RegExp, string]> = [
   [/^\/simulator/, "Test calls"],
   [/^\/live/, "Live mic"],
   [/^\/suppressions/, "Do not call"],
+  [/^\/settings/, "Integrations"],
 ];
 
 export default function App() {
@@ -320,6 +324,7 @@ export default function App() {
                 <Route path="/simulator" element={<Simulator />} />
                 <Route path="/live" element={<LiveMic />} />
                 <Route path="/suppressions" element={<Suppressions />} />
+                <Route path="/settings" element={<Settings />} />
               </Routes>
             </ErrorBoundary>
           </div>
