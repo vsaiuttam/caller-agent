@@ -194,13 +194,13 @@ def _build_webhook_app():
         return Response(twiml, media_type="application/xml")
 
     async def gather_handler(request: Request) -> Response:
-        """Receives speech result, queues it, waits for agent response.
+        """Receives speech result, queues it, then enters the keep-alive loop.
 
-        Twilio times out webhooks at ~15 seconds. If the LLM hasn't
-        responded by then, we return a brief hold message and redirect
-        back to ourselves — keeping the call alive while the agent
-        thinks. The speech is already queued so the session will pick
-        it up; the next webhook hit will find the response ready.
+        Instead of blocking on the LLM, we queue the speech and immediately
+        redirect to the /twilio/wait/ heartbeat loop. That loop polls for
+        the response every few seconds and keeps Twilio alive indefinitely
+        with short Pause + Redirect cycles — no webhook ever blocks long
+        enough for Twilio to time out.
         """
         room_name = request.path_params["room_name"]
         state = _active_calls.get(room_name)
@@ -214,26 +214,14 @@ def _build_webhook_app():
             state.speech_started.set()
             await state.speech_queue.put(speech)
 
-        # Try to get the agent's response within Twilio's timeout budget.
-        # First try: quick wait for an already-ready response.
-        # Second try: if not ready, return a hold message + redirect so
-        # Twilio doesn't time out — the redirect will pick up the response.
+        # Quick check — if the agent already has a response queued, return it
+        # immediately (common when the LLM is fast or response was pre-computed).
         try:
-            agent_text = await asyncio.wait_for(state.response_queue.get(), timeout=8.0)
+            agent_text = await asyncio.wait_for(state.response_queue.get(), timeout=2.0)
         except asyncio.TimeoutError:
-            # LLM is still thinking — return a hold message and redirect
-            # back so Twilio doesn't time out. The redirect will pick up
-            # the response when ready.
+            # Not ready yet — enter the keep-alive heartbeat loop
             base = os.getenv("TWILIO_WEBHOOK_URL", "http://localhost:8765")
-            return Response(
-                '<?xml version="1.0" encoding="UTF-8"?>'
-                "<Response>"
-                "<Say>One moment please.</Say>"
-                "<Pause length=\"2\"/>"
-                f'<Redirect method="POST">{base}/twilio/wait/{room_name}</Redirect>'
-                "</Response>",
-                media_type="application/xml",
-            )
+            return _heartbeat_twiml(base, room_name)
 
         if agent_text is None or state.ended.is_set():
             return Response(
@@ -245,31 +233,29 @@ def _build_webhook_app():
         return Response(twiml, media_type="application/xml")
 
     async def wait_handler(request: Request) -> Response:
-        """Polls for the agent response while keeping the call alive.
+        """Keep-alive heartbeat: polls for the agent response every ~5s.
 
-        Called by the redirect from gather_handler when the LLM was slow.
-        Waits another few seconds; if still not ready, says "hold" again
-        and redirects to itself.
+        This endpoint forms a tight loop with Twilio:
+          1. Wait up to 3s for the LLM response
+          2. If ready → return the response as TwiML + Gather
+          3. If not ready → return a short Pause + Redirect back here
+
+        Each iteration is well under Twilio's ~15s timeout. The loop
+        runs indefinitely until the agent responds or the call ends —
+        no "application error" is ever possible.
         """
         room_name = request.path_params["room_name"]
         state = _active_calls.get(room_name)
         if not state or state.ended.is_set():
             return Response("<Response><Hangup/></Response>", media_type="application/xml")
 
+        # Poll for response — short timeout keeps us well under Twilio's limit
         try:
-            agent_text = await asyncio.wait_for(state.response_queue.get(), timeout=8.0)
+            agent_text = await asyncio.wait_for(state.response_queue.get(), timeout=3.0)
         except asyncio.TimeoutError:
-            # Still not ready — keep holding
+            # Still not ready — send another heartbeat
             base = os.getenv("TWILIO_WEBHOOK_URL", "http://localhost:8765")
-            return Response(
-                '<?xml version="1.0" encoding="UTF-8"?>'
-                "<Response>"
-                "<Say>Still thinking, one moment.</Say>"
-                "<Pause length=\"2\"/>"
-                f'<Redirect method="POST">{base}/twilio/wait/{room_name}</Redirect>'
-                "</Response>",
-                media_type="application/xml",
-            )
+            return _heartbeat_twiml(base, room_name)
 
         if agent_text is None or state.ended.is_set():
             return Response(
@@ -378,6 +364,25 @@ def _gather_twiml(room_name: str, say_text: str) -> str:
         # If no speech detected, redirect back to gather
         f'<Redirect method="POST">{base}/twilio/voice/{room_name}</Redirect>'
         "</Response>"
+    )
+
+
+def _heartbeat_twiml(base: str, room_name: str) -> "Response":
+    """Return TwiML that keeps the call alive while waiting for the LLM.
+
+    A short <Pause> followed by a <Redirect> back to the wait endpoint.
+    Each cycle is ~3s — well under Twilio's ~15s webhook timeout. The loop
+    continues indefinitely until the agent's response is ready.
+    """
+    from starlette.responses import Response
+
+    return Response(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response>"
+        '<Pause length="3"/>'
+        f'<Redirect method="POST">{base}/twilio/wait/{room_name}</Redirect>'
+        "</Response>",
+        media_type="application/xml",
     )
 
 
