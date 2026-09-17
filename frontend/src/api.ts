@@ -653,7 +653,7 @@ export const api = {
  * Set VITE_API_ORIGIN in the Vercel environment to your Render service URL
  * (e.g. "https://voiceagent-api.onrender.com"). When unset, same-origin is used.
  */
-const API_ORIGIN: string = import.meta.env.VITE_API_ORIGIN ?? "";
+const API_ORIGIN: string = import.meta.env.VITE_API_ORIGIN || (import.meta.env.DEV ? "" : "https://voiceagent-api-vzpp.onrender.com");
 
 /** WebSocket URL for the live feed. */
 export function liveFeedUrl(): string {
