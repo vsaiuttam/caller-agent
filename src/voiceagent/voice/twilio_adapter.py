@@ -180,11 +180,12 @@ def _build_webhook_app():
         state.call_sid = str(form.get("CallSid", state.call_sid))
         state.answered.set()
 
-        # Wait for the greeting from Speaker.say()
+        # Wait for the greeting from Speaker.say() — must respond within
+        # Twilio's webhook timeout (~15s), so cap at 10s.
         try:
-            greeting = await asyncio.wait_for(state.response_queue.get(), timeout=15.0)
+            greeting = await asyncio.wait_for(state.response_queue.get(), timeout=10.0)
         except asyncio.TimeoutError:
-            greeting = "Hello, please hold."
+            greeting = "Hello, please hold while I connect."
 
         if greeting is None or state.ended.is_set():
             return Response("<Response><Hangup/></Response>", media_type="application/xml")
@@ -193,7 +194,14 @@ def _build_webhook_app():
         return Response(twiml, media_type="application/xml")
 
     async def gather_handler(request: Request) -> Response:
-        """Receives speech result, queues it, waits for agent response."""
+        """Receives speech result, queues it, waits for agent response.
+
+        Twilio times out webhooks at ~15 seconds. If the LLM hasn't
+        responded by then, we return a brief hold message and redirect
+        back to ourselves — keeping the call alive while the agent
+        thinks. The speech is already queued so the session will pick
+        it up; the next webhook hit will find the response ready.
+        """
         room_name = request.path_params["room_name"]
         state = _active_calls.get(room_name)
         if not state or state.ended.is_set():
@@ -206,11 +214,62 @@ def _build_webhook_app():
             state.speech_started.set()
             await state.speech_queue.put(speech)
 
-        # Wait for the agent's response
+        # Try to get the agent's response within Twilio's timeout budget.
+        # First try: quick wait for an already-ready response.
+        # Second try: if not ready, return a hold message + redirect so
+        # Twilio doesn't time out — the redirect will pick up the response.
         try:
-            agent_text = await asyncio.wait_for(state.response_queue.get(), timeout=30.0)
+            agent_text = await asyncio.wait_for(state.response_queue.get(), timeout=8.0)
         except asyncio.TimeoutError:
-            agent_text = "I need a moment, please hold."
+            # LLM is still thinking — return a hold message and redirect
+            # back so Twilio doesn't time out. The redirect will pick up
+            # the response when ready.
+            base = os.getenv("TWILIO_WEBHOOK_URL", "http://localhost:8765")
+            return Response(
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                "<Response>"
+                "<Say>One moment please.</Say>"
+                "<Pause length=\"2\"/>"
+                f'<Redirect method="POST">{base}/twilio/wait/{room_name}</Redirect>'
+                "</Response>",
+                media_type="application/xml",
+            )
+
+        if agent_text is None or state.ended.is_set():
+            return Response(
+                "<Response><Say>Thank you for your time. Goodbye.</Say><Hangup/></Response>",
+                media_type="application/xml",
+            )
+
+        twiml = _gather_twiml(room_name, agent_text)
+        return Response(twiml, media_type="application/xml")
+
+    async def wait_handler(request: Request) -> Response:
+        """Polls for the agent response while keeping the call alive.
+
+        Called by the redirect from gather_handler when the LLM was slow.
+        Waits another few seconds; if still not ready, says "hold" again
+        and redirects to itself.
+        """
+        room_name = request.path_params["room_name"]
+        state = _active_calls.get(room_name)
+        if not state or state.ended.is_set():
+            return Response("<Response><Hangup/></Response>", media_type="application/xml")
+
+        try:
+            agent_text = await asyncio.wait_for(state.response_queue.get(), timeout=8.0)
+        except asyncio.TimeoutError:
+            # Still not ready — keep holding
+            base = os.getenv("TWILIO_WEBHOOK_URL", "http://localhost:8765")
+            return Response(
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                "<Response>"
+                "<Say>Still thinking, one moment.</Say>"
+                "<Pause length=\"2\"/>"
+                f'<Redirect method="POST">{base}/twilio/wait/{room_name}</Redirect>'
+                "</Response>",
+                media_type="application/xml",
+            )
 
         if agent_text is None or state.ended.is_set():
             return Response(
@@ -286,6 +345,7 @@ def _build_webhook_app():
     routes = [
         Route("/twilio/voice/{room_name}", voice_handler, methods=["POST"]),
         Route("/twilio/gather/{room_name}", gather_handler, methods=["POST"]),
+        Route("/twilio/wait/{room_name}", wait_handler, methods=["POST"]),
         Route("/twilio/status/{room_name}", status_handler, methods=["POST"]),
         Route("/twilio/recording/{room_name}", recording_handler, methods=["POST"]),
         Route("/twilio/amd/{room_name}", amd_handler, methods=["POST"]),
@@ -297,6 +357,7 @@ def _build_webhook_app():
 def _gather_twiml(room_name: str, say_text: str) -> str:
     """Build TwiML that says the agent's text and gathers the caller's reply."""
     base = os.getenv("TWILIO_WEBHOOK_URL", "http://localhost:8765")
+    voice = os.getenv("TWILIO_VOICE", "Polly.Joanna-Neural")
     # Escape XML special characters in the text
     safe = (
         say_text
@@ -310,8 +371,9 @@ def _gather_twiml(room_name: str, say_text: str) -> str:
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
         f'<Gather input="speech" action="{base}/twilio/gather/{room_name}" '
-        f'method="POST" speechTimeout="auto" language="en-US">'
-        f"<Say>{safe}</Say>"
+        f'method="POST" speechTimeout="auto" language="en-US" '
+        f'enhanced="true">'
+        f'<Say voice="{voice}">{safe}</Say>'
         "</Gather>"
         # If no speech detected, redirect back to gather
         f'<Redirect method="POST">{base}/twilio/voice/{room_name}</Redirect>'
