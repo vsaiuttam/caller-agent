@@ -1678,10 +1678,89 @@ async def test_call(body: TestCallRequest, db: AsyncSession = Depends(get_sessio
         }
 
         # Retrieve recording info
+        recording_url = None
+        recording_sid = None
+        recording_duration = None
         state = telephony.get_call_state(room_name)
         if state:
-            result_payload["recording_url"] = state.recording_url
-            result_payload["recording_sid"] = state.recording_sid
+            recording_url = state.recording_url
+            recording_sid = state.recording_sid
+            recording_duration = state.recording_duration
+            result_payload["recording_url"] = recording_url
+            result_payload["recording_sid"] = recording_sid
+
+        # Persist test call to the database so it appears in call history.
+        # Test calls need a contact row to join against — reuse the
+        # placeholder that _save_simulation creates.
+        campaign_id = setup.campaign.id if setup.campaign else None
+        contact_id = None
+        if campaign_id:
+            placeholder_phone = body.phone_number or "+10000000000"
+            existing = await db.scalar(
+                select(Contact).where(
+                    Contact.campaign_id == campaign_id,
+                    Contact.phone_e164 == placeholder_phone,
+                )
+            )
+            if existing is None:
+                existing = Contact(
+                    id=str(uuid.uuid4()),
+                    campaign_id=campaign_id,
+                    full_name=body.contact_name or "Test call contact",
+                    phone_e164=placeholder_phone,
+                    timezone="UTC",
+                    status=ContactStatus.SUPPRESSED,
+                    attributes={"test_call": "true"},
+                )
+                db.add(existing)
+                await db.flush()
+            contact_id = existing.id
+
+        call_row = Call(
+            id=str(uuid.uuid4()),
+            contact_id=contact_id or "test",
+            campaign_id=campaign_id or "test",
+            status=CallStatus.COMPLETED,
+            started_at=datetime.now(timezone.utc),
+            connected_at=datetime.now(timezone.utc),
+            ended_at=datetime.now(timezone.utc),
+            provider_call_sid=call_sid,
+            room_name=room_name,
+            transcript=[
+                {"role": t.role, "text": t.text, "started_at": t.started_at.isoformat() if t.started_at else None}
+                for t in transcript
+            ],
+            disposition=outcome.disposition.value,
+            summary=outcome.summary,
+            outcome=outcome.model_dump(mode="json"),
+            needs_human_review=outcome.needs_human_review,
+            review_reason=outcome.review_reason or None,
+            scores=[s.model_dump(mode="json") for s in outcome.scores],
+            qualification=(
+                qualification.model_dump(mode="json") if qualification else None
+            ),
+            score=qualification.score if qualification else None,
+            qualification_band=qualification.band.value if qualification else None,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            cache_write_tokens=usage.cache_write_tokens,
+            cost_usd=usage.cost_usd(),
+            conversation_model=resolve(setup.conversation_model, CONVERSATION),
+            extraction_model=resolve(setup.extraction_model, EXTRACTION),
+            recording_url=recording_url,
+            recording_sid=recording_sid,
+            recording_duration=recording_duration,
+            is_simulation=True,
+        )
+        if contact_id and campaign_id:
+            try:
+                db.add(call_row)
+                await db.commit()
+                result_payload["call_id"] = call_row.id
+            except Exception:
+                logger.warning("Failed to persist test call — results still returned")
+                await db.rollback()
 
         return result_payload
 

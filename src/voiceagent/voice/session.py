@@ -182,6 +182,12 @@ class CallSession:
             barge_in.cancel()
             await generation.aclose()
 
+        # Flush buffered audio for webhook-based transports (Twilio).
+        # Streaming transports (LiveKit) play each chunk as it arrives and
+        # don't implement flush().
+        if hasattr(self._speaker, "flush"):
+            await self._speaker.flush()
+
         text = " ".join(s.strip() for s in spoken if s.strip())
         if text:
             self._record("assistant", text)
@@ -192,6 +198,8 @@ class CallSession:
 
     async def _speak_and_record(self, text: str) -> None:
         await self._speaker.say(text)
+        if hasattr(self._speaker, "flush"):
+            await self._speaker.flush()
         self._record("assistant", text)
 
     def _record(self, role: str, text: str) -> None:

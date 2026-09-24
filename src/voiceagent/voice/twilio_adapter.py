@@ -123,34 +123,48 @@ class TwilioListener:
 
 
 class TwilioSpeaker:
-    """Text-to-speech via Twilio's <Say> verb in the webhook response."""
+    """Text-to-speech via Twilio's <Say> verb in the webhook response.
+
+    The LLM streams multiple chunks per turn, but Twilio reads exactly ONE
+    response per webhook cycle.  ``say()`` therefore buffers chunks, and
+    ``flush()`` pushes the complete turn onto the response queue as a single
+    message.  ``CallSession`` calls ``flush()`` after each generation loop.
+    """
 
     def __init__(self, state: _CallState) -> None:
         self._state = state
         self._current_text = ""
+        self._buffer: list[str] = []
 
     async def say(self, text: str) -> None:
-        self._current_text = text
+        """Buffer a chunk. Does NOT put anything on the response queue."""
+        self._buffer.append(text)
+        self._current_text = " ".join(self._buffer)
+
+    async def flush(self) -> None:
+        """Synthesize the buffered turn and queue ONE message for the webhook."""
+        full_text = " ".join(s.strip() for s in self._buffer if s.strip())
+        self._buffer.clear()
+        if not full_text:
+            return
 
         if VOICE_PROVIDER == "sarvam":
-            # Pre-synthesize audio HERE so the webhook handler responds instantly.
-            audio_id = await _synthesize_sarvam(text)
+            audio_id = await _synthesize_sarvam(full_text)
             if audio_id:
                 await self._state.response_queue.put(f"__AUDIO__:{audio_id}")
             else:
-                # Sarvam failed — fall back to Twilio <Say>
-                await self._state.response_queue.put(text)
+                await self._state.response_queue.put(full_text)
         else:
-            await self._state.response_queue.put(text)
+            await self._state.response_queue.put(full_text)
 
-        # In the webhook model, playback duration is handled by Twilio.
-        # We approximate a wait so the session doesn't race ahead.
-        words = len(text.split())
+        # Approximate playback wait so the session doesn't race ahead.
+        words = len(full_text.split())
         await asyncio.sleep(min(words * 0.15, 8.0))
 
     async def stop(self) -> str:
         """Interrupt: return what was (approximately) played."""
         played = self._current_text
+        self._buffer.clear()
         self._current_text = ""
         return played
 
