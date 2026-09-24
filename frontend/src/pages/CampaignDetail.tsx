@@ -183,9 +183,64 @@ export default function CampaignDetail() {
               <Row label="Max attempts" value={String(c.max_attempts)} />
             </dl>
           </Card>
+
+          <FollowupSettings campaign={c} onSaved={campaign.reload} />
         </div>
       </div>
     </PageWrapper>
+  );
+}
+
+function FollowupSettings({
+  campaign,
+  onSaved,
+}: {
+  campaign: Campaign;
+  onSaved: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const toggle = async (field: "sms_followup" | "whatsapp_followup", value: boolean) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.updateCampaign(campaign.id, { [field]: value });
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader
+        title="Follow-up messages"
+        subtitle="Sent to the person after each call. Nothing is sent after an opt-out."
+      />
+      <div className="space-y-2.5 px-5 py-4">
+        {(
+          [
+            ["sms_followup", "SMS", campaign.sms_followup],
+            ["whatsapp_followup", "WhatsApp", campaign.whatsapp_followup],
+          ] as const
+        ).map(([field, label, checked]) => (
+          <label key={field} className="flex cursor-pointer items-center gap-2.5 text-sm">
+            <input
+              type="checkbox"
+              checked={checked}
+              disabled={saving}
+              onChange={(e) => toggle(field, e.target.checked)}
+              className="accent-[var(--color-brand)]"
+            />
+            {label}
+          </label>
+        ))}
+        {error && <ErrorNote message={error} />}
+      </div>
+    </Card>
   );
 }
 

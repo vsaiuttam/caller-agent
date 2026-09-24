@@ -171,8 +171,9 @@ class Campaign(Base):
     budget_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
     spend_usd: Mapped[float] = mapped_column(Float, default=0.0)
 
-    # SMS follow-up: send a summary text after each call. Requires Twilio.
+    # Follow-up messages after each call, through Twilio. See followup.py.
     sms_followup: Mapped[bool] = mapped_column(Boolean, default=False)
+    whatsapp_followup: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Fired once per completed call with the extracted outcome. The one
     # integration point that needs no MCP server and no code from us.
@@ -277,9 +278,14 @@ class Call(Base):
     recording_duration: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Answering Machine Detection result from Twilio.
     amd_result: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    # SMS follow-up message SID after the call.
+    # Follow-up messages after the call. Status tracks Twilio's delivery
+    # receipts (queued → sent → delivered → read, or failed/undelivered).
     sms_sid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     sms_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    whatsapp_sid: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    whatsapp_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # {"sms": "...", "whatsapp": "..."} — why a send failed, in plain words.
+    followup_errors: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
 
     # Simulated calls share every code path with real ones, which is the point
     # — but they must never reach the dashboard, the connect rate, or the CRM.

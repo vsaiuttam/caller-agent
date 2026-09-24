@@ -64,6 +64,11 @@ services:
         sync: false
       - key: TWILIO_PHONE_NUMBER
         sync: false
+      # WhatsApp follow-ups (Sandbox for testing: +14155238886)
+      - key: TWILIO_WHATSAPP_FROM
+        sync: false
+      - key: TWILIO_WHATSAPP_CONTENT_SID
+        sync: false
 
       # CORS — your Vercel frontend URL + local dev
       - key: CORS_ORIGINS

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { Disposition, QualificationBand } from "../api";
+import type { Disposition, FollowupChannel, QualificationBand } from "../api";
 import { IconInbox, IconTrendDown, IconTrendUp } from "./icons";
 
 // ---------------------------------------------------------------------------
@@ -310,6 +310,33 @@ export function StatusBadge({ status }: { status: string }) {
         <span className="live-dot inline-block h-1.5 w-1.5 rounded-full bg-good" />
       )}
       {status}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FollowupBadge — post-call SMS / WhatsApp and how far it got
+// ---------------------------------------------------------------------------
+
+const FOLLOWUP_TONE: Record<string, string> = {
+  delivered: "bg-good/10 text-good border-good/20",
+  read: "bg-good/10 text-good border-good/20",
+  failed: "bg-critical/10 text-critical border-critical/20",
+  undelivered: "bg-critical/10 text-critical border-critical/20",
+};
+
+export function FollowupBadge({
+  channel,
+  status,
+}: {
+  channel: FollowupChannel;
+  status: string;
+}) {
+  const tone = FOLLOWUP_TONE[status] ?? "bg-brand/10 text-brand border-brand/20";
+  return (
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-0.5 text-xs font-medium ${tone}`}>
+      {channel === "sms" ? "SMS" : "WhatsApp"}
+      <span className="capitalize opacity-80">{status}</span>
     </span>
   );
 }

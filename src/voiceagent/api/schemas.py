@@ -79,7 +79,11 @@ class CampaignCreate(BaseModel):
         default=None, ge=0, description="Hard spend cap in USD. The campaign pauses itself at it."
     )
     sms_followup: bool = Field(
-        default=False, description="Send SMS summary after each call. Requires Twilio."
+        default=False, description="Text the person after each call. Requires Twilio."
+    )
+    whatsapp_followup: bool = Field(
+        default=False,
+        description="WhatsApp the person after each call. Requires TWILIO_WHATSAPP_FROM.",
     )
     webhook_url: str | None = Field(
         default=None, max_length=500, description="POSTed once per completed call."
@@ -108,6 +112,7 @@ class CampaignUpdate(BaseModel):
     extraction_effort: str | None = None
     budget_usd: float | None = Field(default=None, ge=0)
     sms_followup: bool | None = None
+    whatsapp_followup: bool | None = None
     webhook_url: str | None = None
 
 
@@ -208,6 +213,10 @@ class TestCallRequest(CallSetupRequest):
         pattern=r"^\+[1-9]\d{6,14}$",
         description="E.164 phone number to call, e.g. +14155550123",
     )
+    # Follow-ups to the number called once the call ends. Null means "do what
+    # the campaign does".
+    send_sms: bool | None = None
+    send_whatsapp: bool | None = None
 
 
 class LiveCallRequest(CallSetupRequest):
@@ -297,9 +306,17 @@ class CallDetail(CallSummary):
     recording_duration: int | None = None
     # Answering Machine Detection
     amd_result: str | None = None
-    # SMS follow-up
+    # Follow-up messages and their delivery status
     sms_sid: str | None = None
     sms_status: str | None = None
+    whatsapp_sid: str | None = None
+    whatsapp_status: str | None = None
+    followup_errors: dict[str, str] | None = None
+
+
+class FollowupResend(BaseModel):
+    sms: bool = False
+    whatsapp: bool = False
 
 
 class ReviewDecision(BaseModel):

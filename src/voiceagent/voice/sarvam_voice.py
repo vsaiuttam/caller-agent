@@ -50,8 +50,12 @@ class SarvamTTS:
     """Text-to-speech using Sarvam Bulbul v3 via REST API.
 
     Two output modes:
-      - ``synthesize_mp3()`` returns WAV bytes for Twilio's <Play>.
+      - ``synthesize_wav()`` returns WAV bytes for Twilio's <Play>.
       - ``synthesize()`` returns raw PCM for LiveKit AudioSource.
+
+    Keep one instance alive for the process where you can: the HTTP client
+    holds its connection open, and a fresh TLS handshake to Sarvam measured
+    ~600 ms on top of a ~570 ms synthesis — paid on every agent turn.
     """
 
     def __init__(
@@ -70,10 +74,10 @@ class SarvamTTS:
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=10.0)
+            self._client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
         return self._client
 
-    async def synthesize_mp3(self, text: str) -> bytes:
+    async def synthesize_wav(self, text: str) -> bytes:
         """Convert text to WAV audio bytes (for Twilio <Play>).
 
         The Sarvam API returns base64-encoded WAV. We decode and return raw bytes.
@@ -81,14 +85,16 @@ class SarvamTTS:
         try:
             client = await self._get_client()
             payload = {
-                "inputs": [text],
+                "text": text,
                 "target_language_code": self._language,
                 "speaker": self._speaker,
                 "model": self._model,
                 "pace": 1.0,
                 "speech_sample_rate": self._sample_rate,
-                "enable_preprocessing": True,
             }
+            # Bulbul v3 documents enable_preprocessing as unsupported.
+            if self._model != "bulbul:v3":
+                payload["enable_preprocessing"] = True
             resp = await client.post(
                 SARVAM_TTS_URL,
                 headers=_headers(),
@@ -116,7 +122,7 @@ class SarvamTTS:
 
     async def synthesize(self, text: str) -> bytes:
         """Convert text to raw PCM audio bytes (for LiveKit)."""
-        wav_bytes = await self.synthesize_mp3(text)
+        wav_bytes = await self.synthesize_wav(text)
         if not wav_bytes:
             return b""
         return _wav_to_pcm(wav_bytes)
@@ -308,6 +314,25 @@ def _pcm_to_wav(pcm: bytes, *, sample_rate: int, channels: int, sample_width: in
     buf.write(struct.pack("<I", data_size))
     buf.write(pcm)
     return buf.getvalue()
+
+
+def wav_seconds(wav_bytes: bytes) -> float | None:
+    """Playback length of a WAV file from its header, or None if unreadable."""
+    if len(wav_bytes) < 44 or wav_bytes[:4] != b"RIFF" or wav_bytes[8:12] != b"WAVE":
+        return None
+    byte_rate = 0
+    pos = 12
+    while pos <= len(wav_bytes) - 8:
+        chunk_id = wav_bytes[pos:pos + 4]
+        chunk_size = struct.unpack_from("<I", wav_bytes, pos + 4)[0]
+        if chunk_id == b"fmt " and pos + 16 <= len(wav_bytes) - 4:
+            byte_rate = struct.unpack_from("<I", wav_bytes, pos + 16)[0]
+        elif chunk_id == b"data":
+            # Streamed WAVs can carry a placeholder size; trust the bytes we hold.
+            data_size = min(chunk_size, len(wav_bytes) - pos - 8)
+            return data_size / byte_rate if byte_rate else None
+        pos += 8 + chunk_size
+    return None
 
 
 def _wav_to_pcm(wav_bytes: bytes) -> bytes:

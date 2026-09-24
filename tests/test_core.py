@@ -219,6 +219,47 @@ def test_barge_in_records_only_what_was_heard() -> None:
     asyncio.run(scenario())
 
 
+class SlowToAnswerListener:
+    """Says nothing for longer than the silence timeout, then answers."""
+
+    def __init__(self, delay: float, line: str) -> None:
+        self._delay = delay
+        self._line = line
+
+    async def utterances(self):
+        await asyncio.sleep(self._delay)
+        yield self._line
+
+    async def wait_for_speech_start(self) -> None:
+        await asyncio.Event().wait()
+
+
+def test_a_long_pause_does_not_end_the_call() -> None:
+    """After "are you still there?", the person's answer must still be heard.
+
+    Timing out a read used to cancel the listener's generator mid-await,
+    which finalises it — so the session took the first long pause for a
+    hang-up and ended the call right after asking whether they were there.
+    """
+
+    async def scenario() -> list[Turn]:
+        session = CallSession(
+            llm=FakeLLM([["Great, thanks. Goodbye."]]),  # type: ignore[arg-type]
+            listener=SlowToAnswerListener(0.25, "Sorry, yes, I'm here."),
+            speaker=MockSpeaker(chars_per_second=10_000.0),
+            control=MockControl(),
+            greeting="Hi, quick call.",
+            max_duration_seconds=5,
+            silence_timeout_seconds=0.1,
+        )
+        return await session.run()
+
+    texts = [t.text for t in asyncio.run(scenario())]
+    assert texts[1] == "Sorry — are you still there?", texts
+    assert "Sorry, yes, I'm here." in texts, texts
+    assert texts[-1] == "Great, thanks. Goodbye.", texts
+
+
 # ---------------------------------------------------------------------------
 
 

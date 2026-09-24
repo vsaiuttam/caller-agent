@@ -3,6 +3,7 @@ import {
   api,
   type CallDetail,
   type CallSummary,
+  type FollowupChannel,
   type QualificationBand,
 } from "../api";
 import { IconCalendar, IconCheck, IconDownload, IconFlask } from "../components/icons";
@@ -14,6 +15,7 @@ import {
   DispositionBadge,
   EmptyState,
   ErrorNote,
+  FollowupBadge,
   PageWrapper,
   ScoreBadge,
   Skeleton,
@@ -283,7 +285,7 @@ function Detail({ callId, onReviewed }: { callId: string; onReviewed: () => void
         </Card>
       )}
 
-      <Outcome data={data} />
+      <Outcome data={data} onChanged={reload} />
 
       <ScorecardResult scores={data.scores} qualification={data.qualification} />
 
@@ -302,6 +304,14 @@ function Detail({ callId, onReviewed }: { callId: string; onReviewed: () => void
               >
                 <span className="text-[11px] font-medium text-ink-muted">
                   {turn.role === "assistant" ? "Agent" : data.contact_name}
+                  {turn.latency_ms != null && (
+                    <span
+                      className={`tnum ml-1.5 font-normal ${turn.latency_ms >= 1500 ? "text-warning" : ""}`}
+                      title="From the person finishing to the reply being ready"
+                    >
+                      · replied in {(turn.latency_ms / 1000).toFixed(1)}s
+                    </span>
+                  )}
                 </span>
                 <p
                   className={`mt-1 inline-block rounded-lg px-4 py-2.5 text-sm leading-relaxed ${
@@ -321,7 +331,7 @@ function Detail({ callId, onReviewed }: { callId: string; onReviewed: () => void
   );
 }
 
-function Outcome({ data }: { data: CallDetail }) {
+function Outcome({ data, onChanged }: { data: CallDetail; onChanged: () => void }) {
   const outcome = data.outcome;
   const dispatch = data.dispatch_result;
 
@@ -446,18 +456,7 @@ function Outcome({ data }: { data: CallDetail }) {
           </div>
         )}
 
-        {/* SMS follow-up status */}
-        {data.sms_sid && (
-          <div className="border-t border-white/5 pt-3">
-            <p className="mb-1 text-[11px] font-medium text-ink-muted">
-              SMS follow-up
-            </p>
-            <span className="inline-block rounded-lg bg-brand/10 px-2 py-1 text-xs font-medium text-brand">
-              {data.sms_status === "sent" ? "Sent" : data.sms_status ?? "Sent"}
-            </span>
-            <span className="ml-2 text-[11px] text-ink-muted">SID: {data.sms_sid}</span>
-          </div>
-        )}
+        <Followups data={data} onChanged={onChanged} />
 
         {(data.cost_usd > 0 || data.conversation_model) && (
           <div className="border-t border-white/5 pt-3">
@@ -478,6 +477,71 @@ function Outcome({ data }: { data: CallDetail }) {
         )}
       </div>
     </Card>
+  );
+}
+
+const FOLLOWUP_CHANNELS: Array<{ channel: FollowupChannel; label: string }> = [
+  { channel: "sms", label: "SMS" },
+  { channel: "whatsapp", label: "WhatsApp" },
+];
+
+// Outcomes nothing is sent for — mirrors compose_message() in followup.py.
+const NO_FOLLOWUP = new Set(["do_not_call", "wrong_number", "failed"]);
+
+function Followups({ data, onChanged }: { data: CallDetail; onChanged: () => void }) {
+  const [sending, setSending] = useState<FollowupChannel | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const eligible = !!data.outcome && !NO_FOLLOWUP.has(data.disposition ?? "");
+  if (!eligible && !data.sms_status && !data.whatsapp_status) return null;
+
+  const send = async (channel: FollowupChannel) => {
+    setSending(channel);
+    setError(null);
+    try {
+      await api.resendFollowup(data.id, {
+        sms: channel === "sms",
+        whatsapp: channel === "whatsapp",
+      });
+      onChanged();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSending(null);
+    }
+  };
+
+  return (
+    <div className="border-t border-white/5 pt-3">
+      <p className="mb-2 text-[11px] font-medium text-ink-muted">Follow-up messages</p>
+      <div className="space-y-2">
+        {FOLLOWUP_CHANNELS.map(({ channel, label }) => {
+          const status = channel === "sms" ? data.sms_status : data.whatsapp_status;
+          const failure = data.followup_errors?.[channel];
+          return (
+            <div key={channel} className="flex flex-wrap items-center gap-2">
+              {status ? (
+                <FollowupBadge channel={channel} status={status} />
+              ) : (
+                <span className="text-xs text-ink-muted">{label}: not sent</span>
+              )}
+              {eligible && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => send(channel)}
+                  disabled={sending !== null}
+                >
+                  {sending === channel ? "Sending…" : status ? "Resend" : "Send"}
+                </Button>
+              )}
+              {failure && <p className="w-full text-xs text-critical">{failure}</p>}
+            </div>
+          );
+        })}
+      </div>
+      {error && <p className="mt-2 text-xs text-critical">{error}</p>}
+    </div>
   );
 }
 

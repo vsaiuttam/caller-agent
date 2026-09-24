@@ -79,6 +79,8 @@ async def main() -> None:
         calendar=build_calendar(),
         records=build_records(),
         suppression=DbSuppressionList(SessionLocal),
+        # Scripted calls go to made-up people; never text their numbers.
+        followups=os.getenv("TELEPHONY", "mock").lower() != "mock",
     )
 
     runner = CampaignRunner(SessionLocal, pipeline.place_call)

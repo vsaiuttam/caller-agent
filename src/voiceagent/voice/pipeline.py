@@ -18,10 +18,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Protocol
 
-from sqlalchemy import update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ..catalog import CONVERSATION, EXTRACTION, TokenUsage, resolve
+from ..followup import MISSED, followup_columns, send_followups
 from ..llm import ConversationLLM
 from ..models import CallContext, Contact as ContactModel, Disposition, ScoreCriterion
 from ..orchestrator.events import (
@@ -37,10 +38,9 @@ from ..postcall.actions import CalendarClient, RecordsClient, SuppressionList, d
 from ..postcall.extract import extract_outcome
 from ..scoring import qualify_outcome
 from ..storage import Call, CallStatus, Campaign, CampaignStatus, Contact, ContactStatus
-from ..sms import send_sms_followup
 from ..webhooks import fire_webhook
 from ..templates import language_instruction
-from .session import CallControl, CallSession, Listener, Speaker
+from .session import CallControl, CallNotPlaced, CallSession, Listener, Speaker
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,7 @@ class CallPipeline:
         calendar: CalendarClient,
         records: RecordsClient,
         suppression: SuppressionList,
+        followups: bool = True,
     ) -> None:
         self._sessions = session_factory
         self._client = client
@@ -76,10 +77,19 @@ class CallPipeline:
         self._calendar = calendar
         self._records = records
         self._suppression = suppression
+        # Off for mock telephony: a scripted call must never text a real number.
+        self._followups = followups
 
     async def place_call(self, contact: Contact, campaign: Campaign) -> None:
         call_id = str(uuid.uuid4())
         room_name = f"call-{call_id}"
+        greeting = _greeting(contact, campaign)
+
+        # Synthesize the greeting while the phone rings, so the person isn't
+        # left in silence after picking up.
+        prefetch = getattr(self._telephony, "prefetch_speech", None)
+        if prefetch:
+            prefetch(greeting)
 
         await self._create_call_row(call_id, contact, campaign, room_name)
         await bus.publish(
@@ -109,7 +119,7 @@ class CallPipeline:
             logger.info("Dial failed for %s: %s", contact.id, exc)
             await self._finish(
                 call_id, contact, campaign, [], Disposition.NO_ANSWER, usage,
-                room_name=room_name,
+                room_name=room_name, rang=not isinstance(exc, CallNotPlaced),
             )
             return
 
@@ -128,11 +138,14 @@ class CallPipeline:
         ):
             logger.info("Voicemail detected for %s (AMD: %s)", contact.id, amd_result)
             # Leave a voicemail message via the speaker, then hang up
-            voicemail_msg = _greeting(contact, campaign) + (
+            voicemail_msg = greeting + (
                 " We were unable to reach you. We'll try again later. Thank you."
             )
             try:
                 await speaker.say(voicemail_msg)
+                # Webhook transports only play what has been flushed.
+                if hasattr(speaker, "flush"):
+                    await speaker.flush()
             except Exception:
                 logger.debug("Could not leave voicemail for %s", contact.id)
             try:
@@ -159,7 +172,7 @@ class CallPipeline:
                 listener=listener,
                 speaker=speaker,
                 control=control,
-                greeting=_greeting(contact, campaign),
+                greeting=greeting,
                 max_duration_seconds=600,
             )
             transcript = await session.run()
@@ -209,6 +222,7 @@ class CallPipeline:
     async def _finish(
         self, call_id, contact, campaign, transcript, fallback_disposition, usage,
         *, room_name: str | None = None, amd_result: str | None = None,
+        rang: bool = True,
     ) -> None:
         now = datetime.now(timezone.utc)
         usage = usage if usage is not None else TokenUsage()
@@ -368,30 +382,43 @@ class CallPipeline:
                 },
             )
 
-        # 5. SMS follow-up — send a summary text if the campaign has it enabled.
-        if getattr(campaign, "sms_followup", False):
-            appointment_text = None
-            if outcome.appointment:
-                appointment_text = (
-                    f"{outcome.appointment.starts_at_local} "
-                    f"({outcome.appointment.timezone})"
+        # 5. Follow-up SMS / WhatsApp, on whichever channels the campaign has on.
+        if rang:
+            await self._send_followups(call_id, contact, campaign, outcome)
+
+    async def _send_followups(self, call_id, contact, campaign, outcome) -> None:
+        sms = bool(getattr(campaign, "sms_followup", False))
+        whatsapp = bool(getattr(campaign, "whatsapp_followup", False))
+        if not self._followups or not (sms or whatsapp):
+            return
+
+        if outcome.disposition in MISSED:
+            # One "sorry we missed you" per contact, not one per retry.
+            async with self._sessions() as session:
+                earlier = await session.scalar(
+                    select(func.count())
+                    .select_from(Call)
+                    .where(Call.contact_id == contact.id, Call.id != call_id)
                 )
-            sms_sid = await send_sms_followup(
-                to=contact.phone_e164,
-                contact_name=contact.full_name,
-                campaign_name=campaign.name,
-                disposition=outcome.disposition.value,
-                summary=outcome.summary,
-                appointment_text=appointment_text,
+            if earlier:
+                return
+
+        results = await send_followups(
+            to=contact.phone_e164,
+            call_id=call_id,
+            contact_name=contact.full_name,
+            campaign_name=campaign.name,
+            outcome=outcome,
+            sms=sms,
+            whatsapp=whatsapp,
+        )
+        if not results:
+            return
+        async with self._sessions() as session:
+            await session.execute(
+                update(Call).where(Call.id == call_id).values(**followup_columns(results))
             )
-            if sms_sid:
-                async with self._sessions() as session:
-                    await session.execute(
-                        update(Call)
-                        .where(Call.id == call_id)
-                        .values(sms_sid=sms_sid, sms_status="sent")
-                    )
-                    await session.commit()
+            await session.commit()
 
     async def _enforce_budget(self, campaign_id: str) -> None:
         """Pause a campaign that has spent its cap.

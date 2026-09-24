@@ -76,8 +76,10 @@ export interface CampaignCreate {
   extraction_effort: string | null;
   /** Hard spend cap in USD. The campaign pauses itself when it's reached. */
   budget_usd: number | null;
-  /** Send SMS summary after each call. Requires Twilio. */
+  /** Text the person after each call. Requires Twilio. */
   sms_followup: boolean;
+  /** WhatsApp the person after each call. Requires TWILIO_WHATSAPP_FROM. */
+  whatsapp_followup: boolean;
   webhook_url: string | null;
 }
 
@@ -225,6 +227,25 @@ export interface SimulationResult {
   usage: UsageReport;
   median_first_chunk_ms: number | null;
   call_id?: string;
+  /** Real test calls only: what happened to the follow-up messages. */
+  followups?: Partial<Record<FollowupChannel, FollowupResult>>;
+}
+
+export type FollowupChannel = "sms" | "whatsapp";
+
+export interface FollowupResult {
+  channel: FollowupChannel;
+  /** A Twilio status ("queued", "sent", "delivered", "read"…) or "failed". */
+  status: string;
+  sid: string | null;
+  error: string | null;
+}
+
+export interface TestCallRequest extends SimulationRequest {
+  phone_number: string;
+  /** Null/omitted means "do what the campaign does". */
+  send_sms?: boolean;
+  send_whatsapp?: boolean;
 }
 
 // --- Live microphone call ---------------------------------------------------
@@ -352,6 +373,8 @@ export interface TranscriptTurn {
   role: "user" | "assistant";
   text: string;
   started_at: string;
+  /** Agent turns on live calls: ms from the person finishing to the reply being ready. */
+  latency_ms?: number | null;
 }
 
 export interface CollectedField {
@@ -405,9 +428,12 @@ export interface CallDetail extends CallSummary {
   recording_duration: number | null;
   /** Answering Machine Detection result. */
   amd_result: string | null;
-  /** SMS follow-up message SID. */
+  /** Follow-up messages and their delivery status. */
   sms_sid: string | null;
   sms_status: string | null;
+  whatsapp_sid: string | null;
+  whatsapp_status: string | null;
+  followup_errors: Partial<Record<FollowupChannel, string>> | null;
 }
 
 export interface HourBucket {
@@ -541,11 +567,17 @@ export const api = {
       body: JSON.stringify(body),
     }),
   /** Place a real phone call for testing a campaign. */
-  testCall: (body: SimulationRequest & { phone_number: string }) =>
+  testCall: (body: TestCallRequest) =>
     request<SimulationResult>("/api/test-call", {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  /** Send (or re-send) a finished call's SMS / WhatsApp follow-up. */
+  resendFollowup: (callId: string, body: { sms: boolean; whatsapp: boolean }) =>
+    request<Partial<Record<FollowupChannel, FollowupResult>>>(
+      `/api/calls/${callId}/followup`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
 
   /**
    * Parse a contact file without saving it. Excel goes to the server because

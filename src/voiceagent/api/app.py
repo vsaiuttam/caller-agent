@@ -12,6 +12,7 @@ import io
 import logging
 import os
 import re
+import statistics
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -44,8 +45,9 @@ from ..catalog import (
     estimate_campaign,
 )
 from ..catalog import active_defaults, resolve
+from ..followup import followup_columns, send_followups, sms_configured, whatsapp_configured
 from ..llm import ConversationLLM
-from ..models import CallContext
+from ..models import CallContext, CallOutcome
 from ..models import Contact as ContactModel
 from ..models import ScoreCriterion
 from ..orchestrator.events import bus
@@ -87,6 +89,7 @@ from .schemas import (
     ContactOut,
     DashboardStats,
     EstimateRequest,
+    FollowupResend,
     HourBucket,
     LiveCallRequest,
     ModelDefaults,
@@ -287,7 +290,8 @@ async def health(db: AsyncSession = Depends(get_session)) -> dict:
             or (os.getenv("TELNYX_API_KEY") and os.getenv("TELNYX_PHONE_NUMBER"))
         ),
         "twilio": bool(os.getenv("TWILIO_ACCOUNT_SID") and os.getenv("TWILIO_AUTH_TOKEN")),
-        "sms": bool(os.getenv("TWILIO_ACCOUNT_SID") and os.getenv("TWILIO_AUTH_TOKEN") and os.getenv("TWILIO_PHONE_NUMBER")),
+        "sms": sms_configured(),
+        "whatsapp": whatsapp_configured(),
         "speech_to_text": bool(os.getenv("DEEPGRAM_API_KEY") or os.getenv("TWILIO_ACCOUNT_SID") or os.getenv("SARVAM_API_KEY")),
         "text_to_speech": bool(os.getenv("CARTESIA_API_KEY") or os.getenv("TWILIO_ACCOUNT_SID") or os.getenv("SARVAM_API_KEY")),
         "calendar": bool(os.getenv("GOOGLE_CALENDAR_CREDENTIALS") or os.getenv("BUILTIN_CALENDAR")),
@@ -578,6 +582,7 @@ async def _campaign_out(db: AsyncSession, campaign: Campaign) -> CampaignOut:
         extraction_effort=campaign.extraction_effort or defaults["extraction_effort"],
         budget_usd=campaign.budget_usd,
         sms_followup=getattr(campaign, "sms_followup", False) or False,
+        whatsapp_followup=getattr(campaign, "whatsapp_followup", False) or False,
         webhook_url=campaign.webhook_url,
         status=campaign.status.value,
         created_at=campaign.created_at,
@@ -1214,6 +1219,9 @@ async def get_call(call_id: str, db: AsyncSession = Depends(get_session)):
         amd_result=getattr(call, "amd_result", None),
         sms_sid=getattr(call, "sms_sid", None),
         sms_status=getattr(call, "sms_status", None),
+        whatsapp_sid=getattr(call, "whatsapp_sid", None),
+        whatsapp_status=getattr(call, "whatsapp_status", None),
+        followup_errors=getattr(call, "followup_errors", None),
     )
 
 
@@ -1251,6 +1259,55 @@ async def get_recording(call_id: str, db: AsyncSession = Depends(get_session)):
     except Exception as exc:
         logger.exception("Failed to fetch recording for call %s", call_id)
         raise HTTPException(502, f"Could not fetch recording: {exc}") from exc
+
+
+@app.post("/api/calls/{call_id}/followup")
+async def resend_followup(
+    call_id: str, body: FollowupResend, db: AsyncSession = Depends(get_session)
+) -> dict:
+    """Send (or re-send) the post-call SMS / WhatsApp for a finished call.
+
+    For when the first attempt failed for a fixable reason — a number that
+    hadn't joined the WhatsApp Sandbox yet, a trial account's unverified
+    number — without placing the call again.
+    """
+    if not (body.sms or body.whatsapp):
+        raise HTTPException(400, "Choose SMS, WhatsApp, or both.")
+    row = (
+        await db.execute(
+            select(Call, Contact, Campaign)
+            .join(Contact, Call.contact_id == Contact.id)
+            .join(Campaign, Call.campaign_id == Campaign.id)
+            .where(Call.id == call_id)
+        )
+    ).first()
+    if not row:
+        raise HTTPException(404, "Call not found")
+    call, contact, campaign = row
+    if not call.outcome:
+        raise HTTPException(409, "This call has no extracted outcome to follow up on yet.")
+
+    results = await send_followups(
+        to=contact.phone_e164,
+        call_id=call.id,
+        contact_name=contact.full_name,
+        campaign_name=campaign.name,
+        outcome=CallOutcome.model_validate(call.outcome),
+        sms=body.sms,
+        whatsapp=body.whatsapp,
+    )
+    if not results:
+        raise HTTPException(409, "Nothing is sent for this call's outcome.")
+    columns = followup_columns(results)
+    # Keep the other channel's error when only one channel was re-sent.
+    columns["followup_errors"] = {
+        **{k: v for k, v in (call.followup_errors or {}).items() if k not in results},
+        **(columns.get("followup_errors") or {}),
+    } or None
+    for column, value in columns.items():
+        setattr(call, column, value)
+    await db.commit()
+    return {channel: result.as_dict() for channel, result in results.items()}
 
 
 @app.post("/api/calls/{call_id}/review", response_model=CallSummary)
@@ -1576,6 +1633,17 @@ async def _save_simulation(
 # --------------------------------------------------------------------------
 
 
+def _followup_choice(body: TestCallRequest, campaign: Campaign | None) -> tuple[bool, bool]:
+    """(sms, whatsapp) for a test call: the request's choice, else the campaign's."""
+
+    def pick(requested: bool | None, field: str) -> bool:
+        if requested is not None:
+            return requested
+        return bool(getattr(campaign, field, False)) if campaign else False
+
+    return pick(body.send_sms, "sms_followup"), pick(body.send_whatsapp, "whatsapp_followup")
+
+
 @app.post("/api/test-call")
 async def test_call(body: TestCallRequest, db: AsyncSession = Depends(get_session)) -> dict:
     """Place a real Twilio call to a phone number for testing a campaign.
@@ -1613,6 +1681,11 @@ async def test_call(body: TestCallRequest, db: AsyncSession = Depends(get_sessio
             from ..voice.twilio_adapter import TwilioTelephony
             telephony = TwilioTelephony()
         room_name = f"test-{uuid.uuid4()}"
+
+        # Synthesize the greeting while the phone rings.
+        prefetch = getattr(telephony, "prefetch_speech", None)
+        if prefetch:
+            prefetch(setup.greeting)
 
         # Dial the phone
         try:
@@ -1658,7 +1731,10 @@ async def test_call(body: TestCallRequest, db: AsyncSession = Depends(get_sessio
             qualify_outcome(setup.context, outcome) if setup.context.scorecard else None
         )
 
-        # Build result in the same shape as simulation
+        # Build result in the same shape as simulation. On a real call the
+        # per-turn figure is the wait from the person finishing to the reply
+        # being ready, measured by the session.
+        latencies = [t.latency_ms for t in transcript if t.latency_ms is not None]
         result_payload = {
             "conversation_model": resolve(setup.conversation_model, CONVERSATION),
             "extraction_model": resolve(setup.extraction_model, EXTRACTION),
@@ -1667,9 +1743,10 @@ async def test_call(body: TestCallRequest, db: AsyncSession = Depends(get_sessio
             "call_sid": call_sid,
             "phone_number": body.phone_number,
             "turns": [
-                {"role": t.role, "text": t.text, "first_chunk_ms": None, "total_ms": None}
+                {"role": t.role, "text": t.text, "first_chunk_ms": t.latency_ms, "total_ms": None}
                 for t in transcript
             ],
+            "median_first_chunk_ms": int(statistics.median(latencies)) if latencies else None,
             "outcome": outcome.model_dump(mode="json"),
             "qualification": (
                 qualification.model_dump(mode="json") if qualification else None
@@ -1726,10 +1803,7 @@ async def test_call(body: TestCallRequest, db: AsyncSession = Depends(get_sessio
             ended_at=datetime.now(timezone.utc),
             provider_call_sid=call_sid,
             room_name=room_name,
-            transcript=[
-                {"role": t.role, "text": t.text, "started_at": t.started_at.isoformat() if t.started_at else None}
-                for t in transcript
-            ],
+            transcript=[t.model_dump(mode="json") for t in transcript],
             disposition=outcome.disposition.value,
             summary=outcome.summary,
             outcome=outcome.model_dump(mode="json"),
@@ -1753,14 +1827,35 @@ async def test_call(body: TestCallRequest, db: AsyncSession = Depends(get_sessio
             recording_duration=recording_duration,
             is_simulation=True,
         )
+        saved = False
         if contact_id and campaign_id:
             try:
                 db.add(call_row)
                 await db.commit()
                 result_payload["call_id"] = call_row.id
+                saved = True
             except Exception:
                 logger.warning("Failed to persist test call — results still returned")
                 await db.rollback()
+
+        # Follow-up SMS / WhatsApp to the number just called. Sent after the
+        # row is saved so Twilio's delivery receipts have a call to land on.
+        send_sms, send_whatsapp = _followup_choice(body, setup.campaign)
+        if send_sms or send_whatsapp:
+            results = await send_followups(
+                to=body.phone_number,
+                call_id=call_row.id if saved else None,
+                contact_name=setup.contact.full_name,
+                campaign_name=setup.campaign.name if setup.campaign else "our team",
+                outcome=outcome,
+                sms=send_sms,
+                whatsapp=send_whatsapp,
+            )
+            result_payload["followups"] = {c: r.as_dict() for c, r in results.items()}
+            if saved and results:
+                for column, value in followup_columns(results).items():
+                    setattr(call_row, column, value)
+                await db.commit()
 
         return result_payload
 

@@ -28,6 +28,7 @@ import {
   EmptyState,
   ErrorNote,
   Field,
+  FollowupBadge,
   PageWrapper,
   Skeleton,
   inputClass,
@@ -45,6 +46,8 @@ export default function Simulator() {
   const [exchanges, setExchanges] = useState(8);
   const [save, setSave] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [sendSms, setSendSms] = useState(true);
+  const [sendWhatsapp, setSendWhatsapp] = useState(true);
 
   const [running, setRunning] = useState(false);
   const [calling, setCalling] = useState(false);
@@ -93,6 +96,8 @@ export default function Simulator() {
           max_exchanges: exchanges,
           save,
           phone_number: phoneNumber,
+          send_sms: sendSms,
+          send_whatsapp: sendWhatsapp,
         }),
       );
     } catch (err) {
@@ -240,6 +245,36 @@ export default function Simulator() {
                   className={inputClass}
                 />
               </Field>
+              <div className="my-3 space-y-1.5">
+                <span className="text-xs font-semibold text-ink-secondary">
+                  After the call, message this number
+                </span>
+                <div className="flex flex-wrap gap-x-5 gap-y-1.5">
+                  <label className="flex cursor-pointer items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={sendSms}
+                      onChange={(e) => setSendSms(e.target.checked)}
+                      className="accent-[var(--color-brand)]"
+                    />
+                    SMS
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={sendWhatsapp}
+                      onChange={(e) => setSendWhatsapp(e.target.checked)}
+                      className="accent-[var(--color-brand)]"
+                    />
+                    WhatsApp
+                  </label>
+                </div>
+                {health.data && sendWhatsapp && !health.data.checks.whatsapp && (
+                  <p className="text-[11px] leading-relaxed text-warning">
+                    WhatsApp isn't configured on the server — set TWILIO_WHATSAPP_FROM.
+                  </p>
+                )}
+              </div>
               <Button
                 onClick={callMe}
                 disabled={!canCall}
@@ -378,6 +413,28 @@ function Result({ result }: { result: SimulationResult }) {
         </div>
       </Card>
 
+      {result.followups && Object.keys(result.followups).length > 0 && (
+        <Card hover={false}>
+          <CardHeader
+            title="Follow-up messages"
+            subtitle="Status at send time. The call record updates as Twilio reports delivery."
+          />
+          <div className="space-y-2 px-5 py-4">
+            {Object.values(result.followups).map(
+              (followup) =>
+                followup && (
+                  <div key={followup.channel} className="flex flex-wrap items-center gap-2">
+                    <FollowupBadge channel={followup.channel} status={followup.status} />
+                    {followup.error && (
+                      <span className="text-xs text-critical">{followup.error}</span>
+                    )}
+                  </div>
+                ),
+            )}
+          </div>
+        </Card>
+      )}
+
       <ScorecardResult
         scores={result.outcome.scores}
         qualification={result.qualification}
@@ -388,7 +445,10 @@ function Result({ result }: { result: SimulationResult }) {
         footnotes={[
           `On the call: ${result.conversation_model}`,
           `After: ${result.extraction_model}`,
-          `Persona: ${(result.persona || persona || "unknown").replace("_", " ")}`,
+          // Real test calls have no persona — the person was you.
+          result.persona
+            ? `Persona: ${result.persona.replace("_", " ")}`
+            : "Real phone call",
         ]}
       />
     </>

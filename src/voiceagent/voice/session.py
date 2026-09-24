@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Protocol
@@ -58,6 +59,14 @@ class Speaker(Protocol):
 
 class CallControl(Protocol):
     async def hangup(self) -> None: ...
+
+
+class CallNotPlaced(ConnectionError):
+    """The provider refused to place the call at all — nobody's phone rang.
+
+    Distinct from an unanswered call (a plain ConnectionError), which is
+    worth a "sorry we missed you" message; this is our problem, not theirs.
+    """
 
 
 # --------------------------------------------------------------------------
@@ -110,30 +119,53 @@ class CallSession:
         await self._speak_and_record(self._greeting)
 
         utterances = self._listener.utterances()
+        # One read stays pending across silence timeouts. Timing out a read
+        # with `wait_for` cancels it, and cancelling an async generator
+        # mid-await finalises it: the next read raises StopAsyncIteration and
+        # the first long pause gets taken for a hang-up.
+        pending: asyncio.Task | None = None
 
-        while True:
-            try:
-                user_text = await asyncio.wait_for(
-                    utterances.__anext__(), timeout=self._silence_timeout
+        try:
+            while True:
+                if pending is None:
+                    pending = asyncio.create_task(_next_utterance(utterances))
+
+                # The silence clock starts when the agent stops talking, not
+                # when its reply was handed over. Webhook transports queue a
+                # whole turn at once and play it for seconds afterwards.
+                done, _ = await asyncio.wait(
+                    {pending}, timeout=self._silence_timeout + self._playback_remaining()
                 )
-            except asyncio.TimeoutError:
-                if await self._handle_silence():
+                if not done:
+                    if await self._handle_silence():
+                        return
+                    continue
+
+                task, pending = pending, None
+                try:
+                    user_text = task.result()
+                except StopAsyncIteration:
+                    logger.info("Audio stream ended; caller hung up")
                     return
-                continue
-            except StopAsyncIteration:
-                logger.info("Audio stream ended; caller hung up")
-                return
 
-            user_text = user_text.strip()
-            if not user_text:
-                continue
+                user_text = user_text.strip()
+                if not user_text:
+                    continue
 
-            self._silence_strikes = 0
-            self._record("user", user_text)
+                self._silence_strikes = 0
+                self._record("user", user_text)
 
-            finished = await self._respond()
-            if finished:
-                return
+                finished = await self._respond()
+                if finished:
+                    return
+        finally:
+            if pending is not None:
+                pending.cancel()
+
+    def _playback_remaining(self) -> float:
+        """Seconds of agent audio still to play, for speakers that report it."""
+        remaining = getattr(self._speaker, "playback_remaining", None)
+        return remaining() if remaining else 0.0
 
     async def _handle_silence(self) -> bool:
         """Return True when we've given up and the call should end."""
@@ -155,12 +187,20 @@ class CallSession:
         """
         spoken: list[str] = []
         interrupted = False
+        # Webhook transports (Twilio) buffer the turn and play it on flush();
+        # streaming ones start playing the first chunk as it arrives. Latency
+        # is measured to whichever of those puts audio on the line.
+        buffered = hasattr(self._speaker, "flush")
+        started = time.perf_counter()
+        latency_ms: int | None = None
 
         generation = self._llm.generate()
         barge_in = asyncio.create_task(self._listener.wait_for_speech_start())
 
         try:
             async for chunk in generation:
+                if latency_ms is None and not buffered:
+                    latency_ms = _elapsed_ms(started)
                 speaking = asyncio.create_task(self._speaker.say(chunk))
                 done, _ = await asyncio.wait(
                     {speaking, barge_in}, return_when=asyncio.FIRST_COMPLETED
@@ -185,12 +225,14 @@ class CallSession:
         # Flush buffered audio for webhook-based transports (Twilio).
         # Streaming transports (LiveKit) play each chunk as it arrives and
         # don't implement flush().
-        if hasattr(self._speaker, "flush"):
+        if buffered:
             await self._speaker.flush()
+            latency_ms = _elapsed_ms(started)
 
         text = " ".join(s.strip() for s in spoken if s.strip())
         if text:
-            self._record("assistant", text)
+            self._record("assistant", text, latency_ms=latency_ms)
+            logger.info("Agent reply ready in %s ms", latency_ms)
 
         if interrupted:
             return False
@@ -202,10 +244,25 @@ class CallSession:
             await self._speaker.flush()
         self._record("assistant", text)
 
-    def _record(self, role: str, text: str) -> None:
-        turn = Turn(role=role, text=text, started_at=datetime.now(timezone.utc))
+    def _record(self, role: str, text: str, *, latency_ms: int | None = None) -> None:
+        turn = Turn(
+            role=role,
+            text=text,
+            started_at=datetime.now(timezone.utc),
+            latency_ms=latency_ms,
+        )
         self.transcript.append(turn)
         self._llm.record(turn)
+
+
+async def _next_utterance(utterances: AsyncIterator[str]) -> str:
+    # A coroutine wrapper, because create_task() will not take __anext__()'s
+    # awaitable directly.
+    return await utterances.__anext__()
+
+
+def _elapsed_ms(since: float) -> int:
+    return int((time.perf_counter() - since) * 1000)
 
 
 # Heuristic for "the agent just said goodbye". Cheap and good enough — the

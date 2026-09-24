@@ -40,9 +40,16 @@ const INTEGRATION_META: Record<
   },
   sms: {
     label: "SMS Follow-up",
-    description: "Send text message summaries after calls via Twilio.",
+    description: "Text the person after each call via Twilio, with delivery receipts.",
     icon: <IconCampaign size={18} />,
-    configHint: "Uses Twilio credentials. Enable per-campaign with the SMS toggle.",
+    configHint: "Uses Twilio credentials. Enable per-campaign under Follow-up messages.",
+  },
+  whatsapp: {
+    label: "WhatsApp Follow-up",
+    description: "WhatsApp the person after each call via Twilio, with delivered/read receipts.",
+    icon: <IconCampaign size={18} />,
+    configHint:
+      "Set TWILIO_WHATSAPP_FROM (Sandbox: +14155238886). Outside the Sandbox, also set TWILIO_WHATSAPP_CONTENT_SID to an approved template.",
   },
   calendar: {
     label: "Google Calendar",
@@ -81,6 +88,7 @@ const PRIORITY_ORDER = [
   "model_provider",
   "telephony",
   "sms",
+  "whatsapp",
   "speech_to_text",
   "text_to_speech",
   "calendar",

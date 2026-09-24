@@ -89,6 +89,10 @@ class Turn(BaseModel):
     role: str  # "user" (the person) | "assistant" (the agent)
     text: str
     started_at: datetime
+    # Agent turns only: milliseconds from the person finishing to the reply
+    # being ready to play. Measured on live calls, so the dead air a caller
+    # sits through is a number on the call record rather than an impression.
+    latency_ms: int | None = None
 
 
 # --------------------------------------------------------------------------

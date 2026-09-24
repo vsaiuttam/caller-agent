@@ -53,7 +53,8 @@ const BLANK: CampaignCreate = {
   extraction_model: null,
   extraction_effort: null,
   budget_usd: null,
-  sms_followup: false,
+  sms_followup: true,
+  whatsapp_followup: true,
   webhook_url: null,
 };
 
@@ -612,18 +613,29 @@ export default function NewCampaign() {
               </Field>
 
               <Field
-                label="SMS follow-up"
-                hint="Send a summary text message after each call. Uses the same Twilio number."
+                label="Follow-up messages"
+                hint="After each call: a thank-you with any booked appointment, or a missed-call note if nobody answered. Nothing is sent after an opt-out."
               >
-                <label className="flex cursor-pointer items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={form.sms_followup}
-                    onChange={(e) => set("sms_followup", e.target.checked)}
-                    className="accent-[var(--color-brand)]"
-                  />
-                  <span className="text-sm">Enable SMS follow-up</span>
-                </label>
+                <div className="flex flex-wrap gap-x-5 gap-y-2">
+                  <label className="flex cursor-pointer items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={form.sms_followup}
+                      onChange={(e) => set("sms_followup", e.target.checked)}
+                      className="accent-[var(--color-brand)]"
+                    />
+                    <span className="text-sm">SMS</span>
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={form.whatsapp_followup}
+                      onChange={(e) => set("whatsapp_followup", e.target.checked)}
+                      className="accent-[var(--color-brand)]"
+                    />
+                    <span className="text-sm">WhatsApp</span>
+                  </label>
+                </div>
               </Field>
 
               <Field

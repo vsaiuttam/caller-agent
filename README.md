@@ -143,6 +143,24 @@ Before the first real call, read the VERIFY notes in
 `src/voiceagent/voice/livekit_adapter.py` — that file is the only one coupled
 to LiveKit's plugin API, which has moved between releases.
 
+### 8. Follow-up SMS and WhatsApp
+
+Each campaign can text and/or WhatsApp the person once the call ends: a
+thank-you with any appointment that was booked, or a one-time missed-call
+note if nobody picked up. Nothing is sent after an opt-out, to a wrong
+number, or for scripted mock calls. **Test calls** has the same two
+checkboxes for the number you dial yourself.
+
+SMS needs only the Twilio number you call from. WhatsApp needs
+`TWILIO_WHATSAPP_FROM`; to try it, use the Twilio Sandbox and send its join
+code from your own WhatsApp first. Outside the Sandbox, WhatsApp only takes
+business-initiated messages from an approved template —
+`TWILIO_WHATSAPP_CONTENT_SID`, see `.env.example`.
+
+Delivery receipts update the call record (queued → sent → delivered → read),
+and a failure is shown in words, with a **Resend** button for when the fix
+was on your side.
+
 ## Layout
 
 ```
@@ -156,6 +174,7 @@ src/voiceagent/
   live.py              Dry-run a call against yourself, over a microphone
   templates.py         Prebuilt campaigns, multilingual greetings
   webhooks.py          Signed per-call POST — the non-MCP integration escape hatch
+  followup.py          Post-call SMS / WhatsApp and their delivery receipts
   storage.py           SQLAlchemy schema
   worker.py            Call worker entrypoint
   orchestrator/
@@ -228,6 +247,15 @@ misfires: on Sonnet 5 it makes the model noticeably less willing to call tools,
 and on Opus 5 it can emit a tool call as plain text — the turn succeeds, the
 call never runs, no error is raised. `effort: "low"` gets most of the latency
 win without either failure mode.
+
+**On Twilio, dead air is mostly waiting, not thinking.** Twilio's voice API is
+webhook-driven: the caller hears silence until our webhook returns the
+reply's TwiML. So the webhook holds the request open until the reply is ready
+(rather than answering early with a fixed pause), Sarvam synthesizes each
+sentence as the model streams it, the Sarvam connection stays open between
+turns (a fresh TLS handshake measured ~0.6 s), and the greeting is
+synthesized while the phone is still ringing. Every agent turn records its
+reply time, which the call page and test-call results show.
 
 **Barge-in records what was heard, not what was generated.** When someone
 interrupts, the model has usually generated further than the speaker has
