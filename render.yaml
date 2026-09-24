@@ -39,9 +39,10 @@ services:
       - key: OPENAI_API_KEY
         sync: false
 
-      # Telephony
+      # Telephony. Render re-applies fixed values here whenever this file
+      # changes, overriding the dashboard — keep it matching the provider in use.
       - key: TELEPHONY
-        value: telnyx
+        value: twilio
       - key: TELNYX_API_KEY
         sync: false
       - key: TELNYX_PHONE_NUMBER
