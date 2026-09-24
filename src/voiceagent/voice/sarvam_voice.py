@@ -1,19 +1,22 @@
 """Sarvam AI STT (Saarika) and TTS (Bulbul) adapter.
 
-Uses the official `sarvamapi` SDK. Drop-in for the Twilio adapter (TTS)
-and optionally for the LiveKit adapter (STT + TTS).
+Uses httpx to call the Sarvam REST API directly — fully async, no SDK dep.
+Drop-in for the Twilio adapter (TTS) and optionally for LiveKit (STT + TTS).
 
-Requires SARVAM_API_KEY in the environment and `sarvamapi` installed.
+Requires SARVAM_API_KEY in the environment.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import logging
 import os
 import struct
 from collections.abc import AsyncIterator
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +28,9 @@ SARVAM_TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v3")
 SARVAM_STT_MODEL = os.getenv("SARVAM_STT_MODEL", "saarika:v2")
 SARVAM_TTS_SAMPLE_RATE = int(os.getenv("SARVAM_TTS_SAMPLE_RATE", "22050"))
 
+SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
+SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
+
 
 def _api_key() -> str:
     key = os.getenv("SARVAM_API_KEY", "")
@@ -33,18 +39,19 @@ def _api_key() -> str:
     return key
 
 
-def _make_client():
-    """Create a SarvamAI client with the configured key."""
-    from sarvamai import SarvamAI
-    return SarvamAI(api_subscription_key=_api_key())
+def _headers() -> dict[str, str]:
+    return {
+        "api-subscription-key": _api_key(),
+        "Content-Type": "application/json",
+    }
 
 
 class SarvamTTS:
-    """Text-to-speech using Sarvam Bulbul v3 via the official SDK.
+    """Text-to-speech using Sarvam Bulbul v3 via REST API.
 
     Two output modes:
-      - `synthesize_mp3()` returns MP3 bytes for Twilio's <Play>.
-      - `synthesize()` returns raw PCM for LiveKit AudioSource.
+      - ``synthesize_mp3()`` returns WAV bytes for Twilio's <Play>.
+      - ``synthesize()`` returns raw PCM for LiveKit AudioSource.
     """
 
     def __init__(
@@ -59,51 +66,68 @@ class SarvamTTS:
         self._speaker = speaker
         self._model = model
         self._sample_rate = sample_rate
+        self._client: httpx.AsyncClient | None = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=10.0)
+        return self._client
 
     async def synthesize_mp3(self, text: str) -> bytes:
-        """Convert text to MP3 audio bytes (for Twilio <Play>).
+        """Convert text to WAV audio bytes (for Twilio <Play>).
 
-        Uses the SDK's convert_stream which returns MP3 directly.
+        The Sarvam API returns base64-encoded WAV. We decode and return raw bytes.
         """
-        loop = asyncio.get_running_loop()
         try:
-            mp3_bytes = await loop.run_in_executor(None, self._call_sdk, text)
-            if not mp3_bytes:
-                logger.warning("Sarvam TTS returned empty audio for: %s", text[:60])
-            return mp3_bytes or b""
+            client = await self._get_client()
+            payload = {
+                "inputs": [text],
+                "target_language_code": self._language,
+                "speaker": self._speaker,
+                "model": self._model,
+                "pace": 1.0,
+                "speech_sample_rate": self._sample_rate,
+                "enable_preprocessing": True,
+            }
+            resp = await client.post(
+                SARVAM_TTS_URL,
+                headers=_headers(),
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            # API returns {"audios": ["base64-encoded-wav", ...]}
+            audios = data.get("audios", [])
+            if not audios:
+                logger.warning("Sarvam TTS returned no audios for: %s", text[:60])
+                return b""
+
+            wav_bytes = base64.b64decode(audios[0])
+            logger.info("Sarvam TTS OK: %d bytes for %r", len(wav_bytes), text[:40])
+            return wav_bytes
+
+        except httpx.HTTPStatusError as exc:
+            logger.error("Sarvam TTS HTTP %d: %s", exc.response.status_code, exc.response.text[:200])
+            return b""
         except Exception:
             logger.exception("Sarvam TTS failed")
             return b""
 
     async def synthesize(self, text: str) -> bytes:
         """Convert text to raw PCM audio bytes (for LiveKit)."""
-        mp3_bytes = await self.synthesize_mp3(text)
-        if not mp3_bytes:
+        wav_bytes = await self.synthesize_mp3(text)
+        if not wav_bytes:
             return b""
-        # Convert MP3 to PCM for LiveKit audio frames
-        return await asyncio.get_running_loop().run_in_executor(
-            None, _mp3_to_pcm, mp3_bytes
-        )
-
-    def _call_sdk(self, text: str) -> bytes:
-        """Synchronous SDK call — run in executor."""
-        client = _make_client()
-        response = client.text_to_speech.convert_stream(
-            text=text,
-            target_language_code=self._language,
-            speaker=self._speaker,
-            model=self._model,
-            pace=1.0,
-            speech_sample_rate=self._sample_rate,
-        )
-        return response if isinstance(response, bytes) else bytes(response)
+        return _wav_to_pcm(wav_bytes)
 
     async def close(self) -> None:
-        pass  # SDK client doesn't need explicit cleanup
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
 
 
 class SarvamSTT:
-    """Speech-to-text using Sarvam Saarika via the official SDK."""
+    """Speech-to-text using Sarvam Saarika via REST API."""
 
     def __init__(self, *, language: str = SARVAM_STT_LANGUAGE, model: str = SARVAM_STT_MODEL) -> None:
         self._language = language
@@ -111,39 +135,40 @@ class SarvamSTT:
         self._audio_buffer = bytearray()
         self._results: asyncio.Queue[str] = asyncio.Queue()
         self._speech_started = asyncio.Event()
+        self._client: httpx.AsyncClient | None = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=10.0)
+        return self._client
 
     async def transcribe(self, audio_bytes: bytes) -> str | None:
         """Send audio to Sarvam STT and return the transcript."""
         wav_bytes = _pcm_to_wav(audio_bytes, sample_rate=16000, channels=1, sample_width=2)
-        loop = asyncio.get_running_loop()
         try:
-            result = await loop.run_in_executor(
-                None, self._call_sdk, wav_bytes
+            client = await self._get_client()
+            # STT API expects multipart file upload
+            files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
+            data = {
+                "language_code": self._language,
+                "model": self._model,
+            }
+            headers = {"api-subscription-key": _api_key()}
+            resp = await client.post(
+                SARVAM_STT_URL,
+                headers=headers,
+                data=data,
+                files=files,
             )
-            return result
+            resp.raise_for_status()
+            result = resp.json()
+            transcript = result.get("transcript", "").strip()
+            if transcript:
+                logger.info("Sarvam STT: %r", transcript[:60])
+            return transcript or None
         except Exception:
             logger.exception("Sarvam STT request failed")
             return None
-
-    def _call_sdk(self, wav_bytes: bytes) -> str | None:
-        """Synchronous SDK call — run in executor."""
-        import tempfile
-        client = _make_client()
-
-        # SDK expects a file path, so write to a temp file
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            f.write(wav_bytes)
-            tmp_path = f.name
-
-        try:
-            response = client.speech_to_text.transcribe(
-                file=open(tmp_path, "rb"),
-                language_code=self._language,
-                model=self._model,
-            )
-            return response.transcript.strip() if hasattr(response, "transcript") else ""
-        finally:
-            os.unlink(tmp_path)
 
     def push_audio(self, pcm_frame: bytes) -> None:
         """Accumulate audio frames from the LiveKit stream."""
@@ -167,7 +192,8 @@ class SarvamSTT:
         return await self._results.get()
 
     async def close(self) -> None:
-        pass
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -284,29 +310,18 @@ def _pcm_to_wav(pcm: bytes, *, sample_rate: int, channels: int, sample_width: in
     return buf.getvalue()
 
 
-def _mp3_to_pcm(mp3_bytes: bytes) -> bytes:
-    """Convert MP3 to raw 16-bit 24kHz mono PCM.
-
-    Uses the built-in audioop + wave if available, otherwise returns
-    the MP3 bytes as-is (LiveKit can sometimes handle MP3 directly).
-    """
-    try:
-        import subprocess
-        # Use ffmpeg if available (installed on most Linux/Render deployments)
-        proc = subprocess.run(
-            [
-                "ffmpeg", "-i", "pipe:0",
-                "-f", "s16le", "-ar", "24000", "-ac", "1",
-                "pipe:1",
-            ],
-            input=mp3_bytes,
-            capture_output=True,
-            timeout=5,
-        )
-        if proc.returncode == 0 and proc.stdout:
-            return proc.stdout
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-
-    logger.warning("ffmpeg not available for MP3→PCM conversion")
-    return mp3_bytes
+def _wav_to_pcm(wav_bytes: bytes) -> bytes:
+    """Extract raw PCM data from a WAV file, skipping the 44-byte header."""
+    if len(wav_bytes) <= 44:
+        return wav_bytes
+    # Standard WAV header is 44 bytes; data starts after
+    if wav_bytes[:4] == b"RIFF" and wav_bytes[8:12] == b"WAVE":
+        # Find the 'data' chunk
+        pos = 12
+        while pos < len(wav_bytes) - 8:
+            chunk_id = wav_bytes[pos:pos + 4]
+            chunk_size = struct.unpack_from("<I", wav_bytes, pos + 4)[0]
+            if chunk_id == b"data":
+                return wav_bytes[pos + 8:pos + 8 + chunk_size]
+            pos += 8 + chunk_size
+    return wav_bytes[44:]  # fallback: assume standard header

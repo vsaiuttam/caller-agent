@@ -131,8 +131,18 @@ class TwilioSpeaker:
 
     async def say(self, text: str) -> None:
         self._current_text = text
-        # Queue text for the webhook handler to pick up and return as TwiML.
-        await self._state.response_queue.put(text)
+
+        if VOICE_PROVIDER == "sarvam":
+            # Pre-synthesize audio HERE so the webhook handler responds instantly.
+            audio_id = await _synthesize_sarvam(text)
+            if audio_id:
+                await self._state.response_queue.put(f"__AUDIO__:{audio_id}")
+            else:
+                # Sarvam failed — fall back to Twilio <Say>
+                await self._state.response_queue.put(text)
+        else:
+            await self._state.response_queue.put(text)
+
         # In the webhook model, playback duration is handled by Twilio.
         # We approximate a wait so the session doesn't race ahead.
         words = len(text.split())
@@ -219,10 +229,9 @@ def _build_webhook_app():
                     "<Hangup/></Response>"
                 )
 
-            audio_id = None
-            if VOICE_PROVIDER == "sarvam":
-                audio_id = await _synthesize_sarvam(greeting)
-            twiml = _gather_twiml(room_name, greeting, audio_id)
+            # Audio may already be pre-synthesized by TwilioSpeaker
+            display_text, audio_id = _parse_queue_msg(greeting)
+            twiml = _gather_twiml(room_name, display_text or greeting, audio_id)
             return _safe_xml(twiml)
         except Exception:
             logger.exception("voice_handler crashed for %s", room_name)
@@ -259,10 +268,8 @@ def _build_webhook_app():
                     "<Hangup/></Response>"
                 )
 
-            audio_id = None
-            if VOICE_PROVIDER == "sarvam":
-                audio_id = await _synthesize_sarvam(agent_text)
-            twiml = _gather_twiml(room_name, agent_text, audio_id)
+            display_text, audio_id = _parse_queue_msg(agent_text)
+            twiml = _gather_twiml(room_name, display_text or agent_text, audio_id)
             return _safe_xml(twiml)
         except Exception:
             logger.exception("gather_handler crashed for %s", room_name)
@@ -290,10 +297,8 @@ def _build_webhook_app():
                     "<Hangup/></Response>"
                 )
 
-            audio_id = None
-            if VOICE_PROVIDER == "sarvam":
-                audio_id = await _synthesize_sarvam(agent_text)
-            twiml = _gather_twiml(room_name, agent_text, audio_id)
+            display_text, audio_id = _parse_queue_msg(agent_text)
+            twiml = _gather_twiml(room_name, display_text or agent_text, audio_id)
             return _safe_xml(twiml)
         except Exception:
             logger.exception("wait_handler crashed for %s", room_name)
@@ -366,12 +371,14 @@ def _build_webhook_app():
         return Response("ok")
 
     async def audio_handler(request: Request) -> Response:
-        """Serve Sarvam-synthesized MP3 audio for Twilio's <Play> verb."""
+        """Serve Sarvam-synthesized audio for Twilio's <Play> verb."""
         audio_id = request.path_params["audio_id"]
         audio = _audio_cache.pop(audio_id, None)
         if audio is None:
             return Response("not found", status_code=404)
-        return Response(audio, media_type="audio/mpeg")
+        # Sarvam returns WAV; detect format from header
+        mime = "audio/wav" if audio[:4] == b"RIFF" else "audio/mpeg"
+        return Response(audio, media_type=mime)
 
     routes = [
         Route("/twilio/voice/{room_name}", voice_handler, methods=["POST"]),
@@ -386,11 +393,22 @@ def _build_webhook_app():
     return Starlette(routes=routes)
 
 
-async def _synthesize_sarvam(text: str) -> str | None:
-    """Call Sarvam Bulbul TTS via official SDK, cache the MP3, return audio_id.
+def _parse_queue_msg(msg: str) -> tuple[str, str | None]:
+    """Parse a response_queue message into (display_text, audio_id).
 
-    Uses bulbul:v3 with shubh voice. Timeout is 8s so we stay well under
-    Twilio's ~15s webhook limit. Falls back to Twilio <Say> on failure.
+    Messages from TwilioSpeaker are either plain text (Twilio <Say>)
+    or ``__AUDIO__:<id>`` when Sarvam audio was pre-synthesized.
+    """
+    if msg.startswith("__AUDIO__:"):
+        return "", msg.split(":", 1)[1]
+    return msg, None
+
+
+async def _synthesize_sarvam(text: str) -> str | None:
+    """Call Sarvam Bulbul TTS, cache the audio, return audio_id.
+
+    Called from TwilioSpeaker.say() — runs BEFORE the text enters the
+    response queue, so the webhook handler can respond instantly.
     """
     from .sarvam_voice import SarvamTTS
 
