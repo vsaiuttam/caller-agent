@@ -261,6 +261,35 @@ def test_a_long_pause_does_not_end_the_call() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Schema
+# ---------------------------------------------------------------------------
+
+
+def test_an_added_boolean_column_uses_a_default_postgres_accepts() -> None:
+    """Postgres rejects `BOOLEAN DEFAULT 0`, and this runs at startup.
+
+    A 1/0 literal passed every local run on SQLite and then stopped the API
+    from booting on Render's Postgres.
+    """
+    from sqlalchemy import create_engine, text
+
+    from src.voiceagent.storage import Base, Campaign, _add_missing_columns, _default_literal
+
+    assert _default_literal(Campaign.__table__.c.whatsapp_followup) == "FALSE"
+
+    # And the keyword still works end to end on SQLite.
+    engine = create_engine("sqlite://")
+    with engine.begin() as conn:
+        Base.metadata.create_all(conn)
+        conn.execute(Campaign.__table__.insert().values(id="c1", name="n", goal="g"))
+        # An existing database from before the column was added.
+        conn.execute(text("ALTER TABLE campaigns DROP COLUMN whatsapp_followup"))
+        _add_missing_columns(conn)
+        value = conn.execute(text("SELECT whatsapp_followup FROM campaigns")).scalar()
+    assert value == 0, value
+
+
+# ---------------------------------------------------------------------------
 
 
 def _run_all() -> int:

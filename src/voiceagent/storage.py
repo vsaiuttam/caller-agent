@@ -392,7 +392,9 @@ def _default_literal(column) -> str | None:
 
     value = getattr(default, "arg", None)
     if isinstance(value, bool):
-        return "1" if value else "0"
+        # Keywords, not 1/0: Postgres refuses an integer default on a boolean
+        # column, which fails startup. SQLite reads TRUE/FALSE as 1/0.
+        return "TRUE" if value else "FALSE"
     if isinstance(value, (int, float)):
         return str(value)
     if isinstance(value, str):
