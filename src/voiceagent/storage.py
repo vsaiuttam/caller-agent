@@ -179,6 +179,17 @@ class Campaign(Base):
     # integration point that needs no MCP server and no code from us.
     webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    # --- Connected apps (MCP) --------------------------------------------
+    # Tool ids (`{server slug}__{tool name}`, see mcp/ids.py) the agent may
+    # use during the call, and after it. Nullable: rows made before these
+    # existed hold null, and every reader treats that as "none".
+    mcp_tools: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=list)
+    mcp_post_call_tools: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True, default=list
+    )
+    # What to record after the call and where, in the campaign owner's words.
+    mcp_post_call_instructions: Mapped[str] = mapped_column(Text, default="")
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     contacts: Mapped[list["Contact"]] = relationship(back_populates="campaign")
@@ -248,6 +259,11 @@ class Call(Base):
     # What dispatch actually did, so a human reviewing later can see whether
     # the calendar event / record write went through.
     dispatch_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Every MCP tool the call used, during it and after it: {at, phase,
+    # server, tool, arguments, ok, duration_ms, excerpt, error}. Saved with
+    # the transcript, so a tool that booked something is on the record even
+    # when the call itself went wrong.
+    tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
 
     # --- Qualification ---------------------------------------------------
     # Per-criterion ratings with their evidence, plus the derived verdict.
@@ -309,6 +325,39 @@ class Suppression(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     __table_args__ = (UniqueConstraint("phone_e164", name="uq_suppression_phone"),)
+
+
+class McpServer(Base):
+    """An MCP server the workspace has connected — one of the user's own apps.
+
+    The URL and the headers are sealed together in `secrets` (mcp/secrets.py)
+    because both are credentials in practice: hosted MCP servers commonly
+    carry the key in the URL itself, not only in a header. `host` is the one
+    part of the address kept readable, so the console can say which app it
+    is without being able to say how to reach it.
+    """
+
+    __tablename__ = "mcp_servers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    # Prefixes every tool id from this server, and campaigns store tool ids,
+    # so it is fixed at creation: renaming a server keeps its slug.
+    slug: Mapped[str] = mapped_column(String(32), unique=True)
+    # streamable_http | sse | builtin — the one that worked, never "auto".
+    transport: Mapped[str] = mapped_column(String(24), default="streamable_http")
+    host: Mapped[str] = mapped_column(String(255), default="")
+    secrets: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # ok | error | unchecked. Only enabled servers that are ok reach a call.
+    status: Mapped[str] = mapped_column(String(16), default="unchecked")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # As discovered: [{name, description, input_schema}]. Kept through a
+    # failed refresh, so a campaign's saved tool ids still validate while a
+    # server is briefly down.
+    tools: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True, default=list)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Setting(Base):
