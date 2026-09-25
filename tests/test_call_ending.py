@@ -1003,6 +1003,9 @@ def test_a_hindi_farewell_is_spoken_without_the_marker_and_ends_the_call() -> No
 
 
 def _run_all() -> int:
+    # Failure messages can hold Devanagari; a cp1252 console must not crash the run.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failures = 0
     for test in tests:

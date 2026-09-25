@@ -871,6 +871,9 @@ def test_the_dashboard_counts_sentiment_for_real_calls_only() -> None:
 
 
 def _run_all() -> int:
+    # Failure messages can hold Devanagari; a cp1252 console must not crash the run.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failures = 0
     for test in tests:
