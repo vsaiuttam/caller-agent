@@ -53,12 +53,14 @@ def demo_server() -> MCPServer:
 
     @server.tool()
     def book_appointment(name: str, date: str, time: str) -> dict:
-        """Book an appointment for a person on a date (YYYY-MM-DD) at a free time (HH:MM)."""
+        """Book an appointment for a person on a weekday date (YYYY-MM-DD) at a time (HH:MM)."""
         day = _parse_date(date)
-        free = _free_slots(day)
-        if time not in free:
-            offer = ", ".join(free) or "none that day"
-            raise ToolError(f"{time} is not free on {date}. Free slots: {offer}.")
+        _parse_time(time)
+        if day.weekday() >= 5:
+            raise ToolError("We're closed at weekends. Pick a weekday.")
+        if time == _taken_slot(day):
+            offer = ", ".join(_free_slots(day))
+            raise ToolError(f"{time} is already taken on {date}. Free slots: {offer}.")
         return {
             "appointment_id": f"APT-{_seed(f'{name}|{date}|{time}') % 1000000:06d}",
             "name": name,
@@ -94,9 +96,19 @@ def _parse_date(text: str) -> datetime.date:
         raise ToolError("Dates must be written YYYY-MM-DD.") from None
 
 
+def _parse_time(text: str) -> None:
+    try:
+        datetime.time.fromisoformat(text)
+    except ValueError:
+        raise ToolError("Times must be written HH:MM, on the 24-hour clock.") from None
+
+
+def _taken_slot(day: datetime.date) -> str:
+    # One slot a day is already booked, a different one depending on the date.
+    return _DAY_SLOTS[day.toordinal() % len(_DAY_SLOTS)]
+
+
 def _free_slots(day: datetime.date) -> list[str]:
     if day.weekday() >= 5:
         return []  # closed at weekends
-    # One slot a day is already taken, a different one depending on the date.
-    taken = _DAY_SLOTS[day.toordinal() % len(_DAY_SLOTS)]
-    return [slot for slot in _DAY_SLOTS if slot != taken]
+    return [slot for slot in _DAY_SLOTS if slot != _taken_slot(day)]
