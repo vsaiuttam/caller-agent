@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import Any, Protocol
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -24,6 +25,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from ..catalog import CONVERSATION, EXTRACTION, TokenUsage, resolve
 from ..followup import MISSED, followup_columns, send_followups
 from ..llm import ConversationLLM
+from ..mcp.toolbox import call_tools
 from ..models import CallContext, Contact as ContactModel, Disposition, ScoreCriterion
 from ..orchestrator.events import (
     CALL_CONNECTED,
@@ -69,6 +71,18 @@ class Telephony(Protocol):
         ...
 
 
+@dataclass
+class _Ending:
+    """How the conversation part of a call ended, for `_finish`."""
+
+    transcript: list
+    disposition: Disposition
+    # False when the provider refused to place the call: nobody's phone rang.
+    rang: bool = True
+    amd_result: str | None = None
+    connected_at: datetime | None = None
+
+
 class CallPipeline:
     def __init__(
         self,
@@ -110,12 +124,28 @@ class CallPipeline:
             is_test=False,
         )
 
-        transcript = []
-        disposition = Disposition.FAILED
         # One ledger per call, shared by the conversation and the extraction
         # that follows it, so the cost we record is the cost of the whole call.
         usage = TokenUsage()
 
+        # Open while the phone rings; closed as soon as the call is over,
+        # not after extraction — nothing uses them after the last word.
+        async with call_tools(self._sessions, campaign.mcp_tools, on_event=feed.on_tool) as toolbox:
+            ending = await self._converse(
+                call_id, room_name, contact, campaign, feed, usage, toolbox, greeting, phrases
+            )
+
+        await feed.drain()
+        await self._finish(
+            call_id, contact, campaign, ending.transcript, ending.disposition, usage,
+            room_name=room_name, amd_result=ending.amd_result, rang=ending.rang,
+            connected_at=ending.connected_at, tool_calls=feed.tool_calls,
+        )
+
+    async def _converse(
+        self, call_id, room_name, contact, campaign, feed, usage, toolbox, greeting, phrases
+    ) -> _Ending:
+        """Dial, then either leave a voicemail or hold the conversation."""
         try:
             listener, speaker, control, sid = await self._telephony.dial(
                 phone_e164=contact.phone_e164, room_name=room_name
@@ -123,11 +153,7 @@ class CallPipeline:
         except Exception as exc:
             logger.info("Dial failed for %s: %s", contact.id, exc)
             await feed.publish(CALL_FAILED, error=dial_failure_message(exc, contact.phone_e164))
-            await self._finish(
-                call_id, contact, campaign, [], Disposition.NO_ANSWER, usage,
-                room_name=room_name, rang=not isinstance(exc, CallNotPlaced),
-            )
-            return
+            return _Ending([], Disposition.NO_ANSWER, rang=not isinstance(exc, CallNotPlaced))
 
         connected_at = datetime.now(timezone.utc)
         await self._mark_connected(call_id, sid, connected_at)
@@ -158,12 +184,9 @@ class CallPipeline:
                 await control.hangup()
             except Exception:
                 pass
-            await self._finish(
-                call_id, contact, campaign, [], Disposition.VOICEMAIL, usage,
-                room_name=room_name, amd_result=amd_result, connected_at=connected_at,
-            )
-            return
+            return _Ending([], Disposition.VOICEMAIL, amd_result=amd_result, connected_at=connected_at)
 
+        transcript = []
         try:
             llm = ConversationLLM(
                 self._client,
@@ -172,6 +195,7 @@ class CallPipeline:
                 model=campaign.conversation_model,
                 effort=campaign.conversation_effort,
                 usage=usage,
+                toolbox=toolbox,
             )
             session = CallSession(
                 llm=llm,
@@ -203,11 +227,7 @@ class CallPipeline:
             disposition = Disposition.FAILED
             await feed.publish(CALL_FAILED, error=f"The conversation failed: {exc}")
 
-        await feed.drain()
-        await self._finish(
-            call_id, contact, campaign, transcript, disposition, usage,
-            room_name=room_name, amd_result=amd_result, connected_at=connected_at,
-        )
+        return _Ending(transcript, disposition, amd_result=amd_result, connected_at=connected_at)
 
     # -- persistence steps -------------------------------------------------
 
@@ -246,6 +266,7 @@ class CallPipeline:
         self, call_id, contact, campaign, transcript, fallback_disposition, usage,
         *, room_name: str | None = None, amd_result: str | None = None,
         rang: bool = True, connected_at: datetime | None = None,
+        tool_calls: list[dict[str, Any]] | None = None,
     ) -> None:
         now = datetime.now(timezone.utc)
         usage = usage if usage is not None else TokenUsage()
@@ -267,6 +288,7 @@ class CallPipeline:
                 "status": CallStatus.COMPLETED,
                 "ended_at": now,
                 "transcript": [t.model_dump(mode="json") for t in transcript],
+                "tool_calls": tool_calls or None,
             }
             if recording_url:
                 values["recording_url"] = recording_url

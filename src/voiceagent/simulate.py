@@ -31,14 +31,18 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any
 
 from .catalog import CONVERSATION, EXTRACTION, TokenUsage, resolve, resolve_effort
-from .llm import ConversationLLM
+from .llm import ConversationLLM, ToolPause
 from .models import CallContext, CallOutcome, Contact, Qualification, Turn
 from .postcall.extract import extract_outcome
 from .providers import ANTHROPIC_API, active
 from .scoring import qualify_outcome
 from .voice.session import _is_closing
+
+if TYPE_CHECKING:
+    from .mcp.toolbox import Toolbox
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +201,8 @@ class SimulationResult:
     # Derived from the outcome's per-criterion ratings, not asked of the model.
     # None when the campaign scores nothing.
     qualification: Qualification | None = None
+    # The campaign's tools the agent used, as `Call.tool_calls` stores them.
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def median_first_chunk_ms(self) -> int | None:
@@ -230,6 +236,7 @@ class SimulationResult:
             ),
             "usage": self.usage.to_dict(),
             "median_first_chunk_ms": self.median_first_chunk_ms,
+            "tool_calls": self.tool_calls,
         }
 
 
@@ -246,8 +253,13 @@ async def simulate_call(
     extraction_model: str | None = None,
     extraction_effort: str | None = None,
     max_exchanges: int = DEFAULT_MAX_EXCHANGES,
+    toolbox: Toolbox | None = None,
 ) -> SimulationResult:
-    """Run one call end to end against a simulated person."""
+    """Run one call end to end against a simulated person.
+
+    With a `toolbox` the agent uses the campaign's tools for real, as on a
+    call; the caller owns it, and records what it did.
+    """
     persona = PERSONAS_BY_ID.get(persona_id) or PERSONAS[0]
     usage = TokenUsage()
 
@@ -258,6 +270,7 @@ async def simulate_call(
         model=conversation_model,
         effort=conversation_effort,
         usage=usage,
+        toolbox=toolbox,
     )
 
     persona_system = PERSONA_SYSTEM.format(
@@ -300,6 +313,8 @@ async def simulate_call(
         chunks: list[str] = []
 
         async for chunk in agent.generate():
+            if isinstance(chunk, ToolPause):
+                continue  # no line to cover here; the tool just runs
             if first_chunk_at is None:
                 first_chunk_at = time.perf_counter()
             chunks.append(chunk)

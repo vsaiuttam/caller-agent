@@ -29,7 +29,8 @@ import json
 import logging
 import os
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -241,6 +242,28 @@ class CallToolbox:
             await self._on_event(event)
         except Exception:  # noqa: BLE001 - a broken observer must not break a call
             logger.exception("Tool event observer failed; the call continues")
+
+
+@asynccontextmanager
+async def call_tools(
+    session_factory, tool_ids: list[str] | None, *, on_event: ToolEventCallback | None = None
+) -> AsyncIterator[CallToolbox]:
+    """A call's in-call toolbox for the length of the block.
+
+    Entering costs one lookup of the servers; connecting runs in the
+    background from then on, so it happens while the phone rings rather
+    than while the caller waits on the first tool. Leaving closes every
+    session the call opened.
+    """
+    toolbox = await CallToolbox.for_tool_ids(
+        session_factory, tool_ids or [], phase="in_call", on_event=on_event
+    )
+    warming = asyncio.create_task(toolbox.warm())
+    try:
+        yield toolbox
+    finally:
+        warming.cancel()
+        await toolbox.aclose()
 
 
 def _tools_of(server: McpServer) -> list[_Tool]:

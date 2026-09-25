@@ -52,6 +52,7 @@ from ..catalog import (
 from ..catalog import active_defaults, resolve
 from ..followup import followup_columns, send_followups, sms_configured, whatsapp_configured
 from ..llm import ConversationLLM
+from ..mcp.toolbox import ToolLog, call_tools
 from ..models import CallContext, CallOutcome, Disposition
 from ..models import Contact as ContactModel
 from ..models import ScoreCriterion
@@ -1665,6 +1666,11 @@ async def _resolve_call_setup(db: AsyncSession, body: CallSetupRequest) -> _Call
     )
 
 
+def _campaign_tools(setup: _CallSetup) -> list[str]:
+    """The in-call tool ids of the campaign a rehearsal or test call runs on."""
+    return (setup.campaign.mcp_tools or []) if setup.campaign else []
+
+
 def _bad_key_message() -> str:
     provider = active_provider()
     if provider is None:
@@ -1722,21 +1728,31 @@ async def simulate(body: SimulationRequest, db: AsyncSession = Depends(get_sessi
 
     setup = await _resolve_call_setup(db, body)
 
+    # A rehearsal uses the campaign's tools for real, like a call would —
+    # that is what makes it a rehearsal of the call rather than of the prompt.
+    tools = ToolLog()
+
+    async def on_tool(event: dict) -> None:
+        tools.add(event)
+
     client = make_client()
     try:
-        result = await simulate_call(
-            client,
-            contact=setup.contact,
-            context=setup.context,
-            greeting=setup.greeting,
-            persona_id=body.persona,
-            language_name=setup.language_name,
-            conversation_model=setup.conversation_model,
-            conversation_effort=setup.conversation_effort,
-            extraction_model=setup.extraction_model,
-            extraction_effort=setup.extraction_effort,
-            max_exchanges=body.max_exchanges,
-        )
+        async with call_tools(storage.SessionLocal, _campaign_tools(setup), on_event=on_tool) as toolbox:
+            result = await simulate_call(
+                client,
+                contact=setup.contact,
+                context=setup.context,
+                greeting=setup.greeting,
+                persona_id=body.persona,
+                language_name=setup.language_name,
+                conversation_model=setup.conversation_model,
+                conversation_effort=setup.conversation_effort,
+                extraction_model=setup.extraction_model,
+                extraction_effort=setup.extraction_effort,
+                max_exchanges=body.max_exchanges,
+                toolbox=toolbox,
+            )
+        result.tool_calls = tools.entries
     except auth_error_types() as exc:
         # Distinguished from a generic failure because the fix is completely
         # different: health reports whether a key is *present*, and a present
@@ -1817,6 +1833,7 @@ async def _save_simulation(
         connected_at=started_at or now,
         ended_at=ended_at or now,
         transcript=[t.model_dump(mode="json") for t in result.transcript],
+        tool_calls=result.tool_calls or None,
         disposition=result.outcome.disposition.value,
         sentiment=result.outcome.sentiment.value,
         summary=result.outcome.summary,
@@ -1998,49 +2015,54 @@ async def _run_test_call(
     try:
         telephony = _test_call_telephony()
         prepare_telephony(telephony, room_name, language=setup.language, greeting=setup.greeting)
-        listener, speaker, control, call_sid = await telephony.dial(
-            phone_e164=body.phone_number, room_name=room_name
-        )
-        connected_at = datetime.now(timezone.utc)
-        await _update_call_row(
-            call_id,
-            status=CallStatus.CONNECTED,
-            connected_at=connected_at,
-            provider_call_sid=call_sid,
-        )
-        await feed.publish(CALL_CONNECTED)
+        # Open while the phone rings, closed the moment the call is over.
+        async with call_tools(
+            storage.SessionLocal, _campaign_tools(setup), on_event=feed.on_tool
+        ) as toolbox:
+            listener, speaker, control, call_sid = await telephony.dial(
+                phone_e164=body.phone_number, room_name=room_name
+            )
+            connected_at = datetime.now(timezone.utc)
+            await _update_call_row(
+                call_id,
+                status=CallStatus.CONNECTED,
+                connected_at=connected_at,
+                provider_call_sid=call_sid,
+            )
+            await feed.publish(CALL_CONNECTED)
 
-        client = make_client()
-        session = CallSession(
-            llm=ConversationLLM(
-                client,
-                contact=setup.contact,
-                context=setup.context,
-                model=setup.conversation_model,
-                effort=setup.conversation_effort,
-                usage=usage,
-            ),
-            listener=listener,
-            speaker=speaker,
-            control=control,
-            greeting=setup.greeting,
-            max_duration_seconds=600,
-            phrases=phrases_for(setup.language),
-            on_event=feed.on_event,
-        )
-        live_registry.register(
-            call_id,
-            session=session,
-            room_name=room_name,
-            campaign_id=campaign_id,
-            contact_name=setup.contact.full_name,
-            is_test=True,
-        )
-        try:
-            session_started = True  # from here on, run() hangs up whatever happens
-            transcript = await session.run()
-        finally:
-            live_registry.unregister(call_id)
+            client = make_client()
+            session = CallSession(
+                llm=ConversationLLM(
+                    client,
+                    contact=setup.contact,
+                    context=setup.context,
+                    model=setup.conversation_model,
+                    effort=setup.conversation_effort,
+                    usage=usage,
+                    toolbox=toolbox,
+                ),
+                listener=listener,
+                speaker=speaker,
+                control=control,
+                greeting=setup.greeting,
+                max_duration_seconds=600,
+                phrases=phrases_for(setup.language),
+                on_event=feed.on_event,
+            )
+            live_registry.register(
+                call_id,
+                session=session,
+                room_name=room_name,
+                campaign_id=campaign_id,
+                contact_name=setup.contact.full_name,
+                is_test=True,
+            )
+            try:
+                session_started = True  # from here on, run() hangs up whatever happens
+                transcript = await session.run()
+            finally:
+                live_registry.unregister(call_id)
         await feed.drain()
 
         if session.error is not None:
@@ -2110,11 +2132,13 @@ async def _complete_test_call(
             whatsapp=send_whatsapp,
         )
 
+    tool_calls = feed.tool_calls
     ended_at = datetime.now(timezone.utc)
     values = dict(
         status=CallStatus.COMPLETED,
         ended_at=ended_at,
         transcript=[t.model_dump(mode="json") for t in transcript],
+        tool_calls=tool_calls or None,
         disposition=outcome.disposition.value,
         sentiment=outcome.sentiment.value,
         summary=outcome.summary,
@@ -2166,6 +2190,7 @@ async def _complete_test_call(
         "recording_url": values.get("recording_url"),
         "recording_sid": values.get("recording_sid"),
         "followups": {channel: r.as_dict() for channel, r in followups.items()},
+        "tool_calls": tool_calls,
     }
 
     await feed.publish(
