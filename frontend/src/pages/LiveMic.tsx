@@ -23,37 +23,34 @@
  *   - Talk over it: the mic stays open and interrupting works. Headphones.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api,
   liveCallUrl,
   type LiveClientMessage,
   type LiveServerMessage,
   type SimulationResult,
 } from "../api";
+import { AgentAvatar, type AgentState } from "../components/AgentAvatar";
+import CallResult, { FigureCard } from "../components/CallResult";
+import { IconCheck, IconMic, IconMicOff, IconPhoneOff, IconSend, IconShield } from "../components/icons";
+import { LiveTranscript, type DisplayTurn } from "../components/Transcript";
 import {
-  IconBolt,
-  IconCheck,
-  IconCoin,
-  IconMic,
-  IconMicOff,
-  IconPhone,
-  IconShield,
-} from "../components/icons";
-import OutcomeCard from "../components/OutcomeCard";
-import { ScorecardResult } from "../components/Scorecard";
-import {
+  Badge,
   Button,
+  Callout,
   Card,
   CardHeader,
-  DispositionBadge,
-  ErrorNote,
+  EmptyState,
   Field,
-  PageWrapper,
+  Input,
   Skeleton,
-  inputClass,
+  Switch,
+  cx,
+  dispositionLabel,
+  toast,
 } from "../components/ui";
-import { useAsync } from "../hooks";
+import { useHealth } from "../data";
+import { CampaignField, useTestLab } from "./TestLab";
 
 // ---------------------------------------------------------------------------
 // Web Speech API. Not in TypeScript's DOM lib, and only the parts used here
@@ -123,10 +120,9 @@ interface LiveTurn {
 }
 
 export default function LiveMic() {
-  const campaigns = useAsync(() => api.campaigns(), []);
-  const health = useAsync(() => api.health(), []);
+  const { campaignId } = useTestLab();
+  const { health } = useHealth();
 
-  const [campaignId, setCampaignId] = useState("");
   const [contactName, setContactName] = useState("Alex Morgan");
   const [save, setSave] = useState(false);
   const [bargeIn, setBargeIn] = useState(false);
@@ -167,7 +163,6 @@ export default function LiveMic() {
   const bargeRef = useRef(bargeIn);
   const voiceRef = useRef(voiceOn);
   const langRef = useRef("en-US");
-  const transcriptRef = useRef<HTMLDivElement | null>(null);
 
   bargeRef.current = bargeIn;
   voiceRef.current = voiceOn;
@@ -493,6 +488,7 @@ export default function LiveMic() {
         case "outcome": {
           setResult(message.result);
           setPhase("done");
+          toast.success(`Rehearsal finished — ${dispositionLabel(message.result.outcome.disposition)}`);
           break;
         }
 
@@ -536,11 +532,6 @@ export default function LiveMic() {
     [teardown],
   );
 
-  useEffect(() => {
-    const box = transcriptRef.current;
-    if (box) box.scrollTop = box.scrollHeight;
-  }, [turns, partial]);
-
   const live = phase === "live";
   const busy = phase === "connecting" || phase === "extracting";
   const canStart = phase === "idle" || phase === "done";
@@ -554,265 +545,216 @@ export default function LiveMic() {
     send({ type: "utterance", text });
   };
 
+  const displayTurns = useMemo<DisplayTurn[]>(() => {
+    const list: DisplayTurn[] = turns.map((turn, index) => ({
+      key: `m-${index}`,
+      role: turn.role === "agent" ? "assistant" : "user",
+      text: turn.text,
+      latencyMs: turn.firstChunkMs ?? null,
+      interrupted: turn.interrupted,
+    }));
+    if (partial) list.push({ key: "partial", role: "user", text: partial, partial: true });
+    return list;
+  }, [turns, partial]);
+
+  const mood: AgentState = error && phase === "idle"
+    ? "error"
+    : phase === "connecting"
+      ? "ringing"
+      : phase === "extracting" || phase === "done" || closing
+        ? "ended"
+        : live
+          ? speaking
+            ? "speaking"
+            : listening
+              ? "listening"
+              : "thinking"
+          : "idle";
+
   return (
-    <PageWrapper className="mx-auto max-w-[1180px] px-3 py-4 sm:px-7 sm:py-6">
-      <header className="mb-6">
-        <h1 className="flex items-center gap-2.5 text-2xl font-bold tracking-tight">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand/15 text-brand">
-            <IconMic size={18} />
-          </span>
-          Live mic
-        </h1>
-        <p className="mt-1.5 max-w-2xl text-sm text-ink-muted">
-          Be the person who picked up. Your voice goes through the browser's
-          speech recognition, the real conversation model answers, and the real
-          extractor reads the transcript afterwards — only the phone line is
-          fake.
-        </p>
-      </header>
+    <div className="grid gap-5 lg:grid-cols-[380px_minmax(0,1fr)] lg:items-start">
+      {/* ---- Setup ---- */}
+      <Card className="lg:sticky lg:top-20">
+        <CardHeader title="Setup" subtitle="You are the person who picked up. Nobody is called." />
+        <div className="space-y-5 p-5">
+          <CampaignField disabled={!canStart} />
 
-      {health.data && !health.data.can_run_simulations && (
-        <div className="mb-5">
-          <ErrorNote message="No model provider is configured, so there is nothing to talk to. Set a provider key in .env and restart the server." />
-        </div>
-      )}
+          <Field label="Your name on their list" hint="Substituted into {first_name}.">
+            <Input value={contactName} onChange={(event) => setContactName(event.target.value)} disabled={!canStart} />
+          </Field>
 
-      {!SPEECH && (
-        <div className="mb-5 rounded-lg border border-warning/35 bg-warning/8 px-3 py-2.5 text-xs leading-relaxed text-ink-secondary">
-          <span className="font-medium text-warning">
-            This browser has no speech recognition.
-          </span>{" "}
-          Chrome or Edge have it; Firefox and Safari do not. The call still runs
-          — type your replies instead, and the agent still speaks if the browser
-          can synthesise a voice.
-        </div>
-      )}
-
-      <div className="grid gap-5 lg:grid-cols-[360px_1fr] lg:items-start">
-        {/* ---- Setup ---- */}
-        <Card>
-          <CardHeader title="Setup" subtitle="Nobody is called. Nothing is dispatched." />
-          <div className="space-y-4 p-5">
-            <Field
-              label="Campaign"
-              hint="Its goal, greeting, constraints, language, and model choice are used as-is."
-            >
-              {campaigns.loading ? (
-                <Skeleton className="mt-1 h-9 w-full" />
-              ) : (
-                <select
-                  value={campaignId}
-                  onChange={(event) => setCampaignId(event.target.value)}
-                  disabled={!canStart}
-                  className={inputClass}
-                >
-                  <option value="">Choose a campaign…</option>
-                  {(campaigns.data ?? []).map((campaign) => (
-                    <option key={campaign.id} value={campaign.id}>
-                      {campaign.name}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </Field>
-
-            <Field label="Your name on their list" hint="Substituted into {first_name}.">
-              <input
-                value={contactName}
-                onChange={(event) => setContactName(event.target.value)}
+          <Field label="Microphone" group>
+            <div className="space-y-1.5" role="radiogroup" aria-label="Microphone mode">
+              <ModeOption
+                selected={!bargeIn}
+                onSelect={() => setBargeIn(false)}
                 disabled={!canStart}
-                className={inputClass}
+                title="Take turns"
+                hint="The mic closes while the agent talks. Safe on laptop speakers."
               />
-            </Field>
-
-            <div>
-              <span className="text-xs font-medium text-ink-secondary">Microphone</span>
-              <div className="mt-1.5 space-y-1.5">
-                <ModeOption
-                  selected={!bargeIn}
-                  onSelect={() => setBargeIn(false)}
-                  disabled={!canStart}
-                  title="Take turns"
-                  hint="The mic closes while the agent talks. Safe on laptop speakers."
-                />
-                <ModeOption
-                  selected={bargeIn}
-                  onSelect={() => setBargeIn(true)}
-                  disabled={!canStart}
-                  title="Talk over it"
-                  hint="The mic stays open, so interrupting works. Headphones — on speakers it will cut itself off."
-                />
-              </div>
+              <ModeOption
+                selected={bargeIn}
+                onSelect={() => setBargeIn(true)}
+                disabled={!canStart}
+                title="Talk over it"
+                hint="The mic stays open, so interrupting works. Headphones — on speakers it will cut itself off."
+              />
             </div>
+          </Field>
 
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-white/10 px-3 py-2.5">
-              <input
-                type="checkbox"
-                checked={voiceOn}
-                onChange={(event) => setVoiceOn(event.target.checked)}
-                disabled={!CAN_SPEAK}
-                className="mt-0.5 accent-[var(--color-brand)]"
-              />
-              <span className="text-xs">
-                <span className="font-medium">Speak the agent's replies</span>
-                <span className="mt-0.5 block leading-relaxed text-ink-muted">
-                  {CAN_SPEAK
-                    ? "Off makes it a text conversation — you read the replies instead."
-                    : "This browser has no speech synthesis, so replies are text only."}
-                </span>
-              </span>
-            </label>
+          <Switch
+            checked={voiceOn}
+            onChange={setVoiceOn}
+            disabled={!CAN_SPEAK}
+            label="Speak the agent's replies"
+            description={
+              CAN_SPEAK
+                ? "Off makes it a text conversation — you read the replies instead."
+                : "This browser has no speech synthesis, so replies are text only."
+            }
+          />
+          <Switch
+            checked={save}
+            onChange={setSave}
+            disabled={!canStart}
+            label="Keep this call"
+            description="Saves it to the call log, flagged as a test. Never counted in metrics."
+          />
 
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-white/10 px-3 py-2.5">
-              <input
-                type="checkbox"
-                checked={save}
-                onChange={(event) => setSave(event.target.checked)}
-                disabled={!canStart}
-                className="mt-0.5 accent-[var(--color-brand)]"
-              />
-              <span className="text-xs">
-                <span className="font-medium">Keep this call</span>
-                <span className="mt-0.5 block leading-relaxed text-ink-muted">
-                  Saves it to the calls list, flagged as a simulation. Never
-                  counted in the dashboard, connect rate, or spend.
-                </span>
-              </span>
-            </label>
+          {live || phase === "connecting" ? (
+            <Button variant="danger" size="lg" className="w-full" onClick={() => hangUp("you hung up")} icon={<IconPhoneOff size={15} />}>
+              Hang up
+            </Button>
+          ) : (
+            <Button
+              size="lg"
+              className="w-full"
+              onClick={start}
+              disabled={!campaignId || busy}
+              loading={phase === "extracting"}
+              icon={<IconMic size={15} />}
+            >
+              {phase === "extracting" ? "Reading the transcript…" : phase === "done" ? "Start again" : "Start the call"}
+            </Button>
+          )}
+          {!campaignId && canStart && <p className="-mt-2 text-center text-xs text-ink-muted">Pick a campaign to call about.</p>}
+          {model && <p className="text-2xs text-ink-muted">On the call: {model}</p>}
+        </div>
+      </Card>
 
-            {live || phase === "connecting" ? (
-              <Button variant="danger" onClick={() => hangUp("you hung up")}>
-                <IconPhone size={13} />
-                Hang up
-              </Button>
-            ) : (
-              <Button onClick={start} disabled={!campaignId || busy}>
-                <IconMic size={13} />
-                {phase === "extracting" ? "Extracting…" : "Call me"}
-              </Button>
-            )}
+      {/* ---- The call ---- */}
+      <div className="min-w-0 space-y-3">
+        {health && !health.can_run_simulations && (
+          <Callout tone="warning" title="No model provider is configured">
+            There is nothing to talk to yet. Set a provider key on the server and restart it.
+          </Callout>
+        )}
+        {!SPEECH && (
+          <Callout tone="warning" title="This browser has no speech recognition">
+            Chrome and Edge have it; Firefox and Safari don't. The call still runs — type your replies instead, and the agent
+            still speaks if the browser can synthesise a voice.
+          </Callout>
+        )}
+        {error && <Callout tone="critical" title="The call hit a problem">{error}</Callout>}
 
-            {!campaignId && canStart && (
-              <p className="text-xs text-ink-muted">Pick a campaign to call about.</p>
-            )}
-            {model && <p className="text-[11px] text-ink-muted">On the call: {model}</p>}
-          </div>
-        </Card>
-
-        {/* ---- The call ---- */}
-        <div className="space-y-4">
-          {error && <ErrorNote message={error} />}
-
-          {phase === "idle" && turns.length === 0 && (
-            <Card>
-              <div className="flex flex-col items-center justify-center px-6 py-14 text-center">
-                <span className="text-ink-muted/40">
-                  <IconMic size={34} />
-                </span>
-                <p className="mt-3 text-sm font-medium">Nothing dialled yet</p>
-                <p className="mt-1 max-w-sm text-xs leading-relaxed text-ink-muted">
-                  Pick a campaign and press call. The agent opens with the
-                  campaign's greeting; answer it however a real person would —
-                  including badly.
+        {phase === "idle" && turns.length === 0 ? (
+          <Card>
+            <EmptyState
+              title="Nothing dialled yet"
+              hint="Pick a campaign and start the call. The agent opens with the campaign's greeting; answer however a real person would — including badly."
+            />
+          </Card>
+        ) : (
+          <Card className="overflow-hidden">
+            <div className="flex flex-wrap items-center gap-4 px-5 py-4">
+              <AgentAvatar state={mood} size="md" />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-semibold tracking-tight text-ink">On the call</h2>
+                  <MicState phase={phase} listening={listening} speaking={speaking} />
+                </div>
+                <p className="mt-1 text-sm text-ink-secondary" aria-live="polite">
+                  {closing
+                    ? "The agent said goodbye. Hang up to run extraction."
+                    : phase === "connecting"
+                      ? "Connecting…"
+                      : phase === "extracting"
+                        ? "Call ended — reading the transcript"
+                        : phase === "done"
+                          ? "Done — the outcome is below"
+                          : "What the transcript records is what you actually heard."}
                 </p>
               </div>
-            </Card>
-          )}
-
-          {(live || busy || turns.length > 0) && (
-            <Card>
-              <CardHeader
-                title="On the call"
-                subtitle={
-                  closing
-                    ? "The agent has said goodbye. Hang up to run extraction."
-                    : "What the transcript records is what you actually heard."
-                }
-                action={<CallState phase={phase} listening={listening} speaking={speaking} />}
+            </div>
+            <div className="border-t border-line">
+              <LiveTranscript
+                turns={displayTurns}
+                personName="You"
+                typing={live && !speaking && !listening && !closing && turns.length > 0}
+                empty="The agent's greeting will appear here."
+                className="h-[min(50vh,460px)]"
               />
+            </div>
 
-              <div ref={transcriptRef} className="max-h-[46vh] space-y-3 overflow-y-auto p-5">
-                {turns.map((turn, index) => (
-                  <div
-                    key={index}
-                    className={`flex flex-col ${turn.role === "agent" ? "items-start" : "items-end"}`}
-                  >
-                    <div
-                      className={`max-w-[80%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
-                        turn.role === "agent"
-                          ? "rounded-tl-md bg-white/5"
-                          : "rounded-tr-md bg-brand/15 text-ink"
-                      }`}
-                    >
-                      {turn.text || <span className="text-ink-muted">…</span>}
-                    </div>
-                    <div className="mt-1 flex items-center gap-2 px-1 text-[11px] text-ink-muted">
-                      <span>{turn.role === "agent" ? "Agent" : "You"}</span>
-                      {turn.firstChunkMs != null && (
-                        <>
-                          <span aria-hidden="true">·</span>
-                          <span
-                            className={`tnum ${turn.firstChunkMs >= 800 ? "text-warning" : ""}`}
-                          >
-                            {turn.firstChunkMs} ms to first audio
-                          </span>
-                        </>
-                      )}
-                      {turn.interrupted && (
-                        <>
-                          <span aria-hidden="true">·</span>
-                          <span className="text-warning">cut off — rest never played</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))}
-
-                {partial && (
-                  <div className="flex flex-col items-end">
-                    <div className="max-w-[80%] rounded-2xl rounded-tr-md border border-dashed border-white/10 px-3.5 py-2.5 text-sm leading-relaxed text-ink-muted">
-                      {partial}
-                    </div>
-                    <span className="mt-1 px-1 text-[11px] text-ink-muted">hearing…</span>
-                  </div>
-                )}
-              </div>
-
-              {(live || phase === "connecting") && (
-                <div className="flex items-center gap-2 border-t border-white/10 px-5 py-3">
-                  <input
+            {(live || phase === "connecting") && (
+              <form
+                className="flex items-center gap-2 border-t border-line px-4 py-3 sm:px-5"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  submitTyped();
+                }}
+              >
+                <label className="min-w-0 flex-1">
+                  <span className="sr-only">Type a reply</span>
+                  <Input
                     value={typed}
                     onChange={(event) => setTyped(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") submitTyped();
-                    }}
-                    placeholder={
-                      SPEECH ? "…or type a reply" : "Type your reply and press enter"
-                    }
-                    className="flex-1 rounded-lg border border-white/10 bg-surface px-3 py-2 text-sm outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15"
+                    placeholder={SPEECH ? "…or type a reply" : "Type your reply and press Enter"}
                   />
-                  <Button variant="secondary" size="sm" onClick={submitTyped} disabled={!live}>
-                    Send
-                  </Button>
-                </div>
-              )}
-            </Card>
-          )}
+                </label>
+                <Button type="submit" variant="secondary" disabled={!live || !typed.trim()} icon={<IconSend size={14} />}>
+                  Send
+                </Button>
+              </form>
+            )}
+          </Card>
+        )}
 
-          {phase === "extracting" && !result && (
-            <Card className="p-5">
-              <p className="text-sm font-medium">Reading the transcript…</p>
-              <p className="mt-1 text-xs text-ink-muted">
-                The extraction model runs at high effort, off the call path.
-                A few seconds.
-              </p>
-            </Card>
-          )}
+        {phase === "extracting" && !result && (
+          <Card className="px-5 py-4" aria-busy="true">
+            <p className="text-sm font-medium text-ink">Reading the transcript…</p>
+            <p className="mt-0.5 text-xs text-ink-muted">The extraction model runs at high effort, off the call path. A few seconds.</p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              {[0, 1, 2].map((i) => (
+                <Skeleton key={i} className="h-20 rounded-xl" />
+              ))}
+            </div>
+          </Card>
+        )}
 
-          {result && <Result result={result} />}
-        </div>
+        {result && (
+          <CallResult
+            result={result}
+            personName="You"
+            transcriptSubtitle="Only what the speaker confirmed it played is in here."
+            outcomeSubtitle="The same model and prompt a real call would use, on what you just said."
+            thirdFigure={
+              <FigureCard
+                label="Ended because"
+                value={dispositionLabel(result.outcome.disposition)}
+                hint={result.ended_because}
+                icon={<IconShield size={15} />}
+              />
+            }
+            footnotes={[
+              `On the call: ${result.conversation_model}`,
+              `After: ${result.extraction_model}`,
+              result.call_id ? "Saved to the call log" : "Not saved",
+            ]}
+          />
+        )}
       </div>
-    </PageWrapper>
+    </div>
   );
 }
 
@@ -834,176 +776,45 @@ function ModeOption({
   return (
     <button
       type="button"
+      role="radio"
       onClick={onSelect}
       disabled={disabled}
-      aria-pressed={selected}
-      className={`w-full rounded-lg border px-3 py-2 text-left transition disabled:opacity-60 ${
-        selected ? "border-brand bg-brand/10" : "border-white/10 hover:border-ink-muted/40"
-      }`}
+      aria-checked={selected}
+      className={cx(
+        "w-full rounded-lg border px-3.5 py-2.5 text-left transition-colors duration-150 disabled:opacity-60",
+        selected ? "border-brand/50 bg-brand/8" : "border-line hover:border-line-strong hover:bg-subtle/60",
+      )}
     >
-      <span className="flex items-center gap-1.5 text-xs font-medium">
-        {selected && (
-          <span className="text-brand">
-            <IconCheck size={12} />
-          </span>
-        )}
+      <span className="flex items-center gap-1.5 text-sm font-medium text-ink">
+        {selected && <IconCheck size={13} className="text-brand" />}
         {title}
       </span>
-      <span className="mt-0.5 block text-[11px] leading-relaxed text-ink-muted">{hint}</span>
+      <span className="mt-0.5 block text-xs leading-relaxed text-ink-muted">{hint}</span>
     </button>
   );
 }
 
 /** Who has the floor right now. The one thing you need at a glance mid-call. */
-function CallState({
-  phase,
-  listening,
-  speaking,
-}: {
-  phase: Phase;
-  listening: boolean;
-  speaking: boolean;
-}) {
-  if (phase === "connecting") {
-    return <span className="text-xs text-ink-muted">Connecting…</span>;
-  }
-  if (phase === "extracting") {
-    return <span className="text-xs text-ink-muted">Call ended</span>;
-  }
+function MicState({ phase, listening, speaking }: { phase: Phase; listening: boolean; speaking: boolean }) {
+  if (phase !== "live") return null;
   if (speaking) {
     return (
-      <span className="flex items-center gap-1.5 rounded-md bg-brand/15 px-2 py-0.5 text-xs font-medium text-brand">
-        <span className="live-dot inline-block h-1.5 w-1.5 rounded-full bg-brand" />
+      <Badge tone="brand" dot pulse>
         Agent speaking
-      </span>
+      </Badge>
     );
   }
   if (listening) {
     return (
-      <span className="flex items-center gap-1.5 rounded-md bg-good/12 px-2 py-0.5 text-xs font-medium text-good">
-        <IconMic size={12} />
+      <Badge tone="good" icon={<IconMic size={11} />}>
         Listening
-      </span>
+      </Badge>
     );
   }
   return (
-    <span className="flex items-center gap-1.5 rounded-md bg-line px-2 py-0.5 text-xs text-ink-secondary">
-      <IconMicOff size={12} />
+    <Badge tone="neutral" icon={<IconMicOff size={11} />}>
       Mic closed
-    </span>
-  );
-}
-
-function Result({ result }: { result: SimulationResult }) {
-  const latency = result.median_first_chunk_ms;
-
-  return (
-    <>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Figure
-          label="Median first audio"
-          value={latency === null ? "—" : `${latency} ms`}
-          hint={
-            latency === null
-              ? "No agent turns to measure"
-              : latency < 800
-                ? "Feels immediate on a call"
-                : "You felt that pause — try a faster model or lower effort"
-          }
-          tone={latency !== null && latency >= 800 ? "warning" : "neutral"}
-          icon={<IconBolt size={15} />}
-        />
-        <Figure
-          label="Cost of this call"
-          value={`$${result.usage.cost_usd.toFixed(4)}`}
-          hint={`${result.usage.input_tokens.toLocaleString()} in / ${result.usage.output_tokens.toLocaleString()} out`}
-          icon={<IconCoin size={15} />}
-        />
-        <Figure
-          label="Ended because"
-          value={result.outcome.disposition.replace("_", " ")}
-          hint={result.ended_because}
-          icon={<IconShield size={15} />}
-        />
-      </div>
-
-      <Card>
-        <CardHeader
-          title="Transcript"
-          subtitle="Only what the speaker confirmed it played is in here."
-          action={<DispositionBadge value={result.outcome.disposition} />}
-        />
-        <div className="space-y-3 p-5">
-          {result.turns.map((turn, index) => (
-            <div
-              key={index}
-              className={`flex flex-col ${turn.role === "assistant" ? "items-start" : "items-end"}`}
-            >
-              <div
-                className={`max-w-[80%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
-                  turn.role === "assistant"
-                    ? "rounded-tl-md bg-white/5"
-                    : "rounded-tr-md bg-brand/15 text-ink"
-                }`}
-              >
-                {turn.text}
-              </div>
-              <div className="mt-1 flex items-center gap-2 px-1 text-[11px] text-ink-muted">
-                <span>{turn.role === "assistant" ? "Agent" : "You"}</span>
-                {turn.first_chunk_ms !== null && (
-                  <>
-                    <span aria-hidden="true">·</span>
-                    <span className={`tnum ${turn.first_chunk_ms >= 800 ? "text-warning" : ""}`}>
-                      {turn.first_chunk_ms} ms to first audio
-                    </span>
-                  </>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      <ScorecardResult
-        scores={result.outcome.scores}
-        qualification={result.qualification}
-      />
-
-      <OutcomeCard
-        outcome={result.outcome}
-        subtitle="The same model and prompt a real call would use, on what you just said."
-        footnotes={[
-          `On the call: ${result.conversation_model}`,
-          `After: ${result.extraction_model}`,
-          result.call_id ? "Saved to the calls list" : "Not saved",
-        ]}
-      />
-    </>
-  );
-}
-
-function Figure({
-  label,
-  value,
-  hint,
-  icon,
-  tone = "neutral",
-}: {
-  label: string;
-  value: string;
-  hint: string;
-  icon: React.ReactNode;
-  tone?: "neutral" | "warning";
-}) {
-  return (
-    <Card className={`px-4 py-3.5 ${tone === "warning" ? "border-warning/45" : ""}`}>
-      <div className="flex items-start justify-between">
-        <p className="text-[11px] font-medium uppercase tracking-wide text-ink-muted">{label}</p>
-        <span className={tone === "warning" ? "text-warning" : "text-ink-muted/70"}>{icon}</span>
-      </div>
-      <p className="mt-1.5 tnum text-xl font-semibold capitalize leading-none">{value}</p>
-      <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">{hint}</p>
-    </Card>
+    </Badge>
   );
 }
 

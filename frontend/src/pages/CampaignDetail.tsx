@@ -1,27 +1,30 @@
-import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { api, type BulkResult, type Campaign } from "../api";
+import { useEffect, useState, type DragEvent } from "react";
+import { useParams } from "react-router-dom";
+import { api, type BulkResult, type Campaign, type Contact } from "../api";
 import { parseContactsCsv } from "../csv";
-import {
-  IconArrowLeft,
-  IconPause,
-  IconPlay,
-  IconUpload,
-} from "../components/icons";
+import { IconCampaign, IconFlask, IconPause, IconPlay, IconUpload } from "../components/icons";
+import { useCrumb } from "../components/shell/AppShell";
 import {
   Button,
+  ButtonLink,
+  Callout,
   Card,
   CardHeader,
   EmptyState,
   ErrorNote,
   Field,
-  PageWrapper,
+  Page,
+  PageHeader,
   Skeleton,
+  Stat,
   StatusBadge,
-  formatDateTime,
-  inputClass,
+  Switch,
+  Textarea,
+  cx,
+  toast,
 } from "../components/ui";
-import { useAsync } from "../hooks";
+import { formatDateTime, formatUsd } from "../format";
+import { useAsync, useDocumentTitle } from "../hooks";
 
 const DAY_NAMES = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -30,14 +33,23 @@ export default function CampaignDetail() {
   const campaign = useAsync(() => api.campaign(id), [id]);
   const contacts = useAsync(() => api.contacts(id, { limit: 500 }), [id]);
   const [busy, setBusy] = useState(false);
-
   const c = campaign.data;
+  useCrumb(c?.name);
+  useDocumentTitle(c?.name ?? "Campaign");
 
   const changeStatus = async (action: "start" | "pause") => {
     setBusy(true);
     try {
-      await api.setCampaignStatus(id, action);
-      campaign.reload();
+      const updated = await api.setCampaignStatus(id, action);
+      campaign.setData(updated);
+      toast.success(
+        action === "start" ? "Campaign started" : "Campaign paused",
+        action === "start"
+          ? "Calls go out within each contact's calling window."
+          : "No new calls will be placed. Calls already on the line finish.",
+      );
+    } catch (err) {
+      toast.error(action === "start" ? "Couldn't start the campaign" : "Couldn't pause the campaign", (err as Error).message);
     } finally {
       setBusy(false);
     }
@@ -45,117 +57,79 @@ export default function CampaignDetail() {
 
   if (campaign.loading) {
     return (
-      <div className="mx-auto max-w-6xl space-y-3 px-3 py-4 sm:px-8 sm:py-7">
-        <Skeleton className="h-16 rounded-2xl" />
-        <Skeleton className="h-64 rounded-2xl" />
-      </div>
+      <Page width="wide">
+        <Skeleton className="h-4 w-24" />
+        <Skeleton className="mt-4 h-8 w-72 max-w-full" />
+        <Skeleton className="mt-2 h-4 w-96 max-w-full" />
+        <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-24 rounded-xl" />
+          ))}
+        </div>
+        <Skeleton className="mt-3 h-96 rounded-xl" />
+      </Page>
     );
   }
   if (campaign.error || !c) {
     return (
-      <div className="px-3 py-4 sm:px-8 sm:py-7">
-        <ErrorNote message={campaign.error ?? "Campaign not found"} />
-      </div>
+      <Page>
+        <ErrorNote title="Couldn't open this campaign" message={campaign.error ?? "Campaign not found"} onRetry={campaign.reload} />
+      </Page>
     );
   }
 
   const canStart = c.status !== "running" && c.total_contacts > 0;
 
   return (
-    <PageWrapper className="mx-auto max-w-6xl px-3 py-4 sm:px-8 sm:py-7">
-      <Link
-        to="/campaigns"
-        className="inline-flex items-center gap-1.5 text-xs text-ink-muted transition hover:text-brand-bright"
-      >
-        <IconArrowLeft /> Campaigns
-      </Link>
+    <Page width="wide">
+      <PageHeader
+        back={{ to: "/campaigns", label: "Campaigns" }}
+        icon={<IconCampaign size={18} />}
+        title={c.name}
+        meta={<StatusBadge status={c.status} />}
+        description={c.goal}
+        actions={
+          <>
+            <ButtonLink to={`/test-lab?campaign=${c.id}`} variant="secondary" icon={<IconFlask size={14} />}>
+              Test it
+            </ButtonLink>
+            {c.status === "running" ? (
+              <Button variant="secondary" onClick={() => changeStatus("pause")} loading={busy} icon={<IconPause size={13} />}>
+                Pause
+              </Button>
+            ) : (
+              <Button onClick={() => changeStatus("start")} loading={busy} disabled={!canStart} icon={<IconPlay size={13} />}>
+                Start calling
+              </Button>
+            )}
+          </>
+        }
+      />
 
-      <header className="mt-4 mb-6 flex items-start justify-between gap-6">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-xl font-bold tracking-tight">
-              {c.name}
-            </h1>
-            <StatusBadge status={c.status} />
-          </div>
-          <p className="mt-1.5 max-w-2xl text-sm text-ink-secondary">{c.goal}</p>
-        </div>
-        <div className="shrink-0">
-          {c.status === "running" ? (
-            <Button variant="secondary" onClick={() => changeStatus("pause")} disabled={busy}>
-              <IconPause /> Pause
-            </Button>
-          ) : (
-            <Button onClick={() => changeStatus("start")} disabled={busy || !canStart}>
-              <IconPlay /> Start calling
-            </Button>
-          )}
-        </div>
-      </header>
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Contacts" value={c.total_contacts.toLocaleString()} hint={`${c.pending} still to call`} />
+        <Stat label="Completed" value={c.completed.toLocaleString()} hint={c.total_contacts ? `${Math.round((c.completed / c.total_contacts) * 100)}% of the list` : "—"} />
+        <Stat label="To review" value={c.needs_review} hint="Outcomes held for a human" accent={c.needs_review > 0} />
+        <Stat
+          label="Model spend"
+          value={formatUsd(c.spend_usd)}
+          hint={c.budget_usd != null ? `Pauses itself at ${formatUsd(c.budget_usd, 0)}` : "No spend cap"}
+        />
+      </div>
 
       {c.total_contacts === 0 && (
-        <div className="mb-3 rounded-lg border border-warning/20 bg-warning/5 px-4 py-3 text-xs text-warning">
-          Add contacts before starting. Numbers already on the do-not-call list are
-          dropped automatically at import.
-        </div>
+        <Callout tone="warning" title="Add contacts before starting" className="mb-4">
+          Import a CSV on the right. Numbers already on the do-not-call list are dropped automatically.
+        </Callout>
       )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
-        <div className="space-y-4 lg:col-span-3">
-          <ConversationEditor campaign={c} onSaved={campaign.reload} />
-
-          <Card hover={false}>
-            <CardHeader
-              title="Contacts"
-              subtitle={`${c.total_contacts} total · ${c.pending} pending · ${c.completed} completed`}
-            />
-            <div className="max-h-96 overflow-y-auto">
-              {contacts.loading ? (
-                <div className="space-y-2 p-4">
-                  {[0, 1, 2].map((i) => (
-                    <Skeleton key={i} className="h-8" />
-                  ))}
-                </div>
-              ) : !contacts.data?.length ? (
-                <EmptyState title="No contacts yet" hint="Import a CSV to get started." />
-              ) : (
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-surface/90 text-xs text-ink-muted backdrop-blur-sm">
-                    <tr className="border-b border-white/5">
-                      <th className="px-5 py-2.5 text-left font-medium">Name</th>
-                      <th className="px-3 py-2.5 text-left font-medium">Phone</th>
-                      <th className="px-3 py-2.5 text-left font-medium">Status</th>
-                      <th className="px-5 py-2.5 text-right font-medium">Next try</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {contacts.data.map((contact) => (
-                      <tr key={contact.id} className="transition-colors hover:bg-white/3">
-                        <td className="px-5 py-2.5 font-medium">{contact.full_name}</td>
-                        <td className="tnum px-3 py-2.5 text-ink-muted">
-                          {contact.phone_masked}
-                        </td>
-                        <td className="px-3 py-2.5 text-xs capitalize text-ink-secondary">
-                          {contact.status.replace(/_/g, " ")}
-                          {contact.attempts > 0 && (
-                            <span className="tnum text-ink-muted"> · {contact.attempts}×</span>
-                          )}
-                        </td>
-                        <td className="px-5 py-2.5 text-right text-xs text-ink-muted">
-                          {contact.next_attempt_at
-                            ? formatDateTime(contact.next_attempt_at)
-                            : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </Card>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5 lg:items-start">
+        <div className="min-w-0 space-y-4 lg:col-span-3">
+          <ConversationEditor campaign={c} onSaved={campaign.setData} />
+          <ContactsTable contacts={contacts.data} loading={contacts.loading} error={contacts.error} onRetry={contacts.reload} total={c.total_contacts} />
         </div>
 
-        <div className="space-y-4 lg:col-span-2">
+        <div className="min-w-0 space-y-4 lg:col-span-2">
           <ImportPanel
             campaignId={id}
             onImported={() => {
@@ -165,119 +139,156 @@ export default function CampaignDetail() {
           />
 
           <Card>
-            <CardHeader title="Calling rules" />
-            <dl className="space-y-3 px-5 py-4 text-sm">
-              <Row
-                label="Window"
-                value={`${c.calling_hours_start}:00 – ${c.calling_hours_end}:00 local`}
-              />
-              <Row
-                label="Days"
-                value={
-                  c.calling_days.length === 7
-                    ? "Every day"
-                    : c.calling_days.map((d) => DAY_NAMES[d]).join(", ")
-                }
-              />
+            <CardHeader title="Calling rules" subtitle="Evaluated in each contact's own timezone." />
+            <dl className="divide-y divide-line text-sm">
+              <Row label="Window" value={`${String(c.calling_hours_start).padStart(2, "0")}:00 – ${String(c.calling_hours_end).padStart(2, "0")}:00`} />
+              <Row label="Days" value={c.calling_days.length === 7 ? "Every day" : c.calling_days.map((d) => DAY_NAMES[d]).join(", ")} />
               <Row label="Concurrency" value={`${c.max_concurrent_calls} lines`} />
               <Row label="Max attempts" value={String(c.max_attempts)} />
+              <Row label="Language" value={c.language.toUpperCase()} />
             </dl>
           </Card>
 
-          <FollowupSettings campaign={c} onSaved={campaign.reload} />
+          <FollowupSettings campaign={c} onSaved={campaign.setData} />
+
+          <Card>
+            <CardHeader title="Models" subtitle="Change workspace defaults on the Models page." />
+            <dl className="divide-y divide-line text-sm">
+              <Row label="On the call" value={`${c.conversation_model} · ${c.conversation_effort}`} />
+              <Row label="After the call" value={`${c.extraction_model} · ${c.extraction_effort}`} />
+            </dl>
+          </Card>
         </div>
       </div>
-    </PageWrapper>
-  );
-}
-
-function FollowupSettings({
-  campaign,
-  onSaved,
-}: {
-  campaign: Campaign;
-  onSaved: () => void;
-}) {
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const toggle = async (field: "sms_followup" | "whatsapp_followup", value: boolean) => {
-    setSaving(true);
-    setError(null);
-    try {
-      await api.updateCampaign(campaign.id, { [field]: value });
-      onSaved();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Card>
-      <CardHeader
-        title="Follow-up messages"
-        subtitle="Sent to the person after each call. Nothing is sent after an opt-out."
-      />
-      <div className="space-y-2.5 px-5 py-4">
-        {(
-          [
-            ["sms_followup", "SMS", campaign.sms_followup],
-            ["whatsapp_followup", "WhatsApp", campaign.whatsapp_followup],
-          ] as const
-        ).map(([field, label, checked]) => (
-          <label key={field} className="flex cursor-pointer items-center gap-2.5 text-sm">
-            <input
-              type="checkbox"
-              checked={checked}
-              disabled={saving}
-              onChange={(e) => toggle(field, e.target.checked)}
-              className="accent-[var(--color-brand)]"
-            />
-            {label}
-          </label>
-        ))}
-        {error && <ErrorNote message={error} />}
-      </div>
-    </Card>
+    </Page>
   );
 }
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex justify-between gap-4">
+    <div className="flex justify-between gap-4 px-5 py-2.5">
       <dt className="text-ink-muted">{label}</dt>
-      <dd className="text-right font-medium">{value}</dd>
+      <dd className="min-w-0 truncate text-right font-medium text-ink">{value}</dd>
     </div>
   );
 }
 
-function ConversationEditor({
-  campaign,
-  onSaved,
+function FollowupSettings({ campaign, onSaved }: { campaign: Campaign; onSaved: (c: Campaign) => void }) {
+  const [saving, setSaving] = useState<"sms_followup" | "whatsapp_followup" | null>(null);
+
+  const toggle = async (field: "sms_followup" | "whatsapp_followup", label: string, value: boolean) => {
+    setSaving(field);
+    try {
+      onSaved(await api.updateCampaign(campaign.id, { [field]: value }));
+      toast.success(`${label} follow-ups ${value ? "on" : "off"}`);
+    } catch (err) {
+      toast.error(`Couldn't change ${label} follow-ups`, (err as Error).message);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader title="Follow-up messages" subtitle="Sent after each call. Never after an opt-out." />
+      <div className="space-y-4 px-5 py-4">
+        <Switch
+          checked={campaign.sms_followup}
+          disabled={saving !== null}
+          onChange={(v) => toggle("sms_followup", "SMS", v)}
+          label="SMS"
+          description="A thank-you with any booked appointment, or a missed-call note."
+        />
+        <Switch
+          checked={campaign.whatsapp_followup}
+          disabled={saving !== null}
+          onChange={(v) => toggle("whatsapp_followup", "WhatsApp", v)}
+          label="WhatsApp"
+          description="Needs TWILIO_WHATSAPP_FROM on the server."
+        />
+      </div>
+    </Card>
+  );
+}
+
+function ContactsTable({
+  contacts,
+  loading,
+  error,
+  onRetry,
+  total,
 }: {
-  campaign: Campaign;
-  onSaved: () => void;
+  contacts: Contact[] | null;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+  total: number;
 }) {
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader title="Contacts" subtitle={`${total.toLocaleString()} on the list${total > 500 ? " · showing the first 500" : ""}`} />
+      <div className="max-h-[28rem] overflow-auto">
+        {loading ? (
+          <div className="space-y-2 p-4">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-8" />
+            ))}
+          </div>
+        ) : error ? (
+          <div className="p-4">
+            <ErrorNote message={error} onRetry={onRetry} />
+          </div>
+        ) : !contacts?.length ? (
+          <EmptyState compact title="No contacts yet" hint="Import a CSV with name and phone columns — the panel on the right." />
+        ) : (
+          <table className="data-table">
+            <thead className="sticky top-0 z-10 bg-surface">
+              <tr>
+                <th>Name</th>
+                <th>Phone</th>
+                <th>Status</th>
+                <th className="text-right">Next try</th>
+              </tr>
+            </thead>
+            <tbody>
+              {contacts.map((contact) => (
+                <tr key={contact.id}>
+                  <td className="font-medium text-ink">{contact.full_name}</td>
+                  <td className="tnum text-ink-muted">{contact.phone_masked}</td>
+                  <td className="text-xs capitalize text-ink-secondary">
+                    {contact.status.replace(/_/g, " ")}
+                    {contact.attempts > 0 && <span className="tnum text-ink-muted"> · {contact.attempts}×</span>}
+                  </td>
+                  <td className="whitespace-nowrap text-right text-xs text-ink-muted">
+                    {contact.next_attempt_at ? formatDateTime(contact.next_attempt_at) : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function ConversationEditor({ campaign, onSaved }: { campaign: Campaign; onSaved: (c: Campaign) => void }) {
   const [goal, setGoal] = useState(campaign.goal);
   const [greeting, setGreeting] = useState(campaign.greeting);
   const [fieldsText, setFieldsText] = useState(campaign.fields_to_collect.join("\n"));
-  const [constraintsText, setConstraintsText] = useState(
-    campaign.constraints.join("\n"),
-  );
+  const [constraintsText, setConstraintsText] = useState(campaign.constraints.join("\n"));
   const [extra, setExtra] = useState(campaign.extra_instructions);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
 
-  useEffect(() => {
+  const reset = () => {
     setGoal(campaign.goal);
     setGreeting(campaign.greeting);
     setFieldsText(campaign.fields_to_collect.join("\n"));
     setConstraintsText(campaign.constraints.join("\n"));
     setExtra(campaign.extra_instructions);
-  }, [campaign]);
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(reset, [campaign]);
 
   const toLines = (t: string) => t.split("\n").map((l) => l.trim()).filter(Boolean);
 
@@ -290,20 +301,19 @@ function ConversationEditor({
 
   const save = async () => {
     setSaving(true);
-    setError(null);
     try {
-      await api.updateCampaign(campaign.id, {
-        goal,
-        greeting,
-        extra_instructions: extra,
-        fields_to_collect: toLines(fieldsText),
-        constraints: toLines(constraintsText),
-      });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
-      onSaved();
+      onSaved(
+        await api.updateCampaign(campaign.id, {
+          goal,
+          greeting,
+          extra_instructions: extra,
+          fields_to_collect: toLines(fieldsText),
+          constraints: toLines(constraintsText),
+        }),
+      );
+      toast.success("Brief saved", "Calls placed from now on use the new version.");
     } catch (err) {
-      setError((err as Error).message);
+      toast.error("Couldn't save the brief", (err as Error).message);
     } finally {
       setSaving(false);
     }
@@ -315,89 +325,59 @@ function ConversationEditor({
     .replaceAll("{campaign_name}", campaign.name);
 
   return (
-    <Card hover={false}>
+    <Card>
       <CardHeader
-        title="Conversation"
-        subtitle="What the agent is briefed to do. Changes apply to calls placed after saving."
+        title="The brief"
+        subtitle="What the agent is told to do. Changes apply to calls placed after saving."
         action={
-          saved ? (
-            <span className="text-xs font-semibold text-good">Saved</span>
-          ) : dirty ? (
-            <Button size="sm" onClick={save} disabled={saving}>
-              {saving ? "Saving…" : "Save changes"}
-            </Button>
-          ) : null
+          dirty && (
+            <>
+              <Button size="sm" variant="ghost" onClick={reset} disabled={saving}>
+                Discard
+              </Button>
+              <Button size="sm" onClick={save} loading={saving}>
+                Save changes
+              </Button>
+            </>
+          )
         }
       />
       <div className="space-y-4 px-5 py-4">
         <Field label="Goal">
-          <textarea
-            className={`${inputClass} min-h-20 resize-y`}
-            value={goal}
-            onChange={(e) => setGoal(e.target.value)}
-          />
+          <Textarea value={goal} onChange={(e) => setGoal(e.target.value)} />
         </Field>
 
-        <Field
-          label="Opening line"
-          hint="Placeholders: {first_name}, {full_name}, {campaign_name}"
-        >
-          <textarea
-            className={`${inputClass} min-h-16 resize-y font-mono text-xs`}
-            value={greeting}
-            onChange={(e) => setGreeting(e.target.value)}
-          />
+        <Field label="Opening line" hint="Placeholders: {first_name}, {full_name}, {campaign_name}">
+          <Textarea className="font-mono min-h-16 text-xs" value={greeting} onChange={(e) => setGreeting(e.target.value)} />
         </Field>
 
-        <div className="rounded-lg border border-white/5 bg-elevated/50 px-4 py-3">
-          <p className="text-[11px] font-medium text-ink-muted">
-            Agent will say
-          </p>
-          <p className="mt-1.5 text-sm leading-relaxed italic text-ink-secondary">"{preview}"</p>
+        <div className="rounded-lg border border-line bg-subtle/50 px-4 py-3">
+          <p className="text-2xs font-medium uppercase tracking-wider text-ink-muted">Agent will say</p>
+          <p className="mt-1.5 text-sm italic leading-relaxed text-ink-secondary">“{preview}”</p>
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Information to collect" hint="One per line.">
-            <textarea
-              className={`${inputClass} min-h-24 resize-y font-mono text-xs`}
-              value={fieldsText}
-              onChange={(e) => setFieldsText(e.target.value)}
-            />
+            <Textarea className="font-mono min-h-24 text-xs" value={fieldsText} onChange={(e) => setFieldsText(e.target.value)} />
           </Field>
-          <Field label="Boundaries" hint="One per line.">
-            <textarea
-              className={`${inputClass} min-h-24 resize-y font-mono text-xs`}
-              value={constraintsText}
-              onChange={(e) => setConstraintsText(e.target.value)}
-            />
+          <Field label="Guardrails" hint="Things the agent must never do. One per line.">
+            <Textarea className="font-mono min-h-24 text-xs" value={constraintsText} onChange={(e) => setConstraintsText(e.target.value)} />
           </Field>
         </div>
 
-        <Field label="Additional guidance" hint="Tone, vocabulary, objection handling.">
-          <textarea
-            className={`${inputClass} min-h-20 resize-y`}
-            value={extra}
-            onChange={(e) => setExtra(e.target.value)}
-            placeholder="Optional."
-          />
+        <Field label="Additional guidance" hint="Tone, vocabulary, objection handling." optional>
+          <Textarea value={extra} onChange={(e) => setExtra(e.target.value)} />
         </Field>
-
-        {error && <ErrorNote message={error} />}
       </div>
     </Card>
   );
 }
 
-function ImportPanel({
-  campaignId,
-  onImported,
-}: {
-  campaignId: string;
-  onImported: () => void;
-}) {
+function ImportPanel({ campaignId, onImported }: { campaignId: string; onImported: () => void }) {
   const [result, setResult] = useState<BulkResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
 
   const handleFile = async (file: File) => {
     setBusy(true);
@@ -406,31 +386,49 @@ function ImportPanel({
     try {
       const { contacts, rejected } = parseContactsCsv(await file.text());
       if (!contacts.length) {
-        throw new Error(
-          rejected[0]?.reason ?? "No usable rows. Needs 'name' and 'phone' columns.",
-        );
+        throw new Error(rejected[0]?.reason ?? "No usable rows. The file needs 'name' and 'phone' columns.");
       }
-      setResult(await api.addContacts(campaignId, contacts));
+      const imported = await api.addContacts(campaignId, contacts);
+      setResult(imported);
+      toast.success(`${imported.created} contacts added`, file.name);
       onImported();
     } catch (err) {
-      setError((err as Error).message);
+      const message = (err as Error).message;
+      setError(message);
+      toast.error("Import failed", message);
     } finally {
       setBusy(false);
     }
   };
 
+  const onDrop = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    setDragging(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) void handleFile(file);
+  };
+
   return (
     <Card>
-      <CardHeader
-        title="Import contacts"
-        subtitle="CSV with name and phone. Extra columns become context the agent can reference."
-      />
+      <CardHeader title="Import contacts" subtitle="CSV with name and phone. Extra columns become context the agent can use." />
       <div className="space-y-3 px-5 py-4">
-        <label className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-white/10 px-4 py-7 text-center transition-all hover:border-brand/40 hover:bg-brand/5">
+        <label
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={onDrop}
+          className={cx(
+            "flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed px-4 py-7 text-center transition-colors",
+            dragging ? "border-brand bg-brand/6" : "border-line-strong hover:border-brand/60 hover:bg-subtle/60",
+            busy && "pointer-events-none opacity-60",
+          )}
+        >
           <input
             type="file"
             accept=".csv,text/csv"
-            className="hidden"
+            className="sr-only"
             disabled={busy}
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -438,30 +436,20 @@ function ImportPanel({
               e.target.value = "";
             }}
           />
-          <span className="text-ink-muted">
-            <IconUpload />
+          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-subtle text-ink-secondary">
+            <IconUpload size={18} />
           </span>
-          <span className="text-xs text-ink-secondary">
-            {busy ? "Importing…" : "Choose a CSV file"}
-          </span>
+          <span className="text-sm font-medium text-ink">{busy ? "Importing…" : "Drop a CSV here, or choose a file"}</span>
+          <span className="text-2xs text-ink-muted">name, phone, timezone, and any extra columns</span>
         </label>
 
-        {error && <ErrorNote message={error} />}
+        {error && <Callout tone="critical">{error}</Callout>}
 
         {result && (
-          <div className="rounded-lg border border-good/20 bg-good/5 px-3 py-2.5 text-xs">
-            <p className="font-semibold text-good">{result.created} contacts added</p>
-            {result.skipped_suppressed > 0 && (
-              <p className="mt-0.5 text-ink-secondary">
-                {result.skipped_suppressed} skipped — on the do-not-call list
-              </p>
-            )}
-            {result.skipped_duplicate > 0 && (
-              <p className="mt-0.5 text-ink-secondary">
-                {result.skipped_duplicate} skipped — already in this campaign
-              </p>
-            )}
-          </div>
+          <Callout tone="good" title={`${result.created} contacts added`}>
+            {result.skipped_suppressed > 0 && <span className="block">{result.skipped_suppressed} skipped — on the do-not-call list</span>}
+            {result.skipped_duplicate > 0 && <span className="block">{result.skipped_duplicate} skipped — already in this campaign</span>}
+          </Callout>
         )}
       </div>
     </Card>

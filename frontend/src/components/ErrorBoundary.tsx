@@ -1,54 +1,61 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { AgentAvatar } from "./AgentAvatar";
+import { IconRefresh } from "./icons";
+import { Button } from "./ui";
 
 interface Props {
   children: ReactNode;
-  fallback?: ReactNode;
+  /** Changing this clears the error — pass the route so navigating away recovers. */
+  resetKey?: string;
 }
 
 interface State {
-  hasError: boolean;
   error: Error | null;
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { hasError: false, error: null };
+  state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error };
+    return { error };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("[ErrorBoundary]", error, info.componentStack);
   }
 
+  componentDidUpdate(previous: Props) {
+    if (this.state.error && previous.resetKey !== this.props.resetKey) this.setState({ error: null });
+  }
+
   render() {
-    if (this.state.hasError) {
-      if (this.props.fallback) return this.props.fallback;
-      return (
-        <div className="flex min-h-[200px] flex-col items-center justify-center gap-3 p-8 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-critical/10">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="text-critical">
-              <path d="M12 3.5 3.5 18.5h17L12 3.5Z" />
-              <path d="M12 10v3.5" />
-              <path d="M12 16.5h.01" />
-            </svg>
-          </div>
-          <div>
-            <p className="text-sm font-semibold">Something went wrong</p>
-            <p className="mt-1 max-w-md text-xs text-ink-muted">
-              {this.state.error?.message || "An unexpected error occurred."}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => this.setState({ hasError: false, error: null })}
-            className="mt-2 rounded-lg bg-brand px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-brand-bright"
-          >
-            Try again
-          </button>
+    if (!this.state.error) return this.props.children;
+    // A chunk that failed to load after a deploy is fixed by a reload, not a retry.
+    const staleBuild = /dynamically imported module|Failed to fetch|Loading chunk/i.test(this.state.error.message);
+    return (
+      <div role="alert" className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-6 py-16 text-center">
+        <AgentAvatar state="error" size="md" />
+        <div>
+          <p className="text-base font-semibold text-ink">
+            {staleBuild ? "A newer version is available" : "This screen hit a snag"}
+          </p>
+          <p className="mx-auto mt-1.5 max-w-md text-sm leading-relaxed text-ink-secondary">
+            {staleBuild
+              ? "Reload to pick up the latest console."
+              : this.state.error.message || "An unexpected error occurred."}
+          </p>
         </div>
-      );
-    }
-    return this.props.children;
+        <div className="flex gap-2">
+          {!staleBuild && (
+            <Button icon={<IconRefresh size={14} />} onClick={() => this.setState({ error: null })}>
+              Try again
+            </Button>
+          )}
+          <Button variant={staleBuild ? "primary" : "secondary"} onClick={() => window.location.reload()}>
+            Reload page
+          </Button>
+        </div>
+      </div>
+    );
   }
 }

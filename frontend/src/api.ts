@@ -1,7 +1,10 @@
 /**
- * Typed API client. Mirrors src/voiceagent/api/schemas.py — when a schema
- * changes there, change it here too; there's no codegen step wired up yet.
+ * Typed API client. Mirrors src/voiceagent/api/schemas.py and the v2 contract
+ * in docs/v2-spec.md §1 — when a schema changes there, change it here too;
+ * there's no codegen step wired up yet.
  */
+
+import { authHeaders, notifyUnauthorized, withToken } from "./authStore";
 
 export type CampaignStatus = "draft" | "running" | "paused" | "completed";
 
@@ -15,6 +18,8 @@ export type Disposition =
   | "no_answer"
   | "wrong_number"
   | "failed";
+
+export type Sentiment = "positive" | "neutral" | "negative";
 
 export const DEFAULT_GREETING =
   "Hi {first_name}, this is an AI assistant calling on behalf of {campaign_name}. Do you have a moment?";
@@ -215,7 +220,7 @@ export interface UsageReport {
 }
 
 export interface SimulationResult {
-  persona: string;
+  persona?: string;
   conversation_model: string;
   extraction_model: string;
   ended_because: string;
@@ -231,6 +236,13 @@ export interface SimulationResult {
   followups?: Partial<Record<FollowupChannel, FollowupResult>>;
 }
 
+/** What `call.extracted.payload.result` carries for a real test call. */
+export interface TestCallResult extends SimulationResult {
+  call_id: string;
+  recording_url?: string | null;
+  phone_number?: string;
+}
+
 export type FollowupChannel = "sms" | "whatsapp";
 
 export interface FollowupResult {
@@ -241,11 +253,17 @@ export interface FollowupResult {
   error: string | null;
 }
 
-export interface TestCallRequest extends SimulationRequest {
+export interface TestCallRequest extends CallSetupRequest {
   phone_number: string;
   /** Null/omitted means "do what the campaign does". */
   send_sms?: boolean;
   send_whatsapp?: boolean;
+}
+
+/** `POST /api/test-call` answers 202 before dialling; the call streams over /api/events. */
+export interface TestCallAccepted {
+  call_id: string;
+  status: "dialing";
 }
 
 // --- Live microphone call ---------------------------------------------------
@@ -253,8 +271,6 @@ export interface TestCallRequest extends SimulationRequest {
 // Mirrors the protocol documented at the top of src/voiceagent/live.py. The
 // browser owns the audio and is the authority on what was actually heard;
 // the server owns the model and the transcript.
-
-export type LiveCallRequest = CallSetupRequest;
 
 export type LiveServerMessage =
   | {
@@ -287,7 +303,7 @@ export type LiveClientMessage =
   | { type: "spoken"; text: string }
   | { type: "end"; reason: string };
 
-// --- Health -----------------------------------------------------------------
+// --- Health & auth ------------------------------------------------------------
 
 export interface Health {
   ok: boolean;
@@ -300,9 +316,21 @@ export interface Health {
   provider: string;
   provider_label: string;
   providers_configured: string[];
-  /** "mock" | "livekit" | "twilio" */
+  /** "mock" | "livekit" | "twilio" | "telnyx" */
   telephony_mode: string;
   note: string;
+  /** v2: true when ADMIN_PASSWORD is set. Absent on older backends. */
+  auth_enabled?: boolean;
+}
+
+export interface AuthStatus {
+  auth_enabled: boolean;
+  authenticated: boolean;
+}
+
+export interface LoginResult {
+  token: string;
+  expires_at: string;
 }
 
 export interface CampaignTemplate {
@@ -354,6 +382,7 @@ export interface CallSummary {
   contact_id: string;
   contact_name: string;
   phone_masked: string;
+  /** "dialing" | "connected" | "completed" | "failed" */
   status: string;
   disposition: Disposition | null;
   summary: string | null;
@@ -367,6 +396,8 @@ export interface CallSummary {
   /** Null when the campaign has no scorecard. */
   score: number | null;
   qualification_band: QualificationBand | null;
+  /** v2. Null until extraction has run (and on older backends). */
+  sentiment?: Sentiment | null;
 }
 
 export interface TranscriptTurn {
@@ -399,6 +430,8 @@ export interface Outcome {
   appointment: Appointment | null;
   needs_human_review: boolean;
   review_reason: string;
+  sentiment?: Sentiment;
+  sentiment_reason?: string;
 }
 
 export interface DispatchResult {
@@ -462,6 +495,8 @@ export interface DashboardStats {
   cost_per_connected_call_usd: number;
   cache_hit_rate: number;
   volume_by_hour: HourBucket[];
+  /** v2, real calls only. Absent on older backends. */
+  sentiment_breakdown?: Partial<Record<Sentiment, number>>;
 }
 
 export interface Suppression {
@@ -476,17 +511,76 @@ export interface BulkResult {
   skipped_duplicate: number;
 }
 
-export interface LiveEvent {
-  type:
-    | "call.started"
-    | "call.connected"
-    | "call.transcript"
-    | "call.ended"
-    | "call.extracted"
-    | "campaign.updated";
-  payload: Record<string, unknown>;
-  at: string;
+// --- Live calls & the event stream -----------------------------------------------
+
+/** What the session reports while a call is up (§1.1 `on_event("state")`). */
+export type CallStateName = "speaking" | "listening" | "thinking" | "ended";
+
+/** One turn as the live registry / call.turn event carries it. */
+export interface LiveTurn {
+  role: "user" | "assistant";
+  text: string;
+  latency_ms?: number | null;
+  at?: string;
+  started_at?: string;
 }
+
+/** `GET /api/calls/live` row. `turns` is the transcript so far. */
+export interface LiveCallInfo {
+  call_id: string;
+  room_name: string;
+  campaign_id: string | null;
+  contact_name: string;
+  started_at: string;
+  state: string;
+  is_test: boolean;
+  /** The contract leaves this loose: a list of turns, or a count on some builds. */
+  turns: LiveTurn[] | number;
+}
+
+export interface CallExtractedPayload {
+  call_id: string;
+  disposition: Disposition;
+  summary: string;
+  needs_review: boolean;
+  cost_usd: number;
+  sentiment?: Sentiment | null;
+  /** Test calls only: the full result object. */
+  result?: TestCallResult;
+}
+
+/** Payload per event type, per §1.2. Every call event carries `call_id`. */
+export interface EventPayloads {
+  "call.started": {
+    call_id: string;
+    campaign_id: string | null;
+    contact_name: string;
+    phone: string;
+    is_test?: boolean;
+  };
+  "call.connected": { call_id: string };
+  "call.state": { call_id: string; state: CallStateName };
+  "call.turn": {
+    call_id: string;
+    role: "user" | "assistant";
+    text: string;
+    latency_ms: number | null;
+    at: string;
+  };
+  "call.whisper": { call_id: string; text: string };
+  /** Legacy; superseded by call.turn. */
+  "call.transcript": { call_id: string };
+  "call.ended": { call_id: string; turns: number; duration_seconds?: number | null };
+  "call.extracted": CallExtractedPayload;
+  "call.failed": { call_id: string; error: string };
+  "campaign.updated": { campaign_id: string; dispatched?: number; paused_reason?: string };
+}
+
+export type LiveEventType = keyof EventPayloads;
+
+export type LiveEvent = {
+  [K in LiveEventType]: { type: K; payload: EventPayloads[K]; at: string };
+}[LiveEventType];
 
 // ---------------------------------------------------------------------------
 
@@ -499,29 +593,46 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  });
+/** Turn a failed response into a readable ApiError (and report 401s). */
+async function toError(res: Response, reportUnauthorized = true): Promise<ApiError> {
+  if (res.status === 401 && reportUnauthorized) notifyUnauthorized();
+  // FastAPI puts validation failures under `detail`, which may be a string
+  // or an array of per-field errors. Surface something readable either way.
+  let message = res.statusText || `Request failed (${res.status})`;
+  try {
+    const body = await res.json();
+    message = Array.isArray(body.detail)
+      ? body.detail.map((d: { msg: string }) => d.msg).join("; ")
+      : (body.detail ?? message);
+  } catch {
+    /* non-JSON error body; keep statusText */
+  }
+  return new ApiError(message, res.status);
+}
 
-  if (!res.ok) {
-    // FastAPI puts validation failures under `detail`, which may be a string
-    // or an array of per-field errors. Surface something readable either way.
-    let message = res.statusText;
-    try {
-      const body = await res.json();
-      message = Array.isArray(body.detail)
-        ? body.detail.map((d: { msg: string }) => d.msg).join("; ")
-        : (body.detail ?? message);
-    } catch {
-      /* non-JSON error body; keep statusText */
-    }
-    throw new ApiError(message, res.status);
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  options: { reportUnauthorized?: boolean } = {},
+): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      ...init,
+      headers: { "Content-Type": "application/json", ...authHeaders(), ...init?.headers },
+    });
+  } catch {
+    throw new ApiError("Can't reach the server. Check your connection and try again.", 0);
   }
 
+  if (!res.ok) throw await toError(res, options.reportUnauthorized ?? true);
   return res.status === 204 ? (undefined as T) : res.json();
 }
+
+const post = (body?: unknown): RequestInit => ({
+  method: "POST",
+  body: body === undefined ? undefined : JSON.stringify(body),
+});
 
 const qs = (params: Record<string, unknown>) => {
   const search = new URLSearchParams();
@@ -532,9 +643,48 @@ const qs = (params: Record<string, unknown>) => {
   return s ? `?${s}` : "";
 };
 
+export interface CallFilters {
+  campaign_id?: string;
+  disposition?: string;
+  needs_review?: boolean;
+  include_simulations?: boolean;
+  band?: QualificationBand;
+  min_score?: number;
+  /** "score" gives the ranked queue; "recent" the call log. */
+  sort?: "recent" | "score";
+}
+
+/**
+ * Fill in anything missing from a health payload. The pill and the
+ * onboarding checklist read it on every screen, so a proxy pointed at the
+ * wrong server (or an older backend) must degrade to "not configured"
+ * rather than take the shell down.
+ */
+function normaliseHealth(raw: Partial<Health>): Health {
+  return {
+    ok: raw.ok ?? false,
+    checks: raw.checks ?? {},
+    live: raw.live ?? [],
+    mocked: raw.mocked ?? [],
+    can_place_calls: raw.can_place_calls ?? false,
+    can_run_simulations: raw.can_run_simulations ?? false,
+    provider: raw.provider ?? "",
+    provider_label: raw.provider_label ?? "",
+    providers_configured: raw.providers_configured ?? [],
+    telephony_mode: raw.telephony_mode ?? "unknown",
+    note: raw.note ?? "",
+    auth_enabled: raw.auth_enabled,
+  };
+}
+
 export const api = {
   stats: () => request<DashboardStats>("/api/stats"),
-  health: () => request<Health>("/api/health"),
+  health: async () => normaliseHealth(await request<Partial<Health>>("/api/health")),
+
+  authStatus: () => request<AuthStatus>("/api/auth/status", undefined, { reportUnauthorized: false }),
+  /** 401 here means a wrong password, not an expired session. */
+  login: (password: string) =>
+    request<LoginResult>("/api/auth/login", post({ password }), { reportUnauthorized: false }),
 
   templates: () => request<TemplateCatalog>("/api/templates"),
   languages: () => request<LanguageOption[]>("/api/languages"),
@@ -554,29 +704,18 @@ export const api = {
     contacts: number;
     exchanges: number;
     connect_rate: number;
-  }) =>
-    request<CostEstimate>("/api/estimate", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+  }) => request<CostEstimate>("/api/estimate", post(body)),
 
   personas: () => request<Persona[]>("/api/personas"),
-  simulate: (body: SimulationRequest) =>
-    request<SimulationResult>("/api/simulate", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
-  /** Place a real phone call for testing a campaign. */
-  testCall: (body: TestCallRequest) =>
-    request<SimulationResult>("/api/test-call", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+  simulate: (body: SimulationRequest) => request<SimulationResult>("/api/simulate", post(body)),
+  /** Place a real phone call. Returns at once; the call streams over /api/events. */
+  startTestCall: (body: TestCallRequest) =>
+    request<TestCallAccepted>("/api/test-call", post(body)),
   /** Send (or re-send) a finished call's SMS / WhatsApp follow-up. */
   resendFollowup: (callId: string, body: { sms: boolean; whatsapp: boolean }) =>
     request<Partial<Record<FollowupChannel, FollowupResult>>>(
       `/api/calls/${callId}/followup`,
-      { method: "POST", body: JSON.stringify(body) },
+      post(body),
     ),
 
   /**
@@ -592,17 +731,9 @@ export const api = {
     const res = await fetch(`/api/parse-contacts?language=${language}`, {
       method: "POST",
       body: form,
+      headers: authHeaders(),
     });
-    if (!res.ok) {
-      let message = res.statusText;
-      try {
-        const body = await res.json();
-        message = body.detail ?? message;
-      } catch {
-        /* keep statusText */
-      }
-      throw new ApiError(message, res.status);
-    }
+    if (!res.ok) throw await toError(res);
     return (await res.json()) as {
       contacts: NewContact[];
       rejected: Array<{ line: number; reason: string }>;
@@ -612,68 +743,63 @@ export const api = {
 
   campaigns: () => request<Campaign[]>("/api/campaigns"),
   campaign: (id: string) => request<Campaign>(`/api/campaigns/${id}`),
-  createCampaign: (body: CampaignCreate) =>
-    request<Campaign>("/api/campaigns", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+  createCampaign: (body: CampaignCreate) => request<Campaign>("/api/campaigns", post(body)),
   updateCampaign: (id: string, body: CampaignUpdate) =>
     request<Campaign>(`/api/campaigns/${id}`, {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
   setCampaignStatus: (id: string, action: "start" | "pause" | "complete") =>
-    request<Campaign>(`/api/campaigns/${id}/status?action=${action}`, {
-      method: "POST",
-    }),
+    request<Campaign>(`/api/campaigns/${id}/status?action=${action}`, post()),
 
   contacts: (campaignId: string, params: { status?: string; limit?: number } = {}) =>
     request<Contact[]>(`/api/campaigns/${campaignId}/contacts${qs(params)}`),
   addContacts: (campaignId: string, contacts: NewContact[]) =>
-    request<BulkResult>(`/api/campaigns/${campaignId}/contacts`, {
-      method: "POST",
-      body: JSON.stringify({ contacts }),
-    }),
+    request<BulkResult>(`/api/campaigns/${campaignId}/contacts`, post({ contacts })),
 
-  calls: (
-    params: {
-      campaign_id?: string;
-      disposition?: string;
-      needs_review?: boolean;
-      include_simulations?: boolean;
-      band?: QualificationBand;
-      min_score?: number;
-      /** "score" gives the ranked queue; "recent" the call log. */
-      sort?: "recent" | "score";
-      limit?: number;
-    } = {},
-  ) => request<CallSummary[]>(`/api/calls${qs(params)}`),
-  /** Browser-navigated so the download uses the server's Content-Disposition. */
-  callsExportUrl: (
-    params: {
-      campaign_id?: string;
-      disposition?: string;
-      needs_review?: boolean;
-      include_simulations?: boolean;
-      band?: QualificationBand;
-      min_score?: number;
-      sort?: "recent" | "score";
-    } = {},
-  ) => `/api/calls/export.csv${qs(params)}`,
+  calls: (params: CallFilters & { limit?: number } = {}) =>
+    request<CallSummary[]>(`/api/calls${qs({ ...params })}`),
+  /** Browser-navigated so the download streams with the server's Content-Disposition. */
+  callsExportUrl: (params: CallFilters = {}) => withToken(`/api/calls/export.csv${qs({ ...params })}`),
   call: (id: string) => request<CallDetail>(`/api/calls/${id}`),
   reviewCall: (id: string, approve: boolean, note = "") =>
-    request<CallSummary>(`/api/calls/${id}/review`, {
-      method: "POST",
-      body: JSON.stringify({ approve, note }),
-    }),
+    request<CallSummary>(`/api/calls/${id}/review`, post({ approve, note })),
+  /** For <audio src>, which can't send headers. */
+  recordingUrl: (id: string) => withToken(`/api/calls/${id}/recording`),
+
+  // --- v2: live calls -------------------------------------------------------
+  liveCalls: () => request<LiveCallInfo[]>("/api/calls/live"),
+  hangup: (id: string) => request<unknown>(`/api/calls/${id}/hangup`, post()),
+  whisper: (id: string, text: string) => request<unknown>(`/api/calls/${id}/whisper`, post({ text })),
+  /**
+   * Download a transcript as a file. Fetched (rather than navigated) so a
+   * missing call surfaces as an error message instead of a JSON page.
+   */
+  downloadTranscript: async (id: string, format: "txt" | "json") => {
+    const res = await fetch(`/api/calls/${id}/transcript?format=${format}`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) throw await toError(res);
+    const disposition = res.headers.get("Content-Disposition") ?? "";
+    const name = /filename="?([^";]+)"?/.exec(disposition)?.[1] ?? `transcript-${id}.${format}`;
+    saveBlob(await res.blob(), name);
+  },
 
   suppressions: () => request<Suppression[]>("/api/suppressions"),
   addSuppression: (phone_e164: string, reason: string) =>
-    request<Suppression>("/api/suppressions", {
-      method: "POST",
-      body: JSON.stringify({ phone_e164, reason }),
-    }),
+    request<Suppression>("/api/suppressions", post({ phone_e164, reason })),
 };
+
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 /**
  * The backend origin for WebSocket connections.
@@ -685,16 +811,18 @@ export const api = {
  * Set VITE_API_ORIGIN in the Vercel environment to your Render service URL
  * (e.g. "https://voiceagent-api.onrender.com"). When unset, same-origin is used.
  */
-const API_ORIGIN: string = import.meta.env.VITE_API_ORIGIN || (import.meta.env.DEV ? "" : "https://voiceagent-api-vzpp.onrender.com");
+const API_ORIGIN: string =
+  import.meta.env.VITE_API_ORIGIN ||
+  (import.meta.env.DEV ? "" : "https://voiceagent-api-vzpp.onrender.com");
 
-/** WebSocket URL for the live feed. */
+/** WebSocket URL for the live event feed. Carries the token when auth is on. */
 export function liveFeedUrl(): string {
-  return wsUrl("/api/events");
+  return withToken(wsUrl("/api/events"));
 }
 
 /** WebSocket URL for one microphone call. */
 export function liveCallUrl(): string {
-  return wsUrl("/api/live");
+  return withToken(wsUrl("/api/live"));
 }
 
 function wsUrl(path: string): string {

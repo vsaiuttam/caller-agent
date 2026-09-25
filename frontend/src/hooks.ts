@@ -1,44 +1,59 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { liveFeedUrl, type LiveEvent } from "./api";
+import type { LiveEvent } from "./api";
+import { BRAND } from "./brand";
+import { eventStream, type StreamStatus } from "./events";
 
-/** Fetch-on-mount with manual refetch, loading and error state. */
+/**
+ * Fetch on mount and whenever `deps` change, with manual `reload`.
+ *
+ * A reload keeps the current data on screen (`refreshing` is true meanwhile)
+ * so refreshing after a mutation never flashes a skeleton; a deps change
+ * clears it, because the old data belongs to something else.
+ */
 export function useAsync<T>(
   fn: () => Promise<T>,
   deps: unknown[] = [],
 ): {
   data: T | null;
   loading: boolean;
+  refreshing: boolean;
   error: string | null;
   reload: () => void;
+  setData: (value: T | null) => void;
 } {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
+  const lastNonce = useRef(nonce);
 
   const fnRef = useRef(fn);
   fnRef.current = fn;
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    const isReload = nonce !== lastNonce.current;
+    lastNonce.current = nonce;
+    if (isReload) setRefreshing(true);
+    else {
+      setData(null);
+      setLoading(true);
+    }
     setError(null);
     fnRef
       .current()
       .then((result) => {
-        if (!cancelled) {
-          setData(result);
-          setError(null);
-        }
+        if (!cancelled) setData(result);
       })
       .catch((err: Error) => {
-        if (!cancelled) {
-          setError(err?.message || "Request failed");
-          console.warn("[useAsync] fetch failed:", err);
-        }
+        if (!cancelled) setError(err?.message || "Request failed");
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       });
     return () => {
       cancelled = true;
@@ -46,109 +61,29 @@ export function useAsync<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, nonce]);
 
-  return { data, loading, error, reload: useCallback(() => setNonce((n) => n + 1), []) };
+  return {
+    data,
+    loading,
+    refreshing,
+    error,
+    reload: useCallback(() => setNonce((n) => n + 1), []),
+    setData,
+  };
 }
 
 /**
- * Live event feed with automatic reconnect.
- *
- * Reconnects with exponential backoff capped at 10s. Pauses reconnect
- * attempts while the tab is hidden to avoid wasting resources.
+ * Poll a fetcher on an interval. Pauses while the tab is hidden and fetches
+ * immediately when it comes back. Keeps the last good data through failures.
  */
-export function useLiveFeed(onEvent?: (event: LiveEvent) => void) {
-  const [connected, setConnected] = useState(false);
-  const [events, setEvents] = useState<LiveEvent[]>([]);
-
-  const handlerRef = useRef(onEvent);
-  handlerRef.current = onEvent;
-
-  useEffect(() => {
-    let socket: WebSocket | null = null;
-    let retryDelay = 1000;
-    let retryTimer: number | undefined;
-    let closed = false;
-    let connectAttempt = 0;
-
-    const connect = () => {
-      if (closed) return;
-      // Don't reconnect while tab is hidden
-      if (document.hidden) {
-        retryTimer = window.setTimeout(connect, 2000);
-        return;
-      }
-
-      connectAttempt++;
-      try {
-        socket = new WebSocket(liveFeedUrl());
-      } catch {
-        // WebSocket constructor can throw if URL is invalid
-        retryTimer = window.setTimeout(connect, retryDelay);
-        retryDelay = Math.min(retryDelay * 2, 10_000);
-        return;
-      }
-
-      socket.onopen = () => {
-        setConnected(true);
-        retryDelay = 1000;
-        connectAttempt = 0;
-      };
-
-      socket.onmessage = (message) => {
-        try {
-          const event = JSON.parse(message.data) as LiveEvent;
-          setEvents((prev) => [event, ...prev].slice(0, 200));
-          handlerRef.current?.(event);
-        } catch (err) {
-          console.warn("[LiveFeed] malformed frame:", err);
-        }
-      };
-
-      socket.onclose = () => {
-        setConnected(false);
-        if (closed) return;
-        retryTimer = window.setTimeout(connect, retryDelay);
-        retryDelay = Math.min(retryDelay * 2, 10_000);
-      };
-
-      socket.onerror = () => {
-        // Let onclose handle reconnection
-        try { socket?.close(); } catch { /* already closing */ }
-      };
-    };
-
-    connect();
-
-    // Resume connection when tab becomes visible
-    const onVisibility = () => {
-      if (!document.hidden && !connected && !closed) {
-        window.clearTimeout(retryTimer);
-        connect();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-
-    return () => {
-      closed = true;
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.clearTimeout(retryTimer);
-      try { socket?.close(); } catch { /* already closed */ }
-    };
-  }, []);
-
-  const clear = useCallback(() => setEvents([]), []);
-  return { connected, events, clear };
-}
-
-/** Poll a fetcher on an interval. Pauses while the tab is hidden.
- *  Tracks consecutive failures and surfaces stale state. */
-export function usePolling<T>(fn: () => Promise<T>, intervalMs: number) {
+export function usePolling<T>(fn: () => Promise<T>, intervalMs: number, enabled = true) {
   const [data, setData] = useState<T | null>(null);
-  const [_stale, setStale] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const fnRef = useRef(fn);
   fnRef.current = fn;
-  const failCount = useRef(0);
+  const tickRef = useRef<() => void>(() => {});
 
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
 
     const tick = async () => {
@@ -157,22 +92,16 @@ export function usePolling<T>(fn: () => Promise<T>, intervalMs: number) {
         const result = await fnRef.current();
         if (!cancelled) {
           setData(result);
-          setStale(false);
-          failCount.current = 0;
+          setError(null);
         }
-      } catch {
-        failCount.current++;
-        // Mark data as stale after 3 consecutive failures
-        if (failCount.current >= 3 && !cancelled) {
-          setStale(true);
-        }
+      } catch (err) {
+        if (!cancelled) setError((err as Error).message || "Request failed");
       }
     };
+    tickRef.current = () => void tick();
 
     void tick();
     const id = window.setInterval(tick, intervalMs);
-
-    // Resume polling immediately when tab becomes visible
     const onVisibility = () => {
       if (!document.hidden && !cancelled) void tick();
     };
@@ -183,7 +112,86 @@ export function usePolling<T>(fn: () => Promise<T>, intervalMs: number) {
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [intervalMs]);
+  }, [intervalMs, enabled]);
 
-  return data;
+  const reload = useCallback(() => tickRef.current(), []);
+  return { data, error, reload };
+}
+
+/** Subscribe to the shared /api/events socket. Returns its status. */
+export function useEventStream(onEvent?: (event: LiveEvent) => void): StreamStatus {
+  const [status, setStatus] = useState<StreamStatus>(eventStream.status);
+  const handlerRef = useRef(onEvent);
+  handlerRef.current = onEvent;
+
+  useEffect(() => {
+    const offStatus = eventStream.onStatus(setStatus);
+    const off = eventStream.subscribe((event) => handlerRef.current?.(event));
+    setStatus(eventStream.status);
+    return () => {
+      off();
+      offStatus();
+    };
+  }, []);
+
+  return status;
+}
+
+/** The current time, re-rendering every `intervalMs` while `active`. */
+export function useNow(intervalMs = 1000, active = true): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), intervalMs);
+    return () => window.clearInterval(id);
+  }, [intervalMs, active]);
+  return now;
+}
+
+export function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const list = window.matchMedia(query);
+    const update = () => setMatches(list.matches);
+    update();
+    list.addEventListener("change", update);
+    return () => list.removeEventListener("change", update);
+  }, [query]);
+  return matches;
+}
+
+/** State mirrored to localStorage. Falls back to memory when storage is blocked. */
+export function useLocalStorage<T>(key: string, initial: T): [T, (value: T) => void] {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw === null ? initial : (JSON.parse(raw) as T);
+    } catch {
+      return initial;
+    }
+  });
+  const set = useCallback(
+    (next: T) => {
+      setValue(next);
+      try {
+        localStorage.setItem(key, JSON.stringify(next));
+      } catch {
+        /* private mode */
+      }
+    },
+    [key],
+  );
+  return [value, set];
+}
+
+export function useDocumentTitle(title: string | null | undefined) {
+  useEffect(() => {
+    if (!title) return;
+    const previous = document.title;
+    document.title = `${title} · ${BRAND.name}`;
+    return () => {
+      document.title = previous;
+    };
+  }, [title]);
 }
