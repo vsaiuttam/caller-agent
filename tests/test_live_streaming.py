@@ -742,6 +742,7 @@ async def _campaign_call():
                 raise AssertionError(
                     f"the campaign call did not end; spoken: {telephony.speaker.spoken}"
                 ) from None
+            await asyncio.sleep(0.05)  # let the collector drain the bus queue
             events = list(seen)
 
         async with sessions() as db:
