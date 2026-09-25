@@ -7,8 +7,10 @@ the dashboard's call monitor.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
+import json
 import logging
 import os
 import re
@@ -33,24 +35,36 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .. import storage
 from ..catalog import (
     CONVERSATION,
     EFFORT_MULTIPLIER,
     EXTRACTION,
     MODELS_BY_ID,
+    TokenUsage,
     catalog_dict,
     estimate_campaign,
 )
 from ..catalog import active_defaults, resolve
 from ..followup import followup_columns, send_followups, sms_configured, whatsapp_configured
 from ..llm import ConversationLLM
-from ..models import CallContext, CallOutcome
+from ..models import CallContext, CallOutcome, Disposition
 from ..models import Contact as ContactModel
 from ..models import ScoreCriterion
-from ..orchestrator.events import bus
+from ..orchestrator.events import (
+    CALL_CONNECTED,
+    CALL_ENDED,
+    CALL_EXTRACTED,
+    CALL_FAILED,
+    CALL_STARTED,
+    CALL_WHISPER,
+    Event,
+    bus,
+)
+from ..postcall.extract import extract_outcome
 from ..providers import (
     active as active_provider,
 )
@@ -62,8 +76,7 @@ from ..providers import (
     overloaded_error_types,
     rate_limit_error_types,
 )
-from ..templates import CATEGORIES, LANGUAGES, TEMPLATES, language_instruction
-from ..voice.phrases import phrases_for
+from ..scoring import qualify_outcome
 from ..storage import (
     Call,
     CallStatus,
@@ -71,12 +84,17 @@ from ..storage import (
     CampaignStatus,
     Contact,
     ContactStatus,
-    SessionLocal,
     Setting,
     Suppression,
     get_session,
     init_db,
 )
+from ..templates import CATEGORIES, LANGUAGES, TEMPLATES, language_instruction
+from ..voice import live_registry
+from ..voice.live_feed import CallFeed
+from ..voice.phrases import phrases_for
+from ..voice.pipeline import dial_failure_message, prepare_telephony
+from ..voice.session import CallNotPlaced, CallSession
 from .schemas import (
     DEFAULT_GREETING,
     BulkResult,
@@ -99,6 +117,7 @@ from .schemas import (
     SuppressionCreate,
     SuppressionOut,
     TestCallRequest,
+    WhisperRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -473,6 +492,7 @@ async def stats(db: AsyncSession = Depends(get_session)) -> DashboardStats:
         pending_review=pending_review or 0,
         suppressed_total=suppressed or 0,
         disposition_breakdown=breakdown,
+        sentiment_breakdown=await _sentiment_breakdown(db, window_start, now),
         calls_delta=_delta(current.total_calls, prior.total_calls),
         connect_rate_delta=_delta(rate_now, rate_prev),
         avg_duration_delta=_delta(current.avg_duration, prior.avg_duration),
@@ -484,6 +504,22 @@ async def stats(db: AsyncSession = Depends(get_session)) -> DashboardStats:
         cache_hit_rate=cache_hit_rate,
         volume_by_hour=await _volume_by_hour(db, window_start, now),
     )
+
+
+async def _sentiment_breakdown(db: AsyncSession, start: datetime, end: datetime) -> dict[str, int]:
+    rows = (
+        await db.execute(
+            select(Call.sentiment, func.count())
+            .where(
+                Call.started_at >= start,
+                Call.started_at < end,
+                REAL_CALLS,
+                Call.sentiment.is_not(None),
+            )
+            .group_by(Call.sentiment)
+        )
+    ).all()
+    return {sentiment: count for sentiment, count in rows}
 
 
 async def _volume_by_hour(db: AsyncSession, start: datetime, end: datetime):
@@ -1027,6 +1063,7 @@ def _call_summary(call: Call, contact_name: str, phone: str) -> CallSummary:
         is_simulation=bool(call.is_simulation),
         score=call.score,
         qualification_band=call.qualification_band,
+        sentiment=call.sentiment,
     )
 
 
@@ -1092,6 +1129,14 @@ async def list_calls(
     )
     rows = (await db.execute(stmt.limit(limit).offset(offset))).all()
     return [_call_summary(c, ct.full_name, ct.phone_e164) for c, ct in rows]
+
+
+# Declared before /api/calls/{call_id}, which would otherwise take "live" for
+# an id.
+@app.get("/api/calls/live")
+async def live_calls() -> list[dict]:
+    """Calls in progress in this process, for the live console."""
+    return [call.to_dict() for call in live_registry.all()]
 
 
 # Columns are fixed and explicit rather than derived from the model, so a
@@ -1260,6 +1305,109 @@ async def get_recording(call_id: str, db: AsyncSession = Depends(get_session)):
     except Exception as exc:
         logger.exception("Failed to fetch recording for call %s", call_id)
         raise HTTPException(502, f"Could not fetch recording: {exc}") from exc
+
+
+@app.get("/api/calls/{call_id}/transcript")
+async def export_transcript(
+    call_id: str,
+    fmt: str = Query(default="txt", alias="format", description="txt | json"),
+    db: AsyncSession = Depends(get_session),
+) -> Response:
+    """Download one conversation, as readable text or as JSON.
+
+    Works mid-call too: the transcript is saved after every turn, so this is
+    everything said so far.
+    """
+    if fmt not in ("txt", "json"):
+        raise HTTPException(400, "format must be txt or json")
+
+    call = await db.get(Call, call_id)
+    if call is None:
+        raise HTTPException(404, "Call not found")
+    contact = await db.get(Contact, call.contact_id)
+    campaign = await db.get(Campaign, call.campaign_id)
+    contact_name = contact.full_name if contact else "Contact"
+
+    if fmt == "json":
+        payload = {
+            "call_id": call.id,
+            "contact_name": contact_name,
+            "campaign_id": call.campaign_id,
+            "started_at": _utc(call.started_at).isoformat() if call.started_at else None,
+            "disposition": call.disposition,
+            "summary": call.summary,
+            "sentiment": call.sentiment,
+            "turns": call.transcript or [],
+        }
+        content = json.dumps(payload, ensure_ascii=False, indent=2)
+        media_type = "application/json"
+    else:
+        content = _transcript_text(call, contact_name, campaign.name if campaign else call.campaign_id)
+        media_type = "text/plain; charset=utf-8"
+
+    return Response(
+        content=content.encode("utf-8"),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="transcript-{call.id}.{fmt}"'},
+    )
+
+
+def _transcript_text(call: Call, contact_name: str, campaign_name: str) -> str:
+    """A header, then one `[mm:ss] Speaker: text` line per turn."""
+    turns = call.transcript or []
+    started = _utc(call.started_at).isoformat() if call.started_at else "—"
+    lines = [
+        f"Contact: {contact_name}",
+        f"Campaign: {campaign_name}",
+        f"Started: {started}",
+        f"Disposition: {call.disposition or '—'}",
+        f"Summary: {call.summary or '—'}",
+        "",
+    ]
+    first = _turn_time(turns[0]) if turns else None
+    for turn in turns:
+        speaker = "Agent" if turn.get("role") == "assistant" else contact_name
+        lines.append(f"[{_offset(first, _turn_time(turn))}] {speaker}: {turn.get('text', '')}")
+    return "\n".join(lines) + "\n"
+
+
+def _turn_time(turn: dict) -> datetime | None:
+    try:
+        return _utc(datetime.fromisoformat(str(turn.get("started_at"))))
+    except ValueError:
+        return None
+
+
+def _offset(first: datetime | None, at: datetime | None) -> str:
+    seconds = int((at - first).total_seconds()) if first and at else 0
+    minutes, seconds = divmod(max(0, seconds), 60)
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _utc(moment: datetime) -> datetime:
+    # SQLite round-trips naive datetimes; everything stored is UTC.
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+@app.post("/api/calls/{call_id}/hangup", status_code=202)
+async def hangup_call(call_id: str) -> dict:
+    """End a live call politely: the agent says goodbye, then hangs up."""
+    live = live_registry.get(call_id)
+    if live is None:
+        raise HTTPException(404, "That call is not live on this server.")
+    live.session.request_end()
+    return {"call_id": call_id, "status": "ending"}
+
+
+@app.post("/api/calls/{call_id}/whisper", status_code=202)
+async def whisper(call_id: str, body: WhisperRequest) -> dict:
+    """Steer a live call: guidance the agent follows but never mentions."""
+    live = live_registry.get(call_id)
+    if live is None:
+        raise HTTPException(404, "That call is not live on this server.")
+    live.session.llm.add_guidance(body.text)
+    await bus.publish(Event(CALL_WHISPER, {"call_id": call_id, "text": body.text}))
+    return {"call_id": call_id, "status": "accepted"}
 
 
 @app.post("/api/calls/{call_id}/followup")
@@ -1607,6 +1755,7 @@ async def _save_simulation(
         ended_at=ended_at or now,
         transcript=[t.model_dump(mode="json") for t in result.transcript],
         disposition=result.outcome.disposition.value,
+        sentiment=result.outcome.sentiment.value,
         summary=result.outcome.summary,
         outcome=result.outcome.model_dump(mode="json"),
         needs_human_review=result.outcome.needs_human_review,
@@ -1647,13 +1796,18 @@ def _followup_choice(body: TestCallRequest, campaign: Campaign | None) -> tuple[
     return pick(body.send_sms, "sms_followup"), pick(body.send_whatsapp, "whatsapp_followup")
 
 
-@app.post("/api/test-call")
+@app.post("/api/test-call", status_code=202)
 async def test_call(body: TestCallRequest, db: AsyncSession = Depends(get_session)) -> dict:
-    """Place a real Twilio call to a phone number for testing a campaign.
+    """Place a real phone call to test a campaign, and return at once.
 
-    This dials the number, runs the AI agent conversation, extracts the
-    outcome, and returns the full result — just like a production call but
-    triggered manually from the UI.
+    The call runs in the background: it lasts minutes, and an HTTP request
+    held open that long is one proxy timeout away from losing the result.
+    Everything that happens is streamed on /api/events under the returned
+    `call_id` — call.connected, then call.state and call.turn as the
+    conversation goes, then call.ended and call.extracted (carrying the full
+    result), or call.failed. The transcript is saved after every turn.
+
+    Anything wrong with the request itself still fails here, synchronously.
     """
     if active_provider() is None:
         raise HTTPException(503, missing_key_message())
@@ -1668,212 +1822,340 @@ async def test_call(body: TestCallRequest, db: AsyncSession = Depends(get_sessio
 
     setup = await _resolve_call_setup(db, body)
 
-    from ..voice.session import CallSession
-    from ..catalog import TokenUsage, CONVERSATION, EXTRACTION, resolve
-    from ..postcall.extract import extract_outcome
-    from ..scoring import qualify_outcome
+    call_id = str(uuid.uuid4())
+    room_name = f"test-{call_id}"
+    await _create_test_call_row(call_id, room_name, body, setup)
 
-    client = make_client()
-    usage = TokenUsage()
+    task = asyncio.create_task(_run_test_call(call_id, room_name, body, setup))
+    # The event loop only holds tasks weakly; this is what keeps a call alive.
+    _test_calls.add(task)
+    task.add_done_callback(_test_calls.discard)
+    return {"call_id": call_id, "status": "dialing"}
 
+
+_test_calls: set[asyncio.Task] = set()
+
+
+def _test_call_telephony():
+    """The telephony adapter a test call dials through, per TELEPHONY."""
+    mode = os.getenv("TELEPHONY", "mock").lower()
     try:
-        if telephony_mode == "telnyx":
+        if mode == "telnyx":
             from ..voice.telnyx_adapter import TelnyxTelephony
-            telephony = TelnyxTelephony()
-        else:
-            from ..voice.twilio_adapter import TwilioTelephony
-            telephony = TwilioTelephony()
-        room_name = f"test-{uuid.uuid4()}"
 
-        # Synthesize the greeting while the phone rings.
-        prefetch = getattr(telephony, "prefetch_speech", None)
-        if prefetch:
-            prefetch(setup.greeting)
+            return TelnyxTelephony()
+        from ..voice.twilio_adapter import TwilioTelephony
 
-        # Dial the phone
-        try:
-            listener, speaker, control, call_sid = await telephony.dial(
-                phone_e164=body.phone_number, room_name=room_name
+        return TwilioTelephony()
+    except KeyError as exc:
+        raise RuntimeError(f"TELEPHONY={mode}, but {exc.args[0]} is not set.") from exc
+
+
+async def _create_test_call_row(
+    call_id: str, room_name: str, body: TestCallRequest, setup: _CallSetup
+) -> None:
+    """The row a test call reports into, written before anything is dialled.
+
+    It needs a contact to join against, so one placeholder contact per
+    campaign and number is reused, in SUPPRESSED state — a status the runner
+    will never dial. Without a campaign there is nothing to hang a row on, so
+    the call runs and streams unsaved, as campaign-less test calls always have.
+
+    Its own database session rather than the request's: committing the
+    request's session would expire the campaign the background call still
+    reads from.
+    """
+    if setup.campaign is None:
+        return
+
+    async with storage.SessionLocal() as db:
+        contact = await db.scalar(
+            select(Contact).where(
+                Contact.campaign_id == setup.campaign.id,
+                Contact.phone_e164 == body.phone_number,
             )
-        except ConnectionError as exc:
-            raise HTTPException(400, f"Call failed: {exc}") from exc
-
-        # Run the AI conversation
-        llm = ConversationLLM(
-            client,
-            contact=setup.contact,
-            context=setup.context,
-            model=setup.conversation_model,
-            effort=setup.conversation_effort,
-            usage=usage,
         )
+        if contact is None:
+            contact = Contact(
+                id=str(uuid.uuid4()),
+                campaign_id=setup.campaign.id,
+                full_name=body.contact_name or "Test call contact",
+                phone_e164=body.phone_number,
+                timezone="UTC",
+                status=ContactStatus.SUPPRESSED,
+                attributes={"test_call": "true"},
+            )
+            db.add(contact)
+            await db.flush()
+
+        db.add(
+            Call(
+                id=call_id,
+                contact_id=contact.id,
+                campaign_id=setup.campaign.id,
+                status=CallStatus.DIALING,
+                room_name=room_name,
+                conversation_model=resolve(setup.conversation_model, CONVERSATION),
+                extraction_model=resolve(setup.extraction_model, EXTRACTION),
+                is_simulation=True,
+            )
+        )
+        await db.commit()
+
+
+async def _update_call_row(call_id: str, **values) -> None:
+    """Write to a test call's row. A no-op for a call that has none."""
+    async with storage.SessionLocal() as db:
+        await db.execute(update(Call).where(Call.id == call_id).values(**values))
+        await db.commit()
+
+
+async def _run_test_call(
+    call_id: str, room_name: str, body: TestCallRequest, setup: _CallSetup
+) -> None:
+    """Dial, converse, extract, report: the background half of a test call.
+
+    Never raises. Whatever goes wrong — the dial refused, nobody answering,
+    the model failing — marks the row failed and is said on the feed as
+    call.failed, in words the operator can act on.
+    """
+    feed = CallFeed(call_id, storage.SessionLocal)
+    campaign_id = setup.campaign.id if setup.campaign else None
+    await feed.publish(
+        CALL_STARTED,
+        campaign_id=campaign_id,
+        contact_name=setup.contact.full_name,
+        phone=mask(body.phone_number),
+        is_test=True,
+    )
+
+    usage = TokenUsage()
+    client = control = None
+    session_started = False
+    try:
+        telephony = _test_call_telephony()
+        prepare_telephony(telephony, room_name, language=setup.language, greeting=setup.greeting)
+        listener, speaker, control, call_sid = await telephony.dial(
+            phone_e164=body.phone_number, room_name=room_name
+        )
+        connected_at = datetime.now(timezone.utc)
+        await _update_call_row(
+            call_id,
+            status=CallStatus.CONNECTED,
+            connected_at=connected_at,
+            provider_call_sid=call_sid,
+        )
+        await feed.publish(CALL_CONNECTED)
+
+        client = make_client()
         session = CallSession(
-            llm=llm,
+            llm=ConversationLLM(
+                client,
+                contact=setup.contact,
+                context=setup.context,
+                model=setup.conversation_model,
+                effort=setup.conversation_effort,
+                usage=usage,
+            ),
             listener=listener,
             speaker=speaker,
             control=control,
             greeting=setup.greeting,
             max_duration_seconds=600,
             phrases=phrases_for(setup.language),
+            on_event=feed.on_event,
         )
-
-        transcript = await session.run()
-
-        # Extract outcome
-        outcome = await extract_outcome(
-            client,
-            contact=setup.contact,
-            context=setup.context,
-            turns=transcript,
-            call_started_at_iso=datetime.now(timezone.utc).isoformat(),
-            model=setup.extraction_model,
-            effort=setup.extraction_effort,
-            usage=usage,
-        )
-
-        qualification = (
-            qualify_outcome(setup.context, outcome) if setup.context.scorecard else None
-        )
-
-        # Build result in the same shape as simulation. On a real call the
-        # per-turn figure is the wait from the person finishing to the reply
-        # being ready, measured by the session.
-        latencies = [t.latency_ms for t in transcript if t.latency_ms is not None]
-        result_payload = {
-            "conversation_model": resolve(setup.conversation_model, CONVERSATION),
-            "extraction_model": resolve(setup.extraction_model, EXTRACTION),
-            "ended_because": "call completed",
-            "greeting": setup.greeting,
-            "call_sid": call_sid,
-            "phone_number": body.phone_number,
-            "turns": [
-                {"role": t.role, "text": t.text, "first_chunk_ms": t.latency_ms, "total_ms": None}
-                for t in transcript
-            ],
-            "median_first_chunk_ms": int(statistics.median(latencies)) if latencies else None,
-            "outcome": outcome.model_dump(mode="json"),
-            "qualification": (
-                qualification.model_dump(mode="json") if qualification else None
-            ),
-            "usage": usage.to_dict(),
-        }
-
-        # Retrieve recording info
-        recording_url = None
-        recording_sid = None
-        recording_duration = None
-        state = telephony.get_call_state(room_name)
-        if state:
-            recording_url = state.recording_url
-            recording_sid = state.recording_sid
-            recording_duration = state.recording_duration
-            result_payload["recording_url"] = recording_url
-            result_payload["recording_sid"] = recording_sid
-
-        # Persist test call to the database so it appears in call history.
-        # Test calls need a contact row to join against — reuse the
-        # placeholder that _save_simulation creates.
-        campaign_id = setup.campaign.id if setup.campaign else None
-        contact_id = None
-        if campaign_id:
-            placeholder_phone = body.phone_number or "+10000000000"
-            existing = await db.scalar(
-                select(Contact).where(
-                    Contact.campaign_id == campaign_id,
-                    Contact.phone_e164 == placeholder_phone,
-                )
-            )
-            if existing is None:
-                existing = Contact(
-                    id=str(uuid.uuid4()),
-                    campaign_id=campaign_id,
-                    full_name=body.contact_name or "Test call contact",
-                    phone_e164=placeholder_phone,
-                    timezone="UTC",
-                    status=ContactStatus.SUPPRESSED,
-                    attributes={"test_call": "true"},
-                )
-                db.add(existing)
-                await db.flush()
-            contact_id = existing.id
-
-        call_row = Call(
-            id=str(uuid.uuid4()),
-            contact_id=contact_id or "test",
-            campaign_id=campaign_id or "test",
-            status=CallStatus.COMPLETED,
-            started_at=datetime.now(timezone.utc),
-            connected_at=datetime.now(timezone.utc),
-            ended_at=datetime.now(timezone.utc),
-            provider_call_sid=call_sid,
+        live_registry.register(
+            call_id,
+            session=session,
             room_name=room_name,
-            transcript=[t.model_dump(mode="json") for t in transcript],
-            disposition=outcome.disposition.value,
-            summary=outcome.summary,
-            outcome=outcome.model_dump(mode="json"),
-            needs_human_review=outcome.needs_human_review,
-            review_reason=outcome.review_reason or None,
-            scores=[s.model_dump(mode="json") for s in outcome.scores],
-            qualification=(
-                qualification.model_dump(mode="json") if qualification else None
-            ),
-            score=qualification.score if qualification else None,
-            qualification_band=qualification.band.value if qualification else None,
+            campaign_id=campaign_id,
+            contact_name=setup.contact.full_name,
+            is_test=True,
+        )
+        try:
+            session_started = True  # from here on, run() hangs up whatever happens
+            transcript = await session.run()
+        finally:
+            live_registry.unregister(call_id)
+        await feed.drain()
+
+        if session.error is not None:
+            await _fail_test_call(feed, session.error, body, setup, usage)
+            return
+
+        state = telephony.get_call_state(room_name) if hasattr(telephony, "get_call_state") else None
+        await _complete_test_call(
+            feed,
+            client,
+            usage,
+            body,
+            setup,
+            transcript=transcript,
+            call_sid=call_sid,
+            connected_at=connected_at,
+            recording=state,
+        )
+    except Exception as exc:  # noqa: BLE001 - reported on the feed instead
+        logger.exception("Test call %s failed", call_id)
+        if control is not None and not session_started:
+            with _suppress_all():
+                await control.hangup()
+        await feed.drain()
+        await _fail_test_call(feed, exc, body, setup, usage)
+    finally:
+        if client is not None:
+            await client.close()
+
+
+async def _complete_test_call(
+    feed: CallFeed,
+    client,
+    usage: TokenUsage,
+    body: TestCallRequest,
+    setup: _CallSetup,
+    *,
+    transcript: list,
+    call_sid: str,
+    connected_at: datetime,
+    recording,
+) -> None:
+    """Extract, score and follow up on a finished test call, then report it."""
+    outcome = await extract_outcome(
+        client,
+        contact=setup.contact,
+        context=setup.context,
+        turns=transcript,
+        call_started_at_iso=connected_at.isoformat(),
+        model=setup.extraction_model,
+        effort=setup.extraction_effort,
+        usage=usage,
+    )
+    qualification = qualify_outcome(setup.context, outcome) if setup.context.scorecard else None
+
+    # Follow-ups to the number just called.
+    send_sms, send_whatsapp = _followup_choice(body, setup.campaign)
+    followups = {}
+    if send_sms or send_whatsapp:
+        followups = await send_followups(
+            to=body.phone_number,
+            call_id=feed.call_id,
+            contact_name=setup.contact.full_name,
+            campaign_name=setup.campaign.name if setup.campaign else "our team",
+            outcome=outcome,
+            sms=send_sms,
+            whatsapp=send_whatsapp,
+        )
+
+    ended_at = datetime.now(timezone.utc)
+    values = dict(
+        status=CallStatus.COMPLETED,
+        ended_at=ended_at,
+        transcript=[t.model_dump(mode="json") for t in transcript],
+        disposition=outcome.disposition.value,
+        sentiment=outcome.sentiment.value,
+        summary=outcome.summary,
+        outcome=outcome.model_dump(mode="json"),
+        needs_human_review=outcome.needs_human_review,
+        review_reason=outcome.review_reason or None,
+        scores=[s.model_dump(mode="json") for s in outcome.scores],
+        qualification=qualification.model_dump(mode="json") if qualification else None,
+        score=qualification.score if qualification else None,
+        qualification_band=qualification.band.value if qualification else None,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cache_read_tokens=usage.cache_read_tokens,
+        cache_write_tokens=usage.cache_write_tokens,
+        cost_usd=usage.cost_usd(),
+        **followup_columns(followups),
+    )
+    # Normally the recording arrives after the call is gone and the webhook
+    # stores it itself; only write it here if it beat us to it.
+    if recording is not None and recording.recording_url:
+        values.update(
+            recording_url=recording.recording_url,
+            recording_sid=recording.recording_sid,
+            recording_duration=recording.recording_duration,
+        )
+    await _update_call_row(feed.call_id, **values)
+
+    # On a real call the per-turn figure is the wait from the person
+    # finishing to the reply being ready, measured by the session.
+    latencies = [t.latency_ms for t in transcript if t.latency_ms is not None]
+    result = {
+        "call_id": feed.call_id,
+        "conversation_model": resolve(setup.conversation_model, CONVERSATION),
+        "extraction_model": resolve(setup.extraction_model, EXTRACTION),
+        "ended_because": "call completed",
+        "greeting": setup.greeting,
+        "call_sid": call_sid,
+        # Masked: this travels on the shared event feed, not just back to
+        # whoever placed the call.
+        "phone_number": mask(body.phone_number),
+        "turns": [
+            {"role": t.role, "text": t.text, "first_chunk_ms": t.latency_ms, "total_ms": None}
+            for t in transcript
+        ],
+        "median_first_chunk_ms": int(statistics.median(latencies)) if latencies else None,
+        "outcome": outcome.model_dump(mode="json"),
+        "qualification": qualification.model_dump(mode="json") if qualification else None,
+        "usage": usage.to_dict(),
+        "recording_url": values.get("recording_url"),
+        "recording_sid": values.get("recording_sid"),
+        "followups": {channel: r.as_dict() for channel, r in followups.items()},
+    }
+
+    await feed.publish(
+        CALL_ENDED,
+        turns=len(transcript),
+        duration_seconds=max(0, int((ended_at - connected_at).total_seconds())),
+    )
+    await feed.publish(
+        CALL_EXTRACTED,
+        disposition=outcome.disposition.value,
+        summary=outcome.summary,
+        needs_review=outcome.needs_human_review,
+        cost_usd=values["cost_usd"],
+        sentiment=outcome.sentiment.value,
+        result=result,
+    )
+
+
+async def _fail_test_call(
+    feed: CallFeed, exc: Exception, body: TestCallRequest, setup: _CallSetup, usage: TokenUsage
+) -> None:
+    error = _test_call_error(exc, body, setup)
+    unanswered = isinstance(exc, ConnectionError) and not isinstance(exc, CallNotPlaced)
+    try:
+        await _update_call_row(
+            feed.call_id,
+            status=CallStatus.FAILED,
+            ended_at=datetime.now(timezone.utc),
+            disposition=(Disposition.NO_ANSWER if unanswered else Disposition.FAILED).value,
+            summary=error,
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             cache_read_tokens=usage.cache_read_tokens,
             cache_write_tokens=usage.cache_write_tokens,
             cost_usd=usage.cost_usd(),
-            conversation_model=resolve(setup.conversation_model, CONVERSATION),
-            extraction_model=resolve(setup.extraction_model, EXTRACTION),
-            recording_url=recording_url,
-            recording_sid=recording_sid,
-            recording_duration=recording_duration,
-            is_simulation=True,
         )
-        saved = False
-        if contact_id and campaign_id:
-            try:
-                db.add(call_row)
-                await db.commit()
-                result_payload["call_id"] = call_row.id
-                saved = True
-            except Exception:
-                logger.warning("Failed to persist test call — results still returned")
-                await db.rollback()
+    except Exception:  # noqa: BLE001 - the feed still hears about it
+        logger.exception("Could not mark test call %s failed", feed.call_id)
+    await feed.publish(CALL_FAILED, error=error)
 
-        # Follow-up SMS / WhatsApp to the number just called. Sent after the
-        # row is saved so Twilio's delivery receipts have a call to land on.
-        send_sms, send_whatsapp = _followup_choice(body, setup.campaign)
-        if send_sms or send_whatsapp:
-            results = await send_followups(
-                to=body.phone_number,
-                call_id=call_row.id if saved else None,
-                contact_name=setup.contact.full_name,
-                campaign_name=setup.campaign.name if setup.campaign else "our team",
-                outcome=outcome,
-                sms=send_sms,
-                whatsapp=send_whatsapp,
-            )
-            result_payload["followups"] = {c: r.as_dict() for c, r in results.items()}
-            if saved and results:
-                for column, value in followup_columns(results).items():
-                    setattr(call_row, column, value)
-                await db.commit()
 
-        return result_payload
-
-    except HTTPException:
-        raise
-    except auth_error_types() as exc:
-        raise HTTPException(401, _bad_key_message()) from exc
-    except rate_limit_error_types() as exc:
-        raise HTTPException(429, _quota_message(setup.conversation_model)) from exc
-    except Exception as exc:
-        logger.exception("Test call failed")
-        raise HTTPException(502, f"The test call failed: {exc}") from exc
-    finally:
-        await client.close()
+def _test_call_error(exc: Exception, body: TestCallRequest, setup: _CallSetup) -> str:
+    """What went wrong, for the operator: plain words and a masked number."""
+    if isinstance(exc, ConnectionError):
+        return dial_failure_message(exc, body.phone_number)
+    if isinstance(exc, auth_error_types()):
+        return _bad_key_message()
+    if isinstance(exc, rate_limit_error_types()):
+        return _quota_message(setup.conversation_model)
+    if isinstance(exc, overloaded_error_types()):
+        return _busy_message(setup.conversation_model)
+    reason = str(exc).replace(body.phone_number, mask(body.phone_number)) or type(exc).__name__
+    return f"The test call failed: {reason}"
 
 
 # --------------------------------------------------------------------------
@@ -1926,7 +2208,7 @@ async def live(ws: WebSocket) -> None:
         return
 
     try:
-        async with SessionLocal() as db:
+        async with storage.SessionLocal() as db:
             setup = await _resolve_call_setup(db, body)
     except HTTPException as exc:
         await _refuse(ws, str(exc.detail))
@@ -1969,7 +2251,7 @@ async def live(ws: WebSocket) -> None:
         payload["greeting"] = setup.greeting
 
         if body.save and setup.campaign is not None:
-            async with SessionLocal() as db:
+            async with storage.SessionLocal() as db:
                 campaign = await db.get(Campaign, setup.campaign.id)
                 if campaign is not None:
                     payload["call_id"] = await _save_simulation(

@@ -67,10 +67,16 @@ class EventBus:
 bus = EventBus()
 
 
-# Event type constants — keep in sync with the frontend's union type.
+# Event type constants — keep in sync with the frontend's union type. Every
+# call.* payload carries `call_id`, so a console can follow one call on a
+# feed shared by all of them.
 CALL_STARTED = "call.started"
 CALL_CONNECTED = "call.connected"
 CALL_TRANSCRIPT = "call.transcript"
+CALL_STATE = "call.state"  # speaking | listening | thinking | ended
+CALL_TURN = "call.turn"  # one recorded turn, as it happens
+CALL_WHISPER = "call.whisper"  # supervisor guidance added mid-call
 CALL_ENDED = "call.ended"
 CALL_EXTRACTED = "call.extracted"
+CALL_FAILED = "call.failed"  # with a human-readable `error`
 CAMPAIGN_UPDATED = "campaign.updated"

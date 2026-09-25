@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..catalog import (
     DEFAULT_CONVERSATION_EFFORT,
@@ -283,6 +283,8 @@ class CallSummary(BaseModel):
     # Null when the campaign has no scorecard, which is most of them.
     score: int | None = None
     qualification_band: str | None = None
+    # positive | neutral | negative. Null until extracted, and on older calls.
+    sentiment: str | None = None
 
 
 class CallDetail(CallSummary):
@@ -317,6 +319,14 @@ class CallDetail(CallSummary):
 class FollowupResend(BaseModel):
     sms: bool = False
     whatsapp: bool = False
+
+
+class WhisperRequest(BaseModel):
+    """Guidance for the agent on a live call, from someone listening in."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    text: str = Field(min_length=1, max_length=500)
 
 
 class ReviewDecision(BaseModel):
@@ -362,6 +372,8 @@ class DashboardStats(BaseModel):
     pending_review: int
     suppressed_total: int
     disposition_breakdown: dict[str, int]
+    # Real calls in the same 24h window, by extracted sentiment.
+    sentiment_breakdown: dict[str, int] = Field(default_factory=dict)
 
     # Model spend over the same 24h window, and what it works out to per
     # connected call — the number that tells you whether a model swap paid off.

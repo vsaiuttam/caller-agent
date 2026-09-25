@@ -125,6 +125,10 @@ class CallSession:
         self._on_event = on_event
 
         self.transcript: list[Turn] = []
+        # What broke the call, if something did. run() still hangs up and
+        # returns the transcript so far; this is how a caller tells a call
+        # that failed from one that finished.
+        self.error: Exception | None = None
         self._silence_strikes = 0
         # Set by request_end(): an operator pressed "End call".
         self._end_requested = asyncio.Event()
@@ -149,8 +153,9 @@ class CallSession:
         except asyncio.TimeoutError:
             logger.info("Call hit max duration; closing")
             await self._speak_and_record(self._phrases.goodbye_timeout)
-        except Exception:
+        except Exception as exc:
             logger.exception("Call session failed")
+            self.error = exc
         finally:
             await self._control.hangup()
             await self._emit("state", {"state": "ended"})

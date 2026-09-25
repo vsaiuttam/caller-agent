@@ -26,8 +26,10 @@ from ..followup import MISSED, followup_columns, send_followups
 from ..llm import ConversationLLM
 from ..models import CallContext, Contact as ContactModel, Disposition, ScoreCriterion
 from ..orchestrator.events import (
+    CALL_CONNECTED,
     CALL_ENDED,
     CALL_EXTRACTED,
+    CALL_FAILED,
     CALL_STARTED,
     CAMPAIGN_UPDATED,
     Event,
@@ -40,6 +42,8 @@ from ..scoring import qualify_outcome
 from ..storage import Call, CallStatus, Campaign, CampaignStatus, Contact, ContactStatus
 from ..webhooks import fire_webhook
 from ..templates import language_instruction
+from . import live_registry
+from .live_feed import CallFeed
 from .phrases import phrases_for
 from .session import CallControl, CallNotPlaced, CallSession, Listener, Speaker
 
@@ -47,7 +51,12 @@ logger = logging.getLogger(__name__)
 
 
 class Telephony(Protocol):
-    """Places the outbound leg and returns the media plumbing for it."""
+    """Places the outbound leg and returns the media plumbing for it.
+
+    May also offer `prepare_call(room_name, *, language, greeting)`, called
+    before `dial` so the line is set up for the call's language and the
+    greeting is ready by the time someone answers. See `prepare_telephony`.
+    """
 
     async def dial(
         self, *, phone_e164: str, room_name: str
@@ -85,26 +94,20 @@ class CallPipeline:
         call_id = str(uuid.uuid4())
         room_name = f"call-{call_id}"
         greeting = _greeting(contact, campaign)
-        phrases = phrases_for(campaign.language)
+        language = campaign.language or "en"
+        phrases = phrases_for(language)
+        feed = CallFeed(call_id, self._sessions)
 
-        # Synthesize the greeting while the phone rings, so the person isn't
-        # left in silence after picking up.
-        prefetch = getattr(self._telephony, "prefetch_speech", None)
-        if prefetch:
-            prefetch(greeting)
+        prepare_telephony(self._telephony, room_name, language=language, greeting=greeting)
 
         await self._create_call_row(call_id, contact, campaign, room_name)
-        await bus.publish(
-            Event(
-                CALL_STARTED,
-                {
-                    "call_id": call_id,
-                    "campaign_id": campaign.id,
-                    "contact_id": contact.id,
-                    "contact_name": contact.full_name,
-                    "phone": _mask(contact.phone_e164),
-                },
-            )
+        await feed.publish(
+            CALL_STARTED,
+            campaign_id=campaign.id,
+            contact_id=contact.id,
+            contact_name=contact.full_name,
+            phone=_mask(contact.phone_e164),
+            is_test=False,
         )
 
         transcript = []
@@ -119,13 +122,16 @@ class CallPipeline:
             )
         except Exception as exc:
             logger.info("Dial failed for %s: %s", contact.id, exc)
+            await feed.publish(CALL_FAILED, error=dial_failure_message(exc, contact.phone_e164))
             await self._finish(
                 call_id, contact, campaign, [], Disposition.NO_ANSWER, usage,
                 room_name=room_name, rang=not isinstance(exc, CallNotPlaced),
             )
             return
 
-        await self._mark_connected(call_id, sid)
+        connected_at = datetime.now(timezone.utc)
+        await self._mark_connected(call_id, sid, connected_at)
+        await feed.publish(CALL_CONNECTED)
 
         # Check AMD result — if a machine was detected, handle voicemail
         amd_result = None
@@ -154,7 +160,7 @@ class CallPipeline:
                 pass
             await self._finish(
                 call_id, contact, campaign, [], Disposition.VOICEMAIL, usage,
-                room_name=room_name, amd_result=amd_result,
+                room_name=room_name, amd_result=amd_result, connected_at=connected_at,
             )
             return
 
@@ -175,16 +181,32 @@ class CallPipeline:
                 greeting=greeting,
                 max_duration_seconds=600,
                 phrases=phrases,
+                on_event=feed.on_event,
             )
-            transcript = await session.run()
+            live_registry.register(
+                call_id,
+                session=session,
+                room_name=room_name,
+                campaign_id=campaign.id,
+                contact_name=contact.full_name,
+                is_test=False,
+            )
+            try:
+                transcript = await session.run()
+            finally:
+                live_registry.unregister(call_id)
+            if session.error is not None:
+                await feed.publish(CALL_FAILED, error=f"The conversation failed: {session.error}")
             disposition = Disposition.COMPLETED if transcript is not None and len(transcript) > 0 else Disposition.NO_ANSWER
-        except Exception:
+        except Exception as exc:
             logger.exception("Conversation failed for call %s", call_id)
             disposition = Disposition.FAILED
+            await feed.publish(CALL_FAILED, error=f"The conversation failed: {exc}")
 
+        await feed.drain()
         await self._finish(
             call_id, contact, campaign, transcript, disposition, usage,
-            room_name=room_name, amd_result=amd_result,
+            room_name=room_name, amd_result=amd_result, connected_at=connected_at,
         )
 
     # -- persistence steps -------------------------------------------------
@@ -207,14 +229,14 @@ class CallPipeline:
             )
             await session.commit()
 
-    async def _mark_connected(self, call_id: str, sid: str | None) -> None:
+    async def _mark_connected(self, call_id: str, sid: str | None, connected_at: datetime) -> None:
         async with self._sessions() as session:
             await session.execute(
                 update(Call)
                 .where(Call.id == call_id)
                 .values(
                     status=CallStatus.CONNECTED,
-                    connected_at=datetime.now(timezone.utc),
+                    connected_at=connected_at,
                     provider_call_sid=sid,
                 )
             )
@@ -223,7 +245,7 @@ class CallPipeline:
     async def _finish(
         self, call_id, contact, campaign, transcript, fallback_disposition, usage,
         *, room_name: str | None = None, amd_result: str | None = None,
-        rang: bool = True,
+        rang: bool = True, connected_at: datetime | None = None,
     ) -> None:
         now = datetime.now(timezone.utc)
         usage = usage if usage is not None else TokenUsage()
@@ -259,7 +281,14 @@ class CallPipeline:
             await session.commit()
 
         await bus.publish(
-            Event(CALL_ENDED, {"call_id": call_id, "turns": len(transcript)})
+            Event(
+                CALL_ENDED,
+                {
+                    "call_id": call_id,
+                    "turns": len(transcript),
+                    "duration_seconds": _seconds_between(connected_at, now),
+                },
+            )
         )
 
         # 2. Extract.
@@ -309,6 +338,7 @@ class CallPipeline:
                 .where(Call.id == call_id)
                 .values(
                     disposition=outcome.disposition.value,
+                    sentiment=outcome.sentiment.value,
                     summary=outcome.summary,
                     outcome=outcome.model_dump(mode="json"),
                     scores=[s.model_dump(mode="json") for s in outcome.scores],
@@ -363,6 +393,7 @@ class CallPipeline:
                     "summary": outcome.summary,
                     "needs_review": outcome.needs_human_review,
                     "cost_usd": cost,
+                    "sentiment": outcome.sentiment.value,
                 },
             )
         )
@@ -517,3 +548,35 @@ def _greeting(contact: Contact, campaign: Campaign) -> str:
 def _mask(phone: str) -> str:
     """Never put a full number on the event bus — it ends up in browser logs."""
     return phone[:-4].rstrip() + "••••" if len(phone) > 4 else "••••"
+
+
+def _seconds_between(start: datetime | None, end: datetime) -> int:
+    return max(0, int((end - start).total_seconds())) if start else 0
+
+
+# --------------------------------------------------------------------------
+# Shared with the API's test call, so both kinds of call dial the same way.
+# --------------------------------------------------------------------------
+
+
+def prepare_telephony(telephony, room_name: str, *, language: str, greeting: str) -> None:
+    """Get the line ready before dialling, while the phone rings.
+
+    `prepare_call` sets the call's language and has the greeting synthesized
+    in it; a transport without one may still prefetch the greeting. Either
+    way the person isn't left in silence after picking up.
+    """
+    if hasattr(telephony, "prepare_call"):
+        telephony.prepare_call(room_name, language=language, greeting=greeting)
+    elif hasattr(telephony, "prefetch_speech"):
+        telephony.prefetch_speech(greeting)
+
+
+def dial_failure_message(exc: Exception, phone_e164: str) -> str:
+    """Why a dial failed, in words fit for the live feed — number masked."""
+    reason = str(exc).replace(phone_e164, _mask(phone_e164)) or type(exc).__name__
+    if isinstance(exc, CallNotPlaced):
+        return f"The call could not be placed. {reason}"
+    if isinstance(exc, ConnectionError):
+        return f"The call did not connect. {reason}"
+    return f"Dialling failed. {reason}"
