@@ -560,16 +560,13 @@ def _seconds_between(start: datetime | None, end: datetime) -> int:
 
 
 def prepare_telephony(telephony, room_name: str, *, language: str, greeting: str) -> None:
-    """Get the line ready before dialling, while the phone rings.
+    """Get the line ready before dialling, for transports that can.
 
-    `prepare_call` sets the call's language and has the greeting synthesized
-    in it; a transport without one may still prefetch the greeting. Either
-    way the person isn't left in silence after picking up.
+    `prepare_call` sets the call's language and has the greeting made while
+    the phone rings, so the person isn't left in silence after picking up.
     """
     if hasattr(telephony, "prepare_call"):
         telephony.prepare_call(room_name, language=language, greeting=greeting)
-    elif hasattr(telephony, "prefetch_speech"):
-        telephony.prefetch_speech(greeting)
 
 
 def dial_failure_message(exc: Exception, phone_e164: str) -> str:
