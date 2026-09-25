@@ -194,6 +194,13 @@ async def _not_mcp():
         server.close()
 
 
+async def _get_json(http, url: str):
+    """GET a JSON body, failing with the status (not a decode error) when the route is missing."""
+    r = await http.get(url)
+    assert r.status_code == 200, (url, r.status_code, r.text[:200])
+    return r.json()
+
+
 async def _add_demo(http, name: str = "Demo CRM", **extra) -> dict:
     r = await http.post("/api/mcp/servers", json={"name": name, "url": "builtin://demo", **extra})
     assert r.status_code == 201, (r.status_code, r.text)
@@ -226,7 +233,7 @@ def test_adding_the_demo_crm_discovers_its_tools() -> None:
 
     async def scenario(http, sessions):
         created = await _add_demo(http)
-        listed = (await http.get("/api/mcp/servers")).json()
+        listed = await _get_json(http, "/api/mcp/servers")
         return created, listed
 
     created, listed = _run(scenario)
@@ -282,11 +289,11 @@ def test_unsafe_urls_are_refused_and_nothing_is_saved() -> None:
             r = await http.post("/api/mcp/servers", json={"name": "Office CRM", "url": url})
             statuses[url] = r.status_code
             details[url] = r.json().get("detail") if r.headers.get("content-type", "").startswith("application/json") else r.text
-        listed = (await http.get("/api/mcp/servers")).json()
+        listed = await _get_json(http, "/api/mcp/servers")
 
         demo = await _add_demo(http)
         patched = await http.patch(f"/api/mcp/servers/{demo['id']}", json={"url": "https://intranet.example.com/mcp"})
-        after = (await http.get("/api/mcp/servers")).json()
+        after = await _get_json(http, "/api/mcp/servers")
         return statuses, details, listed, patched.status_code, after
 
     with _dns(table):
@@ -303,7 +310,7 @@ def test_only_the_documented_transports_are_accepted() -> None:
         r = await http.post(
             "/api/mcp/servers", json={"name": "Local", "url": "builtin://demo", "transport": "stdio"}
         )
-        return r.status_code, (await http.get("/api/mcp/servers")).json()
+        return r.status_code, await _get_json(http, "/api/mcp/servers")
 
     status, listed = _run(scenario)
     assert 400 <= status < 500, status
@@ -321,7 +328,7 @@ def test_a_server_that_fails_discovery_is_kept_so_it_can_be_fixed() -> None:
             )
             assert r.status_code == 201, (r.status_code, r.text)
             broken = r.json()
-            listed = (await http.get("/api/mcp/servers")).json()
+            listed = await _get_json(http, "/api/mcp/servers")
         fixed = await http.patch(f"/api/mcp/servers/{broken['id']}", json={"url": "builtin://demo"})
         return broken, listed, fixed
 
@@ -391,9 +398,9 @@ def test_editing_a_server() -> None:
         replaced = (await http.patch(url, json={"headers": {"Authorization": "Bearer b", "X-Team": "7"}})).json()
         cleared = (await http.patch(url, json={"headers": {}})).json()
         paused = (await http.patch(url, json={"enabled": False})).json()
-        catalog_paused = (await http.get("/api/mcp/tools")).json()
+        catalog_paused = await _get_json(http, "/api/mcp/tools")
         resumed = (await http.patch(url, json={"enabled": True})).json()
-        catalog_resumed = (await http.get("/api/mcp/tools")).json()
+        catalog_resumed = await _get_json(http, "/api/mcp/tools")
         missing = await http.patch(f"/api/mcp/servers/{uuid.uuid4()}", json={"name": "Ghost"})
         return renamed, replaced, cleared, paused, catalog_paused, resumed, catalog_resumed, missing.status_code
 
@@ -433,7 +440,7 @@ def test_a_server_whose_secrets_cannot_be_opened_asks_for_them_again() -> None:
         demo = await _add_demo(http)
         with _env(SECRETS_KEY="a-different-key"):
             r = await http.post(f"/api/mcp/servers/{demo['id']}/refresh")
-            catalog = (await http.get("/api/mcp/tools")).json()
+            catalog = await _get_json(http, "/api/mcp/tools")
         return r, catalog
 
     r, catalog = _run(scenario)
@@ -479,7 +486,7 @@ def test_the_tool_catalog_lists_tools_of_enabled_healthy_servers_only() -> None:
         async with _not_mcp() as base:
             await http.post("/api/mcp/servers", json={"name": "Broken", "url": f"{base}/mcp",
                                                       "transport": "streamable_http"})
-        return demo, (await http.get("/api/mcp/tools")).json()
+        return demo, await _get_json(http, "/api/mcp/tools")
 
     demo, catalog = _run(scenario, **LOCAL_DEV)
     assert len(catalog) == 4, catalog
@@ -507,7 +514,7 @@ def test_tool_ids_are_safe_for_every_model_provider() -> None:
                 )
             )
             await db.commit()
-        catalog = (await http.get("/api/mcp/tools")).json()
+        catalog = await _get_json(http, "/api/mcp/tools")
         ids = [t["id"] for t in catalog]
         box = await CallToolbox.for_tool_ids(sessions, ids, phase="in_call")
         try:
@@ -544,9 +551,9 @@ def test_removing_a_server_removes_its_tools_from_campaigns() -> None:
         campaign_id = r.json()["id"]
         deleted = await http.delete(f"/api/mcp/servers/{a['id']}")
         again = await http.delete(f"/api/mcp/servers/{a['id']}")
-        campaign = (await http.get(f"/api/campaigns/{campaign_id}")).json()
-        servers = (await http.get("/api/mcp/servers")).json()
-        catalog = (await http.get("/api/mcp/tools")).json()
+        campaign = await _get_json(http, f"/api/campaigns/{campaign_id}")
+        servers = await _get_json(http, "/api/mcp/servers")
+        catalog = await _get_json(http, "/api/mcp/tools")
         return deleted.status_code, again.status_code, campaign, servers, catalog, a, b_ids
 
     deleted, again, campaign, servers, catalog, a, b_ids = _run(scenario)
@@ -580,7 +587,7 @@ def test_campaigns_carry_their_tool_choices() -> None:
         )
         assert created.status_code == 201, (created.status_code, created.text)
         campaign_id = created.json()["id"]
-        fetched = (await http.get(f"/api/campaigns/{campaign_id}")).json()
+        fetched = await _get_json(http, f"/api/campaigns/{campaign_id}")
         patched = await http.patch(
             f"/api/campaigns/{campaign_id}",
             json={"mcp_tools": [ids["check_availability"], ids["lookup_customer"]], "mcp_post_call_instructions": ""},
@@ -617,8 +624,8 @@ def test_unknown_tool_ids_are_refused_on_campaigns() -> None:
         patched = await http.patch(
             f"/api/campaigns/{campaign_id}", json={"mcp_post_call_tools": [ids["create_ticket"], "demo_crm__nope"]}
         )
-        after = (await http.get(f"/api/campaigns/{campaign_id}")).json()
-        listed = (await http.get("/api/campaigns")).json()
+        after = await _get_json(http, f"/api/campaigns/{campaign_id}")
+        listed = await _get_json(http, "/api/campaigns")
         return created.status_code, patched.status_code, after, listed
 
     created, patched, after, listed = _run(scenario)
@@ -633,7 +640,7 @@ def test_campaigns_saved_before_tools_existed_read_as_having_none() -> None:
 
     async def scenario(http, sessions):
         await _seed_campaign(sessions, mcp_tools=None, mcp_post_call_tools=None)
-        return (await http.get("/api/campaigns/camp-1")).json()
+        return await _get_json(http, "/api/campaigns/camp-1")
 
     body = _run(scenario)
     assert body["mcp_tools"] == [] and body["mcp_post_call_tools"] == [], body
@@ -661,8 +668,8 @@ def test_call_detail_includes_its_tool_calls() -> None:
             db.add(storage.Call(id="call-plain", contact_id="ct-1", campaign_id="camp-1",
                                 status=storage.CallStatus.COMPLETED))
             await db.commit()
-        with_tools = (await http.get("/api/calls/call-tools")).json()
-        without = (await http.get("/api/calls/call-plain")).json()
+        with_tools = await _get_json(http, "/api/calls/call-tools")
+        without = await _get_json(http, "/api/calls/call-plain")
         return with_tools, without
 
     with_tools, without = _run(scenario)
@@ -677,11 +684,11 @@ def test_health_reports_mcp_readiness() -> None:
         demo = await _add_demo(http)
         paused = await _add_demo(http, name="Paused CRM")
         await http.patch(f"/api/mcp/servers/{paused['id']}", json={"enabled": False})
-        readings = {"anthropic, sealed": (await http.get("/api/health")).json()}
+        readings = {"anthropic, sealed": await _get_json(http, "/api/health")}
         with _env(MODEL_PROVIDER="sarvam", SARVAM_API_KEY="test-sarvam-key", SECRETS_KEY=None, AUTH_SECRET=None):
-            readings["sarvam, unsealed"] = (await http.get("/api/health")).json()
+            readings["sarvam, unsealed"] = await _get_json(http, "/api/health")
         with _env(MODEL_PROVIDER="nvidia", NVIDIA_API_KEY=None):
-            readings["no provider"] = (await http.get("/api/health")).json()
+            readings["no provider"] = await _get_json(http, "/api/health")
         return demo, readings
 
     _demo, readings = _run(scenario)
