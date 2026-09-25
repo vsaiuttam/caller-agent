@@ -236,6 +236,9 @@ class Call(Base):
     # Extraction results. Denormalised onto the call so the review queue and
     # dashboards can filter without parsing JSON.
     disposition: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    # positive | neutral | negative, from extraction. Null until extracted,
+    # and on every call made before sentiment existed.
+    sentiment: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     outcome: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     needs_human_review: Mapped[bool] = mapped_column(default=False, index=True)
@@ -347,7 +350,8 @@ def _add_missing_columns(conn) -> None:
     *columns*, so a schema change against an existing dev database fails at
     query time with a confusing 'no such column'. This closes that gap for the
     only migration shape that is safe to run unattended: additive, nullable or
-    defaulted, never a drop or a type change.
+    defaulted, never a drop or a type change. Indexes declared on an added
+    column are created along with it.
 
     Anything beyond that — renames, type changes, backfills — needs Alembic
     and a human. This is not a substitute for one; it is what keeps an
@@ -361,6 +365,7 @@ def _add_missing_columns(conn) -> None:
             continue  # create_all just made it, with every column
 
         present = {c["name"] for c in inspector.get_columns(table.name)}
+        added: set[str] = set()
         for column in table.columns:
             if column.name in present:
                 continue
@@ -372,11 +377,18 @@ def _add_missing_columns(conn) -> None:
                 ddl += f" DEFAULT {literal}"
 
             conn.execute(text(ddl))
+            added.add(column.name)
             if literal is not None:
                 conn.execute(
                     text(f'UPDATE "{table.name}" SET "{column.name}" = {literal} '
                          f'WHERE "{column.name}" IS NULL')
                 )
+
+        # create_all skipped this table, so it skipped the new columns' indexes
+        # too — and an index is exactly what a filterable column is added for.
+        for index in table.indexes:
+            if any(c.name in added for c in index.columns):
+                index.create(conn, checkfirst=True)
 
 
 def _default_literal(column) -> str | None:

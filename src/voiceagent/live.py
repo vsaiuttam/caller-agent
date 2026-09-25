@@ -81,6 +81,10 @@ class Transport(Protocol):
 class LiveCall:
     """One call between a person at a microphone and the real agent."""
 
+    # Whether the model ended its latest, uninterrupted turn with the end-call
+    # marker. A class default so the flag exists before the first turn.
+    _model_ended = False
+
     def __init__(
         self,
         client,
@@ -273,6 +277,7 @@ class LiveCall:
             with contextlib.suppress(Exception):
                 await generation.aclose()
 
+        self._model_ended = getattr(self._llm, "end_requested", False) and not cut_short
         self._pending_ms = (
             int((first_chunk_at - started) * 1000) if first_chunk_at else None,
             int((time.perf_counter() - started) * 1000),
@@ -314,9 +319,12 @@ class LiveCall:
     def said_goodbye(self) -> bool:
         """Whether the last confirmed agent turn closed the call.
 
-        Same heuristic a real call uses, so a mic test ends where the real
-        thing would rather than on a rule invented for the browser.
+        Same rule a real call uses — the model's end marker, backed by the
+        closing heuristic — so a mic test ends where the real thing would
+        rather than on a rule invented for the browser.
         """
+        if self._model_ended:
+            return True
         for turn in reversed(self.transcript):
             if turn.role == "assistant":
                 return _is_closing(turn.text)

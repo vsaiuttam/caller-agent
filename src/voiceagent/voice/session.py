@@ -11,6 +11,12 @@ has played. If we record the generated text, the model believes it delivered
 information the person never heard and will not repeat it — so the call
 proceeds on a false shared understanding. We therefore record only what the
 speaker confirms was played.
+
+Ending is the other half. The model ends the call by writing an end marker
+after its farewell (see `llm.EndMarkerFilter`); a phrase heuristic backs it
+up; and every line the session says on its own — silence check-ins, the
+timeout goodbye — comes from the call's `CallPhrases`, so a Hindi call never
+suddenly apologises in English.
 """
 
 from __future__ import annotations
@@ -18,14 +24,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator
+import unicodedata
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Protocol
 
 from ..llm import ConversationLLM
 from ..models import Turn
+from .phrases import CallPhrases, phrases_for
 
 logger = logging.getLogger(__name__)
+
+# ("turn", {...}) and ("state", {...}) — see CallSession.
+EventCallback = Callable[[str, dict], Awaitable[None]]
 
 
 # --------------------------------------------------------------------------
@@ -75,6 +86,21 @@ class CallNotPlaced(ConnectionError):
 
 
 class CallSession:
+    """One live call.
+
+    `on_event`, when given, is told what happens as it happens:
+
+      ("turn",  {"role", "text", "latency_ms", "at"})  after every recorded turn
+      ("state", {"state": s})  s = "speaking" (agent turn handed to the
+                               speaker), "listening" (handed over; waiting for
+                               the person), "thinking" (the person's utterance
+                               arrived), "ended" (always last)
+
+    It is awaited inline so events arrive in order, and anything it raises is
+    logged and swallowed: a broken observer must never break a call. Keep it
+    fast — it sits between the person finishing and the reply starting.
+    """
+
     def __init__(
         self,
         llm: ConversationLLM,
@@ -85,6 +111,8 @@ class CallSession:
         greeting: str,
         max_duration_seconds: int = 600,
         silence_timeout_seconds: float = 12.0,
+        phrases: CallPhrases | None = None,
+        on_event: EventCallback | None = None,
     ) -> None:
         self._llm = llm
         self._listener = listener
@@ -93,9 +121,30 @@ class CallSession:
         self._greeting = greeting
         self._max_duration = max_duration_seconds
         self._silence_timeout = silence_timeout_seconds
+        self._phrases = phrases or phrases_for("en")
+        self._on_event = on_event
 
         self.transcript: list[Turn] = []
+        # What broke the call, if something did. run() still hangs up and
+        # returns the transcript so far; this is how a caller tells a call
+        # that failed from one that finished.
+        self.error: Exception | None = None
         self._silence_strikes = 0
+        # Set by request_end(): an operator pressed "End call".
+        self._end_requested = asyncio.Event()
+
+    @property
+    def llm(self) -> ConversationLLM:
+        return self._llm
+
+    def request_end(self) -> None:
+        """Ask the call to wrap up politely.
+
+        Waiting for the person: say the default goodbye and end. Mid-reply:
+        end as soon as that reply has been handed over — cutting the agent
+        off mid-sentence would be the rudest possible way to end a call.
+        """
+        self._end_requested.set()
 
     async def run(self) -> list[Turn]:
         """Drive the call to completion. Returns the transcript."""
@@ -103,13 +152,13 @@ class CallSession:
             await asyncio.wait_for(self._conversation(), timeout=self._max_duration)
         except asyncio.TimeoutError:
             logger.info("Call hit max duration; closing")
-            await self._speak_and_record(
-                "I've taken enough of your time — thanks very much, and goodbye."
-            )
-        except Exception:
+            await self._speak_and_record(self._phrases.goodbye_timeout)
+        except Exception as exc:
             logger.exception("Call session failed")
+            self.error = exc
         finally:
             await self._control.hangup()
+            await self._emit("state", {"state": "ended"})
 
         return self.transcript
 
@@ -124,6 +173,7 @@ class CallSession:
         # mid-await finalises it: the next read raises StopAsyncIteration and
         # the first long pause gets taken for a hang-up.
         pending: asyncio.Task | None = None
+        end_requested = asyncio.create_task(self._end_requested.wait())
 
         try:
             while True:
@@ -134,12 +184,20 @@ class CallSession:
                 # when its reply was handed over. Webhook transports queue a
                 # whole turn at once and play it for seconds afterwards.
                 done, _ = await asyncio.wait(
-                    {pending}, timeout=self._silence_timeout + self._playback_remaining()
+                    {pending, end_requested},
+                    timeout=self._silence_timeout + self._playback_remaining(),
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
                 if not done:
                     if await self._handle_silence():
                         return
                     continue
+
+                if pending not in done:
+                    # Only the operator's request woke us: nobody is talking,
+                    # so say goodbye and go.
+                    await self._speak_and_record(self._phrases.goodbye_default)
+                    return
 
                 task, pending = pending, None
                 try:
@@ -153,12 +211,14 @@ class CallSession:
                     continue
 
                 self._silence_strikes = 0
-                self._record("user", user_text)
+                await self._set_state("thinking")
+                await self._record("user", user_text)
 
                 finished = await self._respond()
                 if finished:
                     return
         finally:
+            end_requested.cancel()
             if pending is not None:
                 pending.cancel()
 
@@ -171,11 +231,9 @@ class CallSession:
         """Return True when we've given up and the call should end."""
         self._silence_strikes += 1
         if self._silence_strikes == 1:
-            await self._speak_and_record("Sorry — are you still there?")
+            await self._speak_and_record(self._phrases.still_there)
             return False
-        await self._speak_and_record(
-            "I'll let you go for now. Thanks for your time, and goodbye."
-        )
+        await self._speak_and_record(self._phrases.goodbye_silence)
         return True
 
     # -- speaking ----------------------------------------------------------
@@ -183,7 +241,10 @@ class CallSession:
     async def _respond(self) -> bool:
         """Generate and speak one agent turn.
 
-        Returns True if the agent signalled the call is over.
+        Returns True if the call is over: the model asked to end it (or said
+        a recognisable goodbye), or an operator asked while it was talking.
+        An interrupted reply never ends the call — whatever the person said
+        over it still deserves an answer.
         """
         spoken: list[str] = []
         interrupted = False
@@ -201,6 +262,7 @@ class CallSession:
             async for chunk in generation:
                 if latency_ms is None and not buffered:
                     latency_ms = _elapsed_ms(started)
+                    await self._set_state("speaking")
                 speaking = asyncio.create_task(self._speaker.say(chunk))
                 done, _ = await asyncio.wait(
                     {speaking, barge_in}, return_when=asyncio.FIRST_COMPLETED
@@ -222,29 +284,43 @@ class CallSession:
             barge_in.cancel()
             await generation.aclose()
 
+        text = " ".join(s.strip() for s in spoken if s.strip())
+
         # Flush buffered audio for webhook-based transports (Twilio).
         # Streaming transports (LiveKit) play each chunk as it arrives and
         # don't implement flush().
         if buffered:
+            if text:
+                await self._set_state("speaking")
             await self._speaker.flush()
             latency_ms = _elapsed_ms(started)
 
-        text = " ".join(s.strip() for s in spoken if s.strip())
         if text:
-            self._record("assistant", text, latency_ms=latency_ms)
+            await self._record("assistant", text, latency_ms=latency_ms)
             logger.info("Agent reply ready in %s ms", latency_ms)
+        await self._set_state("listening")
 
         if interrupted:
             return False
-        return _is_closing(text)
+        ending = (
+            getattr(self._llm, "end_requested", False)
+            or _is_closing(text)
+            or self._end_requested.is_set()
+        )
+        if ending and not text:
+            # Asked to end but said nothing: never hang up on silence.
+            await self._speak_and_record(self._phrases.goodbye_default)
+        return ending
 
     async def _speak_and_record(self, text: str) -> None:
+        await self._set_state("speaking")
         await self._speaker.say(text)
         if hasattr(self._speaker, "flush"):
             await self._speaker.flush()
-        self._record("assistant", text)
+        await self._record("assistant", text)
+        await self._set_state("listening")
 
-    def _record(self, role: str, text: str, *, latency_ms: int | None = None) -> None:
+    async def _record(self, role: str, text: str, *, latency_ms: int | None = None) -> None:
         turn = Turn(
             role=role,
             text=text,
@@ -253,6 +329,28 @@ class CallSession:
         )
         self.transcript.append(turn)
         self._llm.record(turn)
+        await self._emit(
+            "turn",
+            {
+                "role": role,
+                "text": text,
+                "latency_ms": latency_ms,
+                "at": turn.started_at.isoformat(),
+            },
+        )
+
+    # -- observer ----------------------------------------------------------
+
+    async def _set_state(self, state: str) -> None:
+        await self._emit("state", {"state": state})
+
+    async def _emit(self, kind: str, payload: dict) -> None:
+        if self._on_event is None:
+            return
+        try:
+            await self._on_event(kind, payload)
+        except Exception:
+            logger.exception("Call event observer failed on %r; call continues", kind)
 
 
 async def _next_utterance(utterances: AsyncIterator[str]) -> str:
@@ -265,20 +363,36 @@ def _elapsed_ms(since: float) -> int:
     return int((time.perf_counter() - since) * 1000)
 
 
-# Heuristic for "the agent just said goodbye". Cheap and good enough — the
-# alternative is a model call per turn purely to ask whether the call is over,
-# which is real latency and cost for a decision this shallow. If it misfires,
-# the silence timeout closes the call a few seconds later anyway.
-_CLOSING_MARKERS = (
-    "goodbye",
-    "bye for now",
-    "take care",
-    "have a great day",
-    "have a good day",
-    "thanks for your time",
+# Backstop for "the agent just said goodbye", for the turns where the model
+# forgot the end marker. Cheap and good enough — the alternative is a model
+# call per turn purely to ask whether the call is over, which is real latency
+# and cost for a decision this shallow.
+#
+# Farewells only, never thank-yous: "dhanyavaad" or "thank you" mid-call means
+# thanks, not goodbye, and ending on it would hang up on people. Hindi's
+# "नमस्ते!" closing is also a greeting, so it is left to the marker too.
+_CLOSING_MARKERS = tuple(
+    unicodedata.normalize("NFC", marker)
+    for marker in (
+        "goodbye",
+        "bye for now",
+        "take care",
+        "have a great day",
+        "have a good day",
+        "thanks for your time",
+        "alvida",
+        "अलविदा",
+        "khuda hafiz",
+        "ख़ुदा हाफ़िज़",
+        "خدا حافظ",
+        "phir milenge",
+        "फिर मिलेंगे",
+    )
 )
 
 
 def _is_closing(text: str) -> bool:
-    lowered = text.lower()
+    # NFC, because Devanagari nukta letters (ख़, फ़) arrive both precomposed
+    # and as letter + nukta, and the two must compare equal.
+    lowered = unicodedata.normalize("NFC", text).lower()
     return any(marker in lowered for marker in _CLOSING_MARKERS)

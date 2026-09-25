@@ -114,6 +114,14 @@ class Disposition(str, Enum):
     FAILED = "failed"  # technical failure mid-call
 
 
+class Sentiment(str, Enum):
+    """How the person came across on the call, overall."""
+
+    POSITIVE = "positive"
+    NEUTRAL = "neutral"
+    NEGATIVE = "negative"
+
+
 class CollectedField(BaseModel):
     """One piece of information gathered during the call."""
 
@@ -196,6 +204,14 @@ class CallOutcome(BaseModel):
     needs_human_review: bool
     review_reason: str = Field(
         default="", description="Why review is needed. Empty when needs_human_review is false."
+    )
+    # Defaulted so outcomes stored before sentiment existed still load.
+    sentiment: Sentiment = Field(
+        default=Sentiment.NEUTRAL,
+        description="The person's overall attitude on the call: positive, neutral or negative.",
+    )
+    sentiment_reason: str = Field(
+        default="", description="One short phrase from the call that shows the sentiment."
     )
 
     # Note there is no `qualification` field here. This model is the schema
