@@ -139,7 +139,7 @@ export default function PhoneTest() {
         {health && modelReady && !telephonyReady && (
           <Callout tone="warning" title="Real calls need a phone carrier">
             The server is in <span className="font-medium capitalize">{health.telephony_mode}</span> mode. Set{" "}
-            <code className="tnum text-2xs">TELEPHONY=twilio</code> (or <code className="tnum text-2xs">telnyx</code>) with its
+            <code className="font-mono text-2xs">TELEPHONY=twilio</code> (or <code className="font-mono text-2xs">telnyx</code>) with its
             credentials and restart. Simulated calls and the browser mic work without it.
           </Callout>
         )}

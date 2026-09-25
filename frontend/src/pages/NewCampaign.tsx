@@ -248,7 +248,7 @@ export default function NewCampaign() {
               </Field>
 
               <Field label="Opening line" hint="Placeholders: {first_name}, {full_name}, {campaign_name}">
-                <Textarea className="tnum min-h-16 text-xs" value={form.greeting} onChange={(e) => set("greeting", e.target.value)} />
+                <Textarea className="font-mono min-h-16 text-xs" value={form.greeting} onChange={(e) => set("greeting", e.target.value)} />
               </Field>
 
               <div className="rounded-lg border border-line bg-subtle/50 px-4 py-3">
@@ -265,7 +265,7 @@ export default function NewCampaign() {
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Field label="Information to collect" hint="One per line.">
                   <Textarea
-                    className="tnum min-h-28 text-xs"
+                    className="font-mono min-h-28 text-xs"
                     value={fieldsText}
                     onChange={(e) => setFieldsText(e.target.value)}
                     placeholder={"Whether the appointment still works\nPreferred day and time if rescheduling\nBest contact email"}
@@ -273,7 +273,7 @@ export default function NewCampaign() {
                 </Field>
                 <Field label="Guardrails" hint="Things the agent must never do. One per line.">
                   <Textarea
-                    className="tnum min-h-28 text-xs"
+                    className="font-mono min-h-28 text-xs"
                     value={constraintsText}
                     onChange={(e) => setConstraintsText(e.target.value)}
                     placeholder={"Never quote a price\nDo not offer refunds or credits\nDo not discuss other customers"}
@@ -337,7 +337,7 @@ export default function NewCampaign() {
                   …or paste rows
                 </summary>
                 <Textarea
-                  className="tnum mt-2 min-h-24 text-xs"
+                  className="font-mono mt-2 min-h-24 text-xs"
                   value={pasted}
                   onChange={(e) => setPasted(e.target.value)}
                   onBlur={() => void ingestPasted(pasted)}

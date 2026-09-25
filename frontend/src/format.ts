@@ -10,10 +10,6 @@ export function formatDuration(seconds: number | null | undefined): string {
   return `${h ? `${h}:` : ""}${mm}:${String(s).padStart(2, "0")}`;
 }
 
-export function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
 export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString([], {
     month: "short",
@@ -54,6 +50,3 @@ export function formatOffset(iso: string, startIso: string): string {
   const m = Math.floor(s / 60);
   return `${String(m).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 }
-
-export const titleCase = (value: string) =>
-  value.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());

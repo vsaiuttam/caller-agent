@@ -348,7 +348,7 @@ function ConversationEditor({ campaign, onSaved }: { campaign: Campaign; onSaved
         </Field>
 
         <Field label="Opening line" hint="Placeholders: {first_name}, {full_name}, {campaign_name}">
-          <Textarea className="tnum min-h-16 text-xs" value={greeting} onChange={(e) => setGreeting(e.target.value)} />
+          <Textarea className="font-mono min-h-16 text-xs" value={greeting} onChange={(e) => setGreeting(e.target.value)} />
         </Field>
 
         <div className="rounded-lg border border-line bg-subtle/50 px-4 py-3">
@@ -358,10 +358,10 @@ function ConversationEditor({ campaign, onSaved }: { campaign: Campaign; onSaved
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Information to collect" hint="One per line.">
-            <Textarea className="tnum min-h-24 text-xs" value={fieldsText} onChange={(e) => setFieldsText(e.target.value)} />
+            <Textarea className="font-mono min-h-24 text-xs" value={fieldsText} onChange={(e) => setFieldsText(e.target.value)} />
           </Field>
           <Field label="Guardrails" hint="Things the agent must never do. One per line.">
-            <Textarea className="tnum min-h-24 text-xs" value={constraintsText} onChange={(e) => setConstraintsText(e.target.value)} />
+            <Textarea className="font-mono min-h-24 text-xs" value={constraintsText} onChange={(e) => setConstraintsText(e.target.value)} />
           </Field>
         </div>
 

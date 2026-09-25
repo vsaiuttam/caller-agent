@@ -11,7 +11,6 @@ import type { Transition } from "framer-motion";
 export const DUR = { fast: 0.15, base: 0.2, slow: 0.3 } as const;
 
 export const EASE_OUT: [number, number, number, number] = [0.22, 1, 0.36, 1];
-export const EASE_IN_OUT: [number, number, number, number] = [0.65, 0, 0.35, 1];
 
 export const T: Record<"fast" | "base" | "slow", Transition> = {
   fast: { duration: DUR.fast, ease: EASE_OUT },

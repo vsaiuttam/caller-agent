@@ -30,7 +30,7 @@
   /* Text */
   --color-ink: #1c1a17;
   --color-ink-secondary: #55514a;
-  --color-ink-muted: #736e65;
+  --color-ink-muted: #6b665d;
 
   /* Brand — saffron. `on-brand` is the text colour that sits on it. */
   --color-brand: #c2410c;
@@ -38,8 +38,8 @@
   --color-on-brand: #ffffff;
 
   /* Status. Always shipped with a label or icon, never colour alone. */
-  --color-good: #15803d;
-  --color-warning: #a16207;
+  --color-good: #13723a;
+  --color-warning: #8a5300;
   --color-serious: #be123c;
   --color-critical: #b91c1c;
   --color-on-critical: #ffffff;
@@ -105,7 +105,7 @@
 
   --color-ink: #f2efea;
   --color-ink-secondary: #bab4aa;
-  --color-ink-muted: #8c867c;
+  --color-ink-muted: #968f85;
 
   --color-brand: #fb8a3c;
   --color-brand-hover: #fda05e;
@@ -140,11 +140,12 @@
 @utility elev-2 { box-shadow: var(--elev-2); }
 @utility elev-3 { box-shadow: var(--elev-3); }
 
-/* Tabular numbers in the mono face — for anything that ticks or aligns. */
+/* Tabular figures — for anything that ticks or aligns (timers, money,
+   counts, phone numbers). Geist's own tabular digits, not the mono face:
+   code and env vars use `font-mono`. */
 @utility tnum {
-  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
+  font-feature-settings: "tnum", "ss01";
 }
 
 @utility scrollbar-none {

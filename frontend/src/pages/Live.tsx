@@ -69,7 +69,7 @@ export default function Live() {
 
       {!supported && (
         <Callout tone="info" title="This server doesn't report live calls yet" className="mb-5">
-          Live calls need the v2 backend (<code className="tnum text-2xs">GET /api/calls/live</code>). Test calls placed from
+          Live calls need the v2 backend (<code className="font-mono text-2xs">GET /api/calls/live</code>). Test calls placed from
           the Test lab still stream in their own console.
         </Callout>
       )}

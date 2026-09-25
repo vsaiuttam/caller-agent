@@ -1,6 +1,6 @@
 /**
  * Inline SVG icons. Hand-rolled rather than pulling an icon package — the app
- * needs a dozen glyphs, and a dependency would ship hundreds.
+ * needs a few dozen glyphs, and a dependency would ship hundreds.
  *
  * All icons inherit `currentColor` and size from the `size` prop so they can
  * sit inline with text without alignment fiddling.
@@ -215,13 +215,6 @@ export const IconClose = ({ size = 16, className }: IconProps) => (
   </svg>
 );
 
-export const IconInbox = ({ size = 32, className }: IconProps) => (
-  <svg {...base(size)} className={className} strokeWidth={1.25}>
-    <path d="M3.5 13.5h4l1.5 3h6l1.5-3h4" />
-    <path d="M5.5 5h13l2 8.5v4a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-4L5.5 5Z" />
-  </svg>
-);
-
 export const IconSun = ({ size = 18, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <circle cx="12" cy="12" r="4" />
@@ -401,13 +394,6 @@ export const IconHelp = ({ size = 16, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <circle cx="12" cy="12" r="8.5" />
     <path d="M9.6 9.4a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.7M12 16.8h.01" />
-  </svg>
-);
-
-export const IconFile = ({ size = 16, className }: IconProps) => (
-  <svg {...base(size)} className={className}>
-    <path d="M13.5 3.5H7A2.5 2.5 0 0 0 4.5 6v12A2.5 2.5 0 0 0 7 20.5h10a2.5 2.5 0 0 0 2.5-2.5V9.5l-6-6Z" />
-    <path d="M13.5 3.5v6h6" />
   </svg>
 );
 

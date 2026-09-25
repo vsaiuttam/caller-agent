@@ -227,7 +227,7 @@ export default function Settings() {
                         </div>
                         <p className="mt-0.5 text-xs leading-relaxed text-ink-secondary">{item.description}</p>
                         {!live && (
-                          <p className="tnum mt-2 rounded-md border border-line bg-subtle/60 px-3 py-2 text-2xs leading-relaxed text-ink-secondary">
+                          <p className="mt-2 rounded-md font-mono border border-line bg-subtle/60 px-3 py-2 text-2xs leading-relaxed text-ink-secondary">
                             {item.configHint}
                           </p>
                         )}

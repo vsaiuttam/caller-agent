@@ -15,7 +15,7 @@ export default function NotFound() {
         <p className="tnum mt-6 text-sm font-medium text-brand">404</p>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight text-ink">We couldn't find that page</h1>
         <p className="mt-2 max-w-md text-sm leading-relaxed text-ink-secondary">
-          Nothing lives at <code className="tnum rounded bg-subtle px-1.5 py-0.5 text-xs">{location.pathname}</code>.
+          Nothing lives at <code className="font-mono rounded bg-subtle px-1.5 py-0.5 text-xs">{location.pathname}</code>.
           It may have moved in the redesign — the command palette ({MOD_KEY} K) can find it.
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-2">

@@ -126,9 +126,11 @@ export function AppShell({ children }: { children: ReactNode }) {
               {collapsed ? (
                 <LogoMark size={26} />
               ) : (
-                <span className="flex items-baseline gap-2">
+                <span className="flex items-center gap-2">
                   <Logo size={26} />
-                  <span className="text-2xs text-ink-muted" lang="hi">{BRAND.nativeName}</span>
+                  <span className="mt-0.5 text-xs text-ink-muted" lang="hi">
+                    {BRAND.nativeName}
+                  </span>
                 </span>
               )}
             </Link>
@@ -522,7 +524,7 @@ function AuthBanner() {
       <IconLock size={14} className="shrink-0 text-warning" />
       <p className="min-w-0 flex-1">
         <span className="font-medium text-ink">Anyone with this link can place calls</span> — set{" "}
-        <code className="tnum rounded bg-subtle px-1 py-0.5 text-2xs">ADMIN_PASSWORD</code> to lock it.
+        <code className="font-mono rounded bg-subtle px-1 py-0.5 text-2xs">ADMIN_PASSWORD</code> to lock it.
       </p>
       <button
         type="button"

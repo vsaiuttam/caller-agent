@@ -462,7 +462,9 @@ function CallDetailPanel({
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <SentimentBadge value={data.sentiment ?? data.outcome?.sentiment} title={data.outcome?.sentiment_reason} />
-            <ScoreBadge score={data.score} band={data.qualification_band} />
+            {data.qualification_band && data.qualification_band !== "not_assessed" && (
+              <ScoreBadge score={data.score} band={data.qualification_band} />
+            )}
             <DispositionBadge value={data.disposition} />
           </div>
         </div>
@@ -532,7 +534,10 @@ function CallDetailPanel({
                     ? `Calendar event created (${data.dispatch_result.calendar_event_id})`
                     : "No calendar event"}
                 </li>
-                <li>{data.dispatch_result.fields_written} fields written to records</li>
+                <li>
+                  {data.dispatch_result.fields_written} {data.dispatch_result.fields_written === 1 ? "field" : "fields"} written to
+                  records
+                </li>
                 {data.dispatch_result.errors.map((err, i) => (
                   <li key={i} className="text-critical">
                     {err}

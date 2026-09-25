@@ -4,8 +4,8 @@
  *
  *   Layout      Page, PageHeader, Card, CardHeader, Section
  *   Actions     Button, ButtonLink, IconButton
- *   Inputs      Field, Input, Textarea, Select, Switch, Checkbox, Segmented, Tabs
- *   Status      Badge (+ Disposition/Score/Status/Followup/Sentiment), LiveDot, DeltaBadge
+ *   Inputs      Field, Input, Textarea, Select, Switch, Segmented, Tabs
+ *   Status      Badge (+ Disposition/Score/Status/Followup/Sentiment/Test), DeltaBadge
  *   Feedback    Callout, ErrorNote, EmptyState, Skeleton, Spinner, Stat, Kbd
  *   Overlays    Dialog, Drawer, Popover, Tooltip   (./overlay)
  *   Toasts      toast, Toaster                     (./toast)
@@ -465,44 +465,6 @@ export function Switch({
   );
 }
 
-export function Checkbox({
-  checked,
-  onChange,
-  label,
-  description,
-  disabled = false,
-  className = "",
-}: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  label: ReactNode;
-  description?: ReactNode;
-  disabled?: boolean;
-  className?: string;
-}) {
-  return (
-    <label className={cx("flex cursor-pointer items-start gap-2.5", disabled && "cursor-not-allowed opacity-60", className)}>
-      <span className="relative mt-0.5 flex h-4 w-4 shrink-0">
-        <input
-          type="checkbox"
-          checked={checked}
-          disabled={disabled}
-          onChange={(e) => onChange(e.target.checked)}
-          className="peer h-4 w-4 cursor-pointer appearance-none rounded border border-line-strong bg-surface transition-colors checked:border-brand checked:bg-brand focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand disabled:cursor-not-allowed"
-        />
-        <IconCheck
-          size={12}
-          className="pointer-events-none absolute left-0.5 top-0.5 text-on-brand opacity-0 transition-opacity peer-checked:opacity-100"
-        />
-      </span>
-      <span className="min-w-0 text-sm">
-        <span className="font-medium text-ink">{label}</span>
-        {description && <span className="mt-0.5 block text-xs leading-relaxed text-ink-muted">{description}</span>}
-      </span>
-    </label>
-  );
-}
-
 /** Arrow-key navigation shared by radio groups and tab lists. */
 function rovingKeys<T>(event: KeyboardEvent, values: T[], current: T, select: (value: T) => void) {
   const index = values.indexOf(current);
@@ -767,16 +729,6 @@ export function TestBadge() {
     <Badge tone="neutral" icon={<IconFlask size={10} />} title="Test call — excluded from every metric">
       Test
     </Badge>
-  );
-}
-
-export function LiveDot({ tone = "good" }: { tone?: "good" | "brand" | "muted" }) {
-  const colour = tone === "good" ? "bg-good" : tone === "brand" ? "bg-brand" : "bg-ink-muted/50";
-  return (
-    <span className="relative inline-flex h-2 w-2 shrink-0">
-      {tone !== "muted" && <span className={cx("live-dot absolute inset-0 rounded-full opacity-60", colour)} />}
-      <span className={cx("relative inline-flex h-2 w-2 rounded-full", colour)} />
-    </span>
   );
 }
 

@@ -75,10 +75,19 @@ export function VolumeChart({ data }: { data: HourBucket[] }) {
         <path d={areaPath} fill="url(#volume-fill)" />
         <path d={linePath} fill="none" stroke="var(--color-brand)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
 
-        {/* Hour labels every 4th bucket, so they never collide */}
+        {/* Hour labels every 4th bucket, so they never collide; the edge
+            labels anchor inward so they aren't clipped. */}
         {data.map((d, i) =>
           i % 4 === 0 ? (
-            <text key={d.hour} x={x(i)} y={AREA_H - 8} textAnchor="middle" className="tnum" fontSize="10" fill="var(--color-ink-muted)">
+            <text
+              key={d.hour}
+              x={x(i)}
+              y={AREA_H - 8}
+              textAnchor={i === 0 ? "start" : i >= data.length - 2 ? "end" : "middle"}
+              className="tnum"
+              fontSize="10"
+              fill="var(--color-ink-muted)"
+            >
               {d.label}
             </text>
           ) : null,

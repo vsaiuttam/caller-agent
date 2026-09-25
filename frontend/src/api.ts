@@ -654,9 +654,32 @@ export interface CallFilters {
   sort?: "recent" | "score";
 }
 
+/**
+ * Fill in anything missing from a health payload. The pill and the
+ * onboarding checklist read it on every screen, so a proxy pointed at the
+ * wrong server (or an older backend) must degrade to "not configured"
+ * rather than take the shell down.
+ */
+function normaliseHealth(raw: Partial<Health>): Health {
+  return {
+    ok: raw.ok ?? false,
+    checks: raw.checks ?? {},
+    live: raw.live ?? [],
+    mocked: raw.mocked ?? [],
+    can_place_calls: raw.can_place_calls ?? false,
+    can_run_simulations: raw.can_run_simulations ?? false,
+    provider: raw.provider ?? "",
+    provider_label: raw.provider_label ?? "",
+    providers_configured: raw.providers_configured ?? [],
+    telephony_mode: raw.telephony_mode ?? "unknown",
+    note: raw.note ?? "",
+    auth_enabled: raw.auth_enabled,
+  };
+}
+
 export const api = {
   stats: () => request<DashboardStats>("/api/stats"),
-  health: () => request<Health>("/api/health"),
+  health: async () => normaliseHealth(await request<Partial<Health>>("/api/health")),
 
   authStatus: () => request<AuthStatus>("/api/auth/status", undefined, { reportUnauthorized: false }),
   /** 401 here means a wrong password, not an expired session. */
@@ -767,7 +790,7 @@ export const api = {
     request<Suppression>("/api/suppressions", post({ phone_e164, reason })),
 };
 
-export function saveBlob(blob: Blob, filename: string) {
+function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

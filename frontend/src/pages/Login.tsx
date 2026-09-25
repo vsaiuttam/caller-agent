@@ -124,7 +124,7 @@ export default function Login() {
           </form>
 
           <p className="mt-8 text-center text-xs leading-relaxed text-ink-muted">
-            The password is the server's <code className="tnum">ADMIN_PASSWORD</code>. Sessions last 12 hours by
+            The password is the server's <code className="font-mono">ADMIN_PASSWORD</code>. Sessions last 12 hours by
             default.
           </p>
         </m.div>
