@@ -1,7 +1,7 @@
 /**
- * Typed API client. Mirrors src/voiceagent/api/schemas.py and the v2 contract
- * in docs/v2-spec.md §1 — when a schema changes there, change it here too;
- * there's no codegen step wired up yet.
+ * Typed API client. Mirrors src/voiceagent/api/schemas.py, the v2 contract in
+ * docs/v2-spec.md §1 and the MCP contract in docs/mcp-spec.md §1.5 — when a
+ * schema changes there, change it here too; there's no codegen step wired up yet.
  */
 
 import { authHeaders, notifyUnauthorized, withToken } from "./authStore";
@@ -86,9 +86,30 @@ export interface CampaignCreate {
   /** WhatsApp the person after each call. Requires TWILIO_WHATSAPP_FROM. */
   whatsapp_followup: boolean;
   webhook_url: string | null;
+  /**
+   * MCP tool ids (`{server_slug}__{tool_name}`) the agent may use during the
+   * call. Optional so older backends, which don't send it, still type-check;
+   * read it through `campaignTools()`.
+   */
+  mcp_tools?: string[];
+  /** Tool ids the agent may use after the call to record the outcome. */
+  mcp_post_call_tools?: string[];
+  /** Plain-language guidance for the after-call tools. */
+  mcp_post_call_instructions?: string;
 }
 
 export type CampaignUpdate = Partial<CampaignCreate>;
+
+/** A campaign's tool choices, with the "null/absent means none" rule applied. */
+export function campaignTools(c: CampaignCreate): Required<
+  Pick<CampaignCreate, "mcp_tools" | "mcp_post_call_tools" | "mcp_post_call_instructions">
+> {
+  return {
+    mcp_tools: c.mcp_tools ?? [],
+    mcp_post_call_tools: c.mcp_post_call_tools ?? [],
+    mcp_post_call_instructions: c.mcp_post_call_instructions ?? "",
+  };
+}
 
 export interface Campaign extends CampaignCreate {
   id: string;
@@ -321,6 +342,12 @@ export interface Health {
   note: string;
   /** v2: true when ADMIN_PASSWORD is set. Absent on older backends. */
   auth_enabled?: boolean;
+  /** MCP round: enabled connected apps. Absent on backends without MCP. */
+  mcp_servers?: number;
+  /** False when the active model provider can't call tools (Sarvam, NVIDIA). */
+  provider_supports_tools?: boolean;
+  /** False when server URLs and headers are stored unencrypted (no SECRETS_KEY / AUTH_SECRET). */
+  secrets_sealed?: boolean;
 }
 
 export interface AuthStatus {
@@ -440,6 +467,8 @@ export interface DispatchResult {
   fields_written: number;
   queued_for_review: boolean;
   errors: string[];
+  /** Set (to "held for review") when after-call tools were skipped. */
+  mcp_actions_skipped?: string;
 }
 
 export interface CallDetail extends CallSummary {
@@ -467,6 +496,128 @@ export interface CallDetail extends CallSummary {
   whatsapp_sid: string | null;
   whatsapp_status: string | null;
   followup_errors: Partial<Record<FollowupChannel, string>> | null;
+  /** Every MCP tool the agent ran, during and after the call. Absent on older backends. */
+  tool_calls?: ToolCallLog[];
+}
+
+// --- MCP: connected apps ------------------------------------------------------
+//
+// Mirrors docs/mcp-spec.md §1.5. A server's URL and header values are write-
+// only: the API never returns them, so nothing here can show them again.
+
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+/** The subset of JSON Schema that tool inputs use in practice. */
+export interface JsonSchema {
+  type?: string | string[];
+  title?: string;
+  description?: string;
+  properties?: Record<string, JsonSchema>;
+  required?: string[];
+  additionalProperties?: boolean | JsonSchema;
+  items?: JsonSchema;
+  enum?: JsonValue[];
+  const?: JsonValue;
+  default?: JsonValue;
+  examples?: JsonValue[];
+  format?: string;
+  minimum?: number;
+  maximum?: number;
+  maxLength?: number;
+  anyOf?: JsonSchema[];
+  oneOf?: JsonSchema[];
+  allOf?: JsonSchema[];
+  $ref?: string;
+}
+
+export type McpTransport = "streamable_http" | "sse" | "builtin";
+/** What to try when connecting. "auto" tries Streamable HTTP, then SSE. */
+export type McpTransportChoice = "auto" | "streamable_http" | "sse";
+export type McpServerStatus = "ok" | "error" | "unchecked";
+
+export interface McpTool {
+  /** `{server_slug}__{name}` — what campaigns store. */
+  id: string;
+  name: string;
+  description: string;
+  input_schema: JsonSchema;
+}
+
+export interface McpServer {
+  id: string;
+  name: string;
+  slug: string;
+  transport: McpTransport;
+  /** Display only — the full URL is never returned. */
+  host: string;
+  /** Header names only; values are never returned. */
+  header_names: string[];
+  enabled: boolean;
+  status: McpServerStatus;
+  last_error: string | null;
+  checked_at: string | null;
+  tools: McpTool[];
+}
+
+export interface McpServerCreate {
+  name: string;
+  /** `builtin://demo` adds the built-in Demo CRM. */
+  url: string;
+  transport?: McpTransportChoice;
+  headers?: Record<string, string>;
+}
+
+/** `headers`, when present, replaces every saved header. Omit it to keep them. */
+export interface McpServerUpdate {
+  name?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  enabled?: boolean;
+}
+
+export interface McpToolTestResult {
+  ok: boolean;
+  text: string;
+  duration_ms: number;
+}
+
+/** `GET /api/mcp/tools` row: a tool of an enabled, healthy server. */
+export interface McpToolOption {
+  id: string;
+  server_id: string;
+  server_name: string;
+  name: string;
+  description: string;
+  input_schema: JsonSchema;
+}
+
+export type ToolPhase = "in_call" | "post_call";
+
+/** One entry of `CallDetail.tool_calls`. */
+export interface ToolCallLog {
+  at: string;
+  phase: ToolPhase;
+  server: string;
+  tool: string;
+  arguments: JsonValue;
+  ok: boolean;
+  duration_ms: number | null;
+  /** First 300 characters of the result. */
+  excerpt: string | null;
+  error: string | null;
+}
+
+/** `call.tool` payload: the toolbox event plus the call it belongs to. */
+export interface CallToolEvent {
+  call_id: string;
+  phase: ToolPhase;
+  server: string;
+  tool: string;
+  status: "started" | "ok" | "error";
+  arguments: JsonValue;
+  duration_ms: number | null;
+  excerpt: string | null;
+  error: string | null;
 }
 
 export interface HourBucket {
@@ -513,8 +664,11 @@ export interface BulkResult {
 
 // --- Live calls & the event stream -----------------------------------------------
 
-/** What the session reports while a call is up (§1.1 `on_event("state")`). */
-export type CallStateName = "speaking" | "listening" | "thinking" | "ended";
+/**
+ * What the session reports while a call is up (§1.1 `on_event("state")`).
+ * "working" (MCP round): the agent paused its reply to run tools.
+ */
+export type CallStateName = "speaking" | "listening" | "thinking" | "working" | "ended";
 
 /** One turn as the live registry / call.turn event carries it. */
 export interface LiveTurn {
@@ -559,7 +713,9 @@ export interface EventPayloads {
     is_test?: boolean;
   };
   "call.connected": { call_id: string };
-  "call.state": { call_id: string; state: CallStateName };
+  /** `tools` (tool ids about to run) comes with state "working". */
+  "call.state": { call_id: string; state: CallStateName; tools?: string[] };
+  "call.tool": CallToolEvent;
   "call.turn": {
     call_id: string;
     role: "user" | "assistant";
@@ -674,6 +830,9 @@ function normaliseHealth(raw: Partial<Health>): Health {
     telephony_mode: raw.telephony_mode ?? "unknown",
     note: raw.note ?? "",
     auth_enabled: raw.auth_enabled,
+    mcp_servers: raw.mcp_servers,
+    provider_supports_tools: raw.provider_supports_tools,
+    secrets_sealed: raw.secrets_sealed,
   };
 }
 
@@ -788,6 +947,25 @@ export const api = {
   suppressions: () => request<Suppression[]>("/api/suppressions"),
   addSuppression: (phone_e164: string, reason: string) =>
     request<Suppression>("/api/suppressions", post({ phone_e164, reason })),
+
+  // --- MCP: connected apps ----------------------------------------------------
+  mcpServers: () => request<McpServer[]>("/api/mcp/servers"),
+  /** Saves and discovers at once. A server that fails discovery is still saved, with status "error". */
+  createMcpServer: (body: McpServerCreate) => request<McpServer>("/api/mcp/servers", post(body)),
+  /** Re-discovers when `url` or `headers` are present. */
+  updateMcpServer: (id: string, body: McpServerUpdate) =>
+    request<McpServer>(`/api/mcp/servers/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  /** Also removes its tools from every campaign. */
+  deleteMcpServer: (id: string) => request<void>(`/api/mcp/servers/${id}`, { method: "DELETE" }),
+  refreshMcpServer: (id: string) => request<McpServer>(`/api/mcp/servers/${id}/refresh`, post()),
+  /** Runs the tool once, for real. */
+  testMcpTool: (id: string, toolName: string, args: Record<string, JsonValue>) =>
+    request<McpToolTestResult>(
+      `/api/mcp/servers/${id}/tools/${encodeURIComponent(toolName)}/test`,
+      post({ arguments: args }),
+    ),
+  /** Tools of enabled, healthy servers — what a campaign can choose from. */
+  mcpTools: () => request<McpToolOption[]>("/api/mcp/tools"),
 };
 
 function saveBlob(blob: Blob, filename: string) {
