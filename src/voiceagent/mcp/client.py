@@ -338,8 +338,31 @@ class Connection:
 # --------------------------------------------------------------------------
 
 
+def redact(text: str, endpoint: Endpoint) -> str:
+    """`text` without the endpoint's URL or header values in it.
+
+    Error text is stored and shown — `last_error`, the call record, the
+    model's context — and an SDK message can quote the URL it failed on,
+    which is often where the key is.
+    """
+    url = endpoint.url
+    secrets = {url, url.split("?", 1)[0], url.split("#", 1)[0]}
+    for value in endpoint.headers.values():
+        # The whole value, and its token alone ("Bearer <token>").
+        secrets.update({value, *(part for part in value.split() if len(part) >= 8)})
+    for secret in sorted(filter(None, secrets), key=len, reverse=True):
+        if not is_builtin(secret):
+            text = text.replace(secret, "[hidden]")
+    return text
+
+
 def unavailable(exc: BaseException, trace: _HttpTrace, endpoint: Endpoint) -> McpUnavailable:
     """Turn whatever the SDK raised into a reason a person can act on."""
+    reason = _reason(exc, trace, endpoint)
+    return McpUnavailable(redact(str(reason), endpoint), reason.kind)
+
+
+def _reason(exc: BaseException, trace: _HttpTrace, endpoint: Endpoint) -> McpUnavailable:
     leaves = list(_leaves(exc))
     host = host_of(endpoint.url) or "the server"
 

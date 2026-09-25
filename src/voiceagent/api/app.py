@@ -67,6 +67,7 @@ from ..orchestrator.events import (
     bus,
 )
 from ..postcall.extract import extract_outcome
+from ..postcall.mcp_actions import run_for_call
 from ..providers import (
     active as active_provider,
 )
@@ -2118,6 +2119,19 @@ async def _complete_test_call(
     )
     qualification = qualify_outcome(setup.context, outcome) if setup.context.scorecard else None
 
+    # Written back into the user's apps like a campaign call's, about the
+    # number actually called rather than the rehearsal placeholder.
+    after_call, mcp_dispatch = await run_for_call(
+        client,
+        storage.SessionLocal,
+        model=setup.extraction_model,
+        effort=setup.extraction_effort,
+        campaign=setup.campaign,
+        contact=setup.contact.model_copy(update={"phone_e164": body.phone_number}),
+        outcome=outcome,
+        usage=usage,
+    )
+
     # Follow-ups to the number just called.
     send_sms, send_whatsapp = _followup_choice(body, setup.campaign)
     followups = {}
@@ -2132,13 +2146,14 @@ async def _complete_test_call(
             whatsapp=send_whatsapp,
         )
 
-    tool_calls = feed.tool_calls
+    tool_calls = [*feed.tool_calls, *after_call]
     ended_at = datetime.now(timezone.utc)
     values = dict(
         status=CallStatus.COMPLETED,
         ended_at=ended_at,
         transcript=[t.model_dump(mode="json") for t in transcript],
         tool_calls=tool_calls or None,
+        dispatch_result=mcp_dispatch or None,
         disposition=outcome.disposition.value,
         sentiment=outcome.sentiment.value,
         summary=outcome.summary,

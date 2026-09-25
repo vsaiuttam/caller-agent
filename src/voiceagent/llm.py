@@ -147,7 +147,7 @@ def _partial_marker_length(text: str) -> int:
 
 
 @dataclass
-class _ToolCall:
+class ToolCall:
     """One tool call the model asked for. `problem` means it will not run."""
 
     id: str
@@ -163,7 +163,7 @@ class _Request:
     tools_allowed: bool
     # The model's own message asking for the calls, to go back in history.
     assistant: dict[str, Any] | None = None
-    calls: list[_ToolCall] = field(default_factory=list)
+    calls: list[ToolCall] = field(default_factory=list)
 
 
 @dataclass
@@ -327,11 +327,11 @@ class ConversationLLM:
         if tail:
             yield tail
 
-    async def _run_tools(self, calls: list[_ToolCall]) -> list[ToolResult]:
+    async def _run_tools(self, calls: list[ToolCall]) -> list[ToolResult]:
         """Run a round's calls together; each comes back as a result, never an exception."""
         from .mcp.toolbox import ToolResult
 
-        async def run(call: _ToolCall) -> ToolResult:
+        async def run(call: ToolCall) -> ToolResult:
             if call.problem is not None:
                 return ToolResult(ok=False, text=call.problem)
             try:
@@ -345,32 +345,8 @@ class ConversationLLM:
     def _exchange_messages(self, request: _Request, results: list[ToolResult]) -> list[dict]:
         """The model's tool request and the results, as its provider expects them back."""
         if self._api == ANTHROPIC_API:
-            return [
-                request.assistant,
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": call.id,
-                            "content": result.text or "(no output)",
-                            "is_error": not result.ok,
-                        }
-                        for call, result in zip(request.calls, results)
-                    ],
-                },
-            ]
-        return [
-            request.assistant,
-            *(
-                {
-                    "role": "tool",
-                    "tool_call_id": call.id,
-                    "content": result.text if result.ok else f"Error: {result.text}",
-                }
-                for call, result in zip(request.calls, results)
-            ),
-        ]
+            return [request.assistant, anthropic_tool_results(request.calls, results)]
+        return [request.assistant, *chat_tool_results(request.calls, results)]
 
     # -- provider paths ----------------------------------------------------
     #
@@ -395,10 +371,7 @@ class ConversationLLM:
         )
         # Only pass tools when non-empty — the API rejects an empty list.
         if self._specs:
-            kwargs["tools"] = [
-                {"name": s.id, "description": s.description, "input_schema": s.input_schema}
-                for s in self._specs
-            ]
+            kwargs["tools"] = anthropic_tools(self._specs)
             if not request.tools_allowed:
                 kwargs["tool_choice"] = {"type": "none"}
 
@@ -418,7 +391,7 @@ class ConversationLLM:
             # thinking on, the API rejects a tool result whose request lost them.
             request.assistant = {"role": "assistant", "content": final.content}
             request.calls = [
-                _anthropic_call(block)
+                anthropic_tool_call(block)
                 for block in final.content
                 if getattr(block, "type", None) == "tool_use"
             ]
@@ -450,17 +423,7 @@ class ConversationLLM:
             stream_options={"include_usage": True},
         )
         if self._specs:
-            kwargs["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": s.id,
-                        "description": s.description,
-                        "parameters": s.input_schema,
-                    },
-                }
-                for s in self._specs
-            ]
+            kwargs["tools"] = chat_tools(self._specs)
             if not request.tools_allowed:
                 kwargs["tool_choice"] = "none"
 
@@ -480,19 +443,65 @@ class ConversationLLM:
 
         if request.tools_allowed and fragments:
             calls = [fragments[index] for index in sorted(fragments)]
-            request.assistant = {
-                "role": "assistant",
-                "content": "".join(text) or None,
-                "tool_calls": [_chat_tool_call(call) for call in calls],
+            request.assistant = chat_assistant_message("".join(text), calls)
+            request.calls = [parse_chat_call(call) for call in calls]
+
+
+# --------------------------------------------------------------------------
+# Tool calls in each provider's shape. Shared with the post-call actions
+# (postcall/mcp_actions.py), which run the same loop without streaming.
+# --------------------------------------------------------------------------
+
+
+def anthropic_tools(specs: list[ToolSpec]) -> list[dict[str, Any]]:
+    return [
+        {"name": s.id, "description": s.description, "input_schema": s.input_schema} for s in specs
+    ]
+
+
+def chat_tools(specs: list[ToolSpec]) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {"name": s.id, "description": s.description, "parameters": s.input_schema},
+        }
+        for s in specs
+    ]
+
+
+def anthropic_tool_results(calls: list[ToolCall], results: list[ToolResult]) -> dict[str, Any]:
+    """The user message answering an assistant message's tool_use blocks."""
+    return {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": call.id,
+                "content": result.text or "(no output)",
+                "is_error": not result.ok,
             }
-            request.calls = [_parse_chat_call(call) for call in calls]
+            for call, result in zip(calls, results)
+        ],
+    }
 
 
-def _anthropic_call(block) -> _ToolCall:
+def chat_tool_results(calls: list[ToolCall], results: list[ToolResult]) -> list[dict[str, Any]]:
+    """One `tool` message per call, answering an assistant message's tool_calls."""
+    return [
+        {
+            "role": "tool",
+            "tool_call_id": call.id,
+            "content": result.text if result.ok else f"Error: {result.text}",
+        }
+        for call, result in zip(calls, results)
+    ]
+
+
+def anthropic_tool_call(block) -> ToolCall:
     arguments = getattr(block, "input", None)
     if isinstance(arguments, dict):
-        return _ToolCall(id=block.id, tool=block.name, arguments=arguments)
-    return _ToolCall(
+        return ToolCall(id=block.id, tool=block.name, arguments=arguments)
+    return ToolCall(
         id=block.id, tool=block.name, arguments={}, problem="The arguments were not an object; not run."
     )
 
@@ -516,6 +525,26 @@ def _gather_fragment(fragments: dict[int, dict[str, Any]], fragment) -> None:
         call["extra"] = extra
 
 
+def chat_call(tool_call) -> dict[str, Any]:
+    """A non-streamed `message.tool_calls` entry, as `_gather_fragment` assembles one."""
+    function = getattr(tool_call, "function", None)
+    return {
+        "id": getattr(tool_call, "id", "") or "",
+        "name": getattr(function, "name", "") or "",
+        "arguments": getattr(function, "arguments", "") or "",
+        "extra": getattr(tool_call, "extra_content", None),
+    }
+
+
+def chat_assistant_message(text: str, calls: list[dict[str, Any]]) -> dict[str, Any]:
+    """The assistant message asking for `calls`, to go back into the history."""
+    return {
+        "role": "assistant",
+        "content": text or None,
+        "tool_calls": [_chat_tool_call(call) for call in calls],
+    }
+
+
 def _chat_tool_call(call: dict[str, Any]) -> dict[str, Any]:
     message = {
         "id": call["id"],
@@ -527,19 +556,19 @@ def _chat_tool_call(call: dict[str, Any]) -> dict[str, Any]:
     return message
 
 
-def _parse_chat_call(call: dict[str, Any]) -> _ToolCall:
+def parse_chat_call(call: dict[str, Any]) -> ToolCall:
     try:
         arguments = json.loads(call["arguments"] or "{}")
     except ValueError:
         arguments = None
     if not isinstance(arguments, dict):
-        return _ToolCall(
+        return ToolCall(
             id=call["id"],
             tool=call["name"],
             arguments={},
             problem="The arguments for this call were not valid JSON, so it was not run.",
         )
-    return _ToolCall(id=call["id"], tool=call["name"], arguments=arguments)
+    return ToolCall(id=call["id"], tool=call["name"], arguments=arguments)
 
 
 def _find_flush_point(buffer: str) -> int | None:

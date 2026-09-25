@@ -38,7 +38,7 @@ from typing import Any, Protocol
 from sqlalchemy import select
 
 from ..storage import McpServer
-from .client import Connection, Endpoint, McpUnavailable
+from .client import Connection, Endpoint, McpUnavailable, redact
 from .ids import tool_id
 
 logger = logging.getLogger(__name__)
@@ -228,7 +228,8 @@ class CallToolbox:
             return ToolResult(False, str(exc))
         except Exception as exc:  # noqa: BLE001 - a broken tool must not break the call
             logger.warning("Tool %s on %s failed", tool.name, tool.endpoint.name, exc_info=True)
-            return ToolResult(False, f"The tool failed: {str(exc).strip() or type(exc).__name__}")
+            reason = str(exc).strip() or type(exc).__name__
+            return ToolResult(False, redact(f"The tool failed: {reason}", tool.endpoint))
 
         text = result_text(result)
         if result.is_error:

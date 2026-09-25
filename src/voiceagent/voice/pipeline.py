@@ -40,6 +40,7 @@ from ..orchestrator.events import (
 from ..orchestrator.scheduler import is_terminal, next_attempt_after
 from ..postcall.actions import CalendarClient, RecordsClient, SuppressionList, dispatch
 from ..postcall.extract import extract_outcome
+from ..postcall.mcp_actions import run_for_call
 from ..scoring import qualify_outcome
 from ..storage import Call, CallStatus, Campaign, CampaignStatus, Contact, ContactStatus
 from ..webhooks import fire_webhook
@@ -341,6 +342,18 @@ class CallPipeline:
             records=self._records,
             suppression=self._suppression,
         )
+        # 3a. Write it back into the user's own apps, if the campaign asks.
+        #     Before the bill is totted up: it runs on the extraction model.
+        after_call, mcp_dispatch = await run_for_call(
+            self._client,
+            self._sessions,
+            model=campaign.extraction_model,
+            effort=campaign.extraction_effort,
+            campaign=campaign,
+            contact=_to_model(contact),
+            outcome=outcome,
+            usage=usage,
+        )
 
         # 4. Record the outcome, the bill, and the contact's next state.
         cost = usage.cost_usd()
@@ -377,7 +390,9 @@ class CallPipeline:
                         "fields_written": result.fields_written,
                         "queued_for_review": result.queued_for_review,
                         "errors": result.errors,
+                        **mcp_dispatch,
                     },
+                    tool_calls=[*(tool_calls or []), *after_call] or None,
                     input_tokens=usage.input_tokens,
                     output_tokens=usage.output_tokens,
                     cache_read_tokens=usage.cache_read_tokens,
