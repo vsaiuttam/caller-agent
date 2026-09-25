@@ -276,7 +276,9 @@ function ConsoleHeader({
   return (
     <div className="flex flex-wrap items-center gap-4 px-5 py-4">
       <AgentAvatar state={avatarStateFor(stream.phase, stream.liveState)} size="md" />
-      <div className="min-w-0 flex-1">
+      {/* The basis makes the timer and End call wrap to their own row on a
+          phone instead of squeezing the name and status to nothing. */}
+      <div className="min-w-0 flex-1 basis-48">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="truncate text-lg font-semibold tracking-tight text-ink">{name}</h2>
           {mode === "test" || stream.isTest ? (
@@ -304,8 +306,8 @@ function ConsoleHeader({
         </p>
       </div>
 
-      <div className="flex items-center gap-3">
-        <div className="text-right">
+      <div className="flex items-center gap-3 max-sm:w-full max-sm:justify-between">
+        <div className="text-right max-sm:text-left">
           <p className="text-2xs font-medium text-ink-muted">{stream.connectedAt ? "Talk time" : "Elapsed"}</p>
           <p className="tnum text-xl font-semibold tabular-nums text-ink" aria-label={`${formatDuration(elapsed)} elapsed`}>
             {formatDuration(elapsed)}

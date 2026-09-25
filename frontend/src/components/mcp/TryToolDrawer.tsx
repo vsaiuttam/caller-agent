@@ -4,7 +4,8 @@
  * for anything a form can't express — and a switch to JSON at any time.
  */
 
-import { useId, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useReducedMotion } from "framer-motion";
 import { api, type McpServer, type McpTool, type McpToolTestResult } from "../../api";
 import { formatJson, formatMs, prettyText } from "../../format";
 import { IconAlert, IconBraces, IconCheck, IconPlay, IconRows } from "../icons";
@@ -64,7 +65,6 @@ type Mode = "form" | "json";
 function ToolRunner({ server, tool }: { server: McpServer; tool: McpTool }) {
   const plan = useMemo(() => planForm(tool.input_schema), [tool.input_schema]);
   const fields = plan.mode === "form" ? plan.fields : [];
-  const formId = useId();
 
   const [mode, setMode] = useState<Mode>(plan.mode === "json" ? "json" : "form");
   const [draft, setDraft] = useState<Draft>(() => initialDraft(fields));
@@ -77,6 +77,14 @@ function ToolRunner({ server, tool }: { server: McpServer; tool: McpTool }) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<McpToolTestResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  const outcomeRef = useRef<HTMLDivElement>(null);
+  const reduceMotion = useReducedMotion();
+
+  useEffect(() => {
+    if (result || runError) {
+      outcomeRef.current?.scrollIntoView({ block: "nearest", behavior: reduceMotion ? "auto" : "smooth" });
+    }
+  }, [result, runError, reduceMotion]);
 
   const built = buildArgs(fields, draft, touched);
   const parsed = parseArgs(jsonText);
@@ -134,7 +142,7 @@ function ToolRunner({ server, tool }: { server: McpServer; tool: McpTool }) {
   const blocked = (mode === "json" || plan.mode === "json") && !!jsonError;
 
   return (
-    <form id={formId} onSubmit={run} className="flex min-h-full flex-col" noValidate>
+    <form onSubmit={run} className="flex min-h-full flex-col" noValidate>
       <div className="flex-1 space-y-5 px-5 py-5">
         {tool.description && <p className="text-sm leading-relaxed text-ink-secondary">{tool.description}</p>}
 
@@ -192,13 +200,15 @@ function ToolRunner({ server, tool }: { server: McpServer; tool: McpTool }) {
           )}
         </section>
 
-        {runError && (
-          <Callout tone="critical" title="The request failed">
-            {runError}
-          </Callout>
-        )}
-
-        {result && <ResultPanel result={result} />}
+        {/* Below a long form the outcome would land off-screen: bring it into view. */}
+        <div ref={outcomeRef} className="scroll-mb-20 space-y-5 empty:hidden">
+          {runError && (
+            <Callout tone="critical" title="The request failed">
+              {runError}
+            </Callout>
+          )}
+          {result && <ResultPanel result={result} />}
+        </div>
       </div>
 
       <div className="safe-bottom sticky bottom-0 flex items-center justify-between gap-3 border-t border-line bg-raised px-5 py-3">

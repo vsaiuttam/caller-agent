@@ -7,7 +7,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { api, type CampaignCreate, type McpToolOption } from "../../api";
+import { ApiError, api, type CampaignCreate, type McpToolOption } from "../../api";
 import { useHealth } from "../../data";
 import { useAsync } from "../../hooks";
 import { IconPlug, IconSearch, IconWrench } from "../icons";
@@ -61,9 +61,19 @@ export function CampaignToolsCard({
   /** Header actions, e.g. Save / Discard on a saved campaign. */
   action?: ReactNode;
 }) {
-  const catalog = useAsync(() => api.mcpTools(), []);
+  // Null: the backend predates connected apps (404), so there's nothing to choose.
+  const catalog = useAsync(async () => {
+    try {
+      return await api.mcpTools();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
+  }, []);
   const { health } = useHealth();
   const nothingChosen = !value.mcp_tools.length && !value.mcp_post_call_tools.length;
+
+  if (!catalog.loading && !catalog.error && catalog.data === null) return null;
 
   let body: ReactNode;
   if (catalog.loading) {
@@ -160,7 +170,8 @@ function ToolChoiceEditor({
           label="When the agent may use tools"
           value={section}
           onChange={setSection}
-          className="w-full sm:w-auto [&>button]:flex-1"
+          // Equal halves on a phone; natural widths from sm up.
+          className="w-full sm:w-auto [&>button]:flex-1 [&>button]:whitespace-nowrap sm:[&>button]:flex-none"
           options={[
             { value: "in_call", label: <SectionLabel text="During the call" count={value.mcp_tools.length} /> },
             { value: "post_call", label: <SectionLabel text="After the call" count={value.mcp_post_call_tools.length} /> },
