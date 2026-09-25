@@ -306,7 +306,9 @@ async def simulate_call(
 
         agent_text = " ".join(c.strip() for c in chunks if c.strip())
         if not agent_text:
-            ended_because = "the agent produced nothing"
+            ended_because = (
+                "the agent closed the call" if agent.end_requested else "the agent produced nothing"
+            )
             break
 
         record("assistant", agent_text)
@@ -321,9 +323,9 @@ async def simulate_call(
             )
         )
 
-        # Same heuristic the live session uses, so the simulation ends the way
-        # a real call would rather than on a rule invented for the test.
-        if _is_closing(agent_text):
+        # Same rule the live session uses, so the simulation ends the way a
+        # real call would rather than on a rule invented for the test.
+        if agent.end_requested or _is_closing(agent_text):
             ended_because = "the agent closed the call"
             break
 

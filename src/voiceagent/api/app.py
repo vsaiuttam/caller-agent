@@ -63,6 +63,7 @@ from ..providers import (
     rate_limit_error_types,
 )
 from ..templates import CATEGORIES, LANGUAGES, TEMPLATES, language_instruction
+from ..voice.phrases import phrases_for
 from ..storage import (
     Call,
     CallStatus,
@@ -1350,6 +1351,7 @@ class _CallSetup:
     extraction_model: str
     extraction_effort: str
     language_name: str
+    language: str = "en"
 
 
 def _as_criteria(raw) -> list[ScoreCriterion]:
@@ -1448,6 +1450,7 @@ async def _resolve_call_setup(db: AsyncSession, body: CallSetupRequest) -> _Call
         language_name=next(
             (lang.name for lang in LANGUAGES if lang.code == language), "English"
         ),
+        language=language,
     )
 
 
@@ -1711,6 +1714,7 @@ async def test_call(body: TestCallRequest, db: AsyncSession = Depends(get_sessio
             control=control,
             greeting=setup.greeting,
             max_duration_seconds=600,
+            phrases=phrases_for(setup.language),
         )
 
         transcript = await session.run()

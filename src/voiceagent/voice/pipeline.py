@@ -40,6 +40,7 @@ from ..scoring import qualify_outcome
 from ..storage import Call, CallStatus, Campaign, CampaignStatus, Contact, ContactStatus
 from ..webhooks import fire_webhook
 from ..templates import language_instruction
+from .phrases import phrases_for
 from .session import CallControl, CallNotPlaced, CallSession, Listener, Speaker
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,7 @@ class CallPipeline:
         call_id = str(uuid.uuid4())
         room_name = f"call-{call_id}"
         greeting = _greeting(contact, campaign)
+        phrases = phrases_for(campaign.language)
 
         # Synthesize the greeting while the phone rings, so the person isn't
         # left in silence after picking up.
@@ -138,9 +140,7 @@ class CallPipeline:
         ):
             logger.info("Voicemail detected for %s (AMD: %s)", contact.id, amd_result)
             # Leave a voicemail message via the speaker, then hang up
-            voicemail_msg = greeting + (
-                " We were unable to reach you. We'll try again later. Thank you."
-            )
+            voicemail_msg = f"{greeting} {phrases.voicemail}"
             try:
                 await speaker.say(voicemail_msg)
                 # Webhook transports only play what has been flushed.
@@ -174,6 +174,7 @@ class CallPipeline:
                 control=control,
                 greeting=greeting,
                 max_duration_seconds=600,
+                phrases=phrases,
             )
             transcript = await session.run()
             disposition = Disposition.COMPLETED if transcript is not None and len(transcript) > 0 else Disposition.NO_ANSWER

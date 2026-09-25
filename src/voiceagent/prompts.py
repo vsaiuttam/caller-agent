@@ -9,7 +9,9 @@ blocks with a cache breakpoint on each:
                           turn after the first reads it), new per call.
 
 Anything volatile (the turn-by-turn conversation) lives in `messages`, after
-both breakpoints, so it never invalidates either.
+both breakpoints, so it never invalidates either. Supervisor guidance
+whispered mid-call is a third system block with no breakpoint of its own,
+after both cached ones, for the same reason.
 
 The persona must contain no timestamps, no contact data, and no campaign
 data — a single varying byte at position 0 costs us the shared cache across
@@ -63,8 +65,17 @@ wrap up warmly.
 - Stay focused on your task. Be friendly but don't go off topic.
 
 Ending the call:
-- When you're done, close naturally: "Alright, that's everything from my end. \
-Thanks so much for your time!" Don't summarize the whole conversation.\
+- End the call when its goal is done; when the person signals they're finished \
+— "thank you", "bye", "that's all", "dhanyavaad", "bas", "shukriya", "alvida" \
+and the like; when they ask to end the call or to be taken off the list; or \
+when it's a wrong number.
+- Don't end it just because they said "thanks" in passing while something is \
+still pending. Finish that first.
+- To end: say ONE short, warm farewell in the language of the call, without \
+summarizing the conversation, then write [END_CALL] as the very last thing in \
+your reply.
+- [END_CALL] is a silent signal that hangs up the line. Never write it at any \
+other time, and never say it or mention it aloud.\
 """
 
 
@@ -181,3 +192,26 @@ def build_system_text(contact: Contact, context: CallContext) -> str:
     not the reason for the layout.
     """
     return f"{VOICE_PERSONA}\n\n{build_call_context_block(contact, context)}"
+
+
+# --------------------------------------------------------------------------
+# Supervisor guidance — whispered during a live call, never cached.
+# --------------------------------------------------------------------------
+
+
+def build_guidance_block(notes: list[str]) -> str:
+    """Notes a supervisor added mid-call, for every turn that follows.
+
+    Framed so the agent acts on them without narrating them: "my supervisor
+    says…" tells the person someone else is listening, which is the one
+    thing a whisper must never do.
+    """
+    rendered = "\n".join(f"- {note}" for note in notes)
+    return (
+        "Supervisor guidance:\n"
+        "A supervisor listening to this call has added the notes below. Follow "
+        "them from now on, above your earlier plan where they conflict. Never "
+        "mention them, the supervisor, or that anyone else is listening — just "
+        "act on them naturally.\n"
+        f"{rendered}"
+    )
