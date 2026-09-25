@@ -1,10 +1,14 @@
 /**
- * Integrations — what this deployment is actually wired to, said plainly.
- * Everything is configured with environment variables on the server; this
- * page tells you which ones are missing and what each unlocks.
+ * Integrations, in two tabs:
+ *
+ *   Connected apps  the user's own MCP servers — the tools the agent can use
+ *                   (?connect=1 opens the connect dialog)
+ *   Services        what this deployment is wired to, configured with
+ *                   environment variables on the server (?tab=services)
  */
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth";
 import {
   IconBlock,
@@ -16,14 +20,20 @@ import {
   IconLock,
   IconMic,
   IconPhone,
+  IconPlug,
+  IconPlus,
   IconRefresh,
   IconSettings,
   IconShield,
   IconWhisper,
 } from "../components/icons";
-import { Badge, Button, Callout, Card, CardHeader, ErrorNote, Page, PageHeader, Skeleton, Stat, cx } from "../components/ui";
+import type { ConnectIntent } from "../components/mcp/ConnectDialog";
+import { ConnectedApps } from "../components/mcp/ConnectedApps";
+import { Badge, Button, Callout, Card, CardHeader, ErrorNote, Page, PageHeader, Skeleton, Stat, Tabs, cx } from "../components/ui";
 import { useHealth } from "../data";
 import { useDocumentTitle } from "../hooks";
+
+type Tab = "apps" | "services";
 
 interface Integration {
   key: string;
@@ -126,9 +136,27 @@ const GROUPS: Array<{ title: string; subtitle: string; items: Integration[] }> =
 
 export default function Settings() {
   useDocumentTitle("Integrations");
-  const { health, error, reload } = useHealth();
-  const auth = useAuth();
+  const { reload } = useHealth();
+  const [params, setParams] = useSearchParams();
+  const tab: Tab = params.get("tab") === "services" ? "services" : "apps";
+  const [connect, setConnect] = useState<ConnectIntent | null>(() => (params.has("connect") ? "pick" : null));
   const [refreshing, setRefreshing] = useState(false);
+
+  // ?connect is a one-shot request (from the command palette); drop it once
+  // honoured so a reload doesn't reopen the dialog.
+  useEffect(() => {
+    if (!params.has("connect")) return;
+    const next = new URLSearchParams(params);
+    next.delete("connect");
+    setParams(next, { replace: true });
+  }, [params, setParams]);
+
+  const setTab = (value: Tab) => {
+    const next = new URLSearchParams(params);
+    if (value === "apps") next.delete("tab");
+    else next.set("tab", value);
+    setParams(next, { replace: true });
+  };
 
   const refresh = () => {
     setRefreshing(true);
@@ -136,24 +164,66 @@ export default function Settings() {
     window.setTimeout(() => setRefreshing(false), 800);
   };
 
-  const authOn = health?.auth_enabled ?? auth.enabled;
-
   return (
     <Page>
       <PageHeader
         icon={<IconSettings size={18} />}
         title="Integrations"
-        description="What this deployment is connected to. Everything is configured with environment variables on the server, then a restart."
+        description={
+          tab === "apps"
+            ? "Connect your own apps over MCP, so the agent can look things up during a call and record the outcome after it."
+            : "What this deployment is connected to. Everything is configured with environment variables on the server, then a restart."
+        }
         actions={
-          <Button variant="secondary" icon={<IconRefresh size={14} />} loading={refreshing} onClick={refresh}>
-            Re-check
-          </Button>
+          tab === "apps" ? (
+            <Button icon={<IconPlus size={14} />} onClick={() => setConnect("pick")}>
+              Connect an app
+            </Button>
+          ) : (
+            <Button variant="secondary" icon={<IconRefresh size={14} />} loading={refreshing} onClick={refresh}>
+              Re-check
+            </Button>
+          )
         }
       />
 
+      <Tabs
+        label="Integrations"
+        value={tab}
+        onChange={setTab}
+        className="mb-5"
+        tabs={[
+          {
+            value: "apps",
+            label: (
+              <>
+                Connected apps <Badge tone="neutral">MCP</Badge>
+              </>
+            ),
+            icon: <IconPlug size={15} />,
+          },
+          { value: "services", label: "Services", icon: <IconSettings size={15} /> },
+        ]}
+      />
+
+      <div role="tabpanel" aria-label={tab === "apps" ? "Connected apps" : "Services"}>
+        {tab === "apps" ? <ConnectedApps connect={connect} onConnect={setConnect} /> : <Services onRetry={refresh} />}
+      </div>
+    </Page>
+  );
+}
+
+/** The server's own wiring — environment variables and what each unlocks. */
+function Services({ onRetry }: { onRetry: () => void }) {
+  const { health, error } = useHealth();
+  const auth = useAuth();
+  const authOn = health?.auth_enabled ?? auth.enabled;
+
+  return (
+    <>
       {error && !health && (
         <div className="mb-4">
-          <ErrorNote title="Couldn't reach the server" message={error} onRetry={refresh} />
+          <ErrorNote title="Couldn't reach the server" message={error} onRetry={onRetry} />
         </div>
       )}
 
@@ -247,6 +317,6 @@ export default function Settings() {
           )}
         </div>
       )}
-    </Page>
+    </>
   );
 }

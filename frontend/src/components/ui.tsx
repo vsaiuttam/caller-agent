@@ -4,15 +4,16 @@
  *
  *   Layout      Page, PageHeader, Card, CardHeader, Section
  *   Actions     Button, ButtonLink, IconButton
- *   Inputs      Field, Input, Textarea, Select, Switch, Segmented, Tabs
+ *   Inputs      Field, Input, SecretInput, Textarea, Select, Switch, Segmented, Tabs
  *   Status      Badge (+ Disposition/Score/Status/Followup/Sentiment/Test), DeltaBadge
- *   Feedback    Callout, ErrorNote, EmptyState, Skeleton, Spinner, Stat, Kbd
+ *   Feedback    Callout, ErrorNote, EmptyState, Skeleton, Spinner, Stat, Kbd, CodeBlock
  *   Overlays    Dialog, Drawer, Popover, Tooltip   (./overlay)
  *   Toasts      toast, Toaster                     (./toast)
  */
 
 import {
   useId,
+  useState,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type KeyboardEvent,
@@ -30,6 +31,9 @@ import {
   IconArrowLeft,
   IconCheck,
   IconChevronDown,
+  IconCopy,
+  IconEye,
+  IconEyeOff,
   IconFlask,
   IconFrown,
   IconInfo,
@@ -40,6 +44,7 @@ import {
   IconTrendUp,
 } from "./icons";
 import { Tooltip } from "./overlay";
+import { toast } from "./toast";
 import { rise } from "../motion";
 
 export { Dialog, Drawer, Popover, Tooltip } from "./overlay";
@@ -390,6 +395,44 @@ export function Input({
   ...rest
 }: InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> }) {
   return <input ref={ref} className={cx(inputClass, "h-9", className)} {...rest} />;
+}
+
+/**
+ * A password-style field with a reveal toggle, for API keys and URLs that
+ * carry one. Password managers are asked not to offer to save it.
+ */
+export function SecretInput({
+  className = "",
+  ref,
+  ...rest
+}: Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & { ref?: Ref<HTMLInputElement> }) {
+  const [shown, setShown] = useState(false);
+  return (
+    <span className={cx("relative block", className)}>
+      <input
+        ref={ref}
+        type={shown ? "text" : "password"}
+        autoComplete="off"
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
+        data-1p-ignore
+        data-lpignore="true"
+        className={cx(inputClass, "h-9 pr-10 font-mono text-[0.8125rem]")}
+        {...rest}
+      />
+      <button
+        type="button"
+        onClick={() => setShown((s) => !s)}
+        aria-label={shown ? "Hide value" : "Show value"}
+        aria-pressed={shown}
+        disabled={rest.disabled}
+        className="absolute right-1 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-subtle hover:text-ink disabled:opacity-50"
+      >
+        {shown ? <IconEyeOff size={15} /> : <IconEye size={15} />}
+      </button>
+    </span>
+  );
 }
 
 export function Textarea({
@@ -911,6 +954,50 @@ export function Stat({
       )}
       {hint && <p className="mt-2 text-xs text-ink-muted">{hint}</p>}
     </Card>
+  );
+}
+
+/** Monospaced text in a scrollable well — tool arguments, results, JSON. */
+export function CodeBlock({
+  children,
+  copyLabel,
+  className = "",
+}: {
+  children: string;
+  /** Adds a copy button; the label names what was copied in the toast. */
+  copyLabel?: string;
+  className?: string;
+}) {
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(children);
+      toast.success(`${copyLabel} copied`);
+    } catch {
+      toast.error("Couldn't copy", "The browser blocked clipboard access.");
+    }
+  };
+  return (
+    <div className="relative">
+      <pre
+        className={cx(
+          "max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-subtle/60 px-3 py-2 font-mono text-2xs leading-relaxed text-ink-secondary",
+          copyLabel && "pr-10",
+          className,
+        )}
+      >
+        {children}
+      </pre>
+      {copyLabel && (
+        <IconButton
+          label={`Copy ${copyLabel.toLowerCase()}`}
+          icon={<IconCopy size={13} />}
+          size="sm"
+          tooltip={false}
+          onClick={copy}
+          className="absolute right-1 top-1 !h-7 !w-7"
+        />
+      )}
+    </div>
   );
 }
 
