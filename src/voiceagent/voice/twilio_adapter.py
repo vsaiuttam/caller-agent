@@ -623,26 +623,31 @@ def _build_webhook_app():
         return Response("ok")
 
     async def recording_handler(request: Request) -> Response:
-        """Receives the recording callback when a call recording is ready."""
+        """Receives the recording callback when a call recording is ready.
+
+        Twilio sends it once the recording is processed — normally after the
+        call has ended and its in-memory state is gone. So it is written to
+        the call's row directly, found by room name, rather than left on a
+        state object nobody will read again.
+        """
         try:
             room_name = request.path_params["room_name"]
-            state = _active_calls.get(room_name)
-            if not state:
-                return Response("ok")
-
             form = await request.form()
             recording_url = str(form.get("RecordingUrl", ""))
+            if not recording_url:
+                return Response("ok")
             recording_sid = str(form.get("RecordingSid", ""))
             recording_duration = int(form.get("RecordingDuration", 0) or 0)
 
-            if recording_url:
+            state = _active_calls.get(room_name)
+            if state:
                 state.recording_url = recording_url
                 state.recording_sid = recording_sid
                 state.recording_duration = recording_duration
-                logger.info(
-                    "Recording ready for %s: %s (%ds)",
-                    room_name, recording_sid, recording_duration,
-                )
+            await _save_recording(room_name, recording_url, recording_sid, recording_duration)
+            logger.info(
+                "Recording ready for %s: %s (%ds)", room_name, recording_sid, recording_duration
+            )
         except Exception:
             logger.exception("recording_handler crashed")
         return Response("ok")
@@ -710,6 +715,23 @@ def _build_webhook_app():
     ]
 
     return Starlette(routes=routes)
+
+
+async def _save_recording(room_name: str, url: str, sid: str, duration: int) -> None:
+    """Attach a recording to the call row placed under `room_name`."""
+    # Imported here: this module is otherwise free of the database, and the
+    # session factory is looked up at call time so it can be swapped.
+    from sqlalchemy import update
+
+    from .. import storage
+
+    async with storage.SessionLocal() as db:
+        await db.execute(
+            update(storage.Call)
+            .where(storage.Call.room_name == room_name)
+            .values(recording_url=url, recording_sid=sid, recording_duration=duration)
+        )
+        await db.commit()
 
 
 def _drop_stale_replies(state: _CallState) -> None:
