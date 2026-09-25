@@ -4,7 +4,7 @@
  * either re-runs discovery.
  */
 
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { ApiError, api, type McpServer, type McpServerUpdate } from "../../api";
 import { IconLock } from "../icons";
 import { Button, Callout, Dialog, Field, Input, SecretInput, toast } from "../ui";
@@ -29,6 +29,9 @@ export function EditServerDialog({
   const [showErrors, setShowErrors] = useState(false);
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<{ message: string; hint: string | null } | null>(null);
+  // Failures show inline; a toast only reports one that lands after closing.
+  const isOpen = useRef(open);
+  isOpen.current = open;
 
   // Fresh form on every opening.
   useEffect(() => {
@@ -72,7 +75,7 @@ export function EditServerDialog({
         setFailure({ message, hint: connectHint(message) });
         setUrl(null);
         setRows(null);
-        toast.error(`Saved, but ${updated.name} didn't connect`, message);
+        if (!isOpen.current) toast.error(`Saved, but ${updated.name} didn't connect`, message);
         return;
       }
       toast.success(
@@ -83,7 +86,7 @@ export function EditServerDialog({
     } catch (err) {
       const message = (err as Error).message;
       setFailure({ message, hint: connectHint(message, err instanceof ApiError ? err.status : undefined) });
-      toast.error("Couldn't save the server", message);
+      if (!isOpen.current) toast.error(`Couldn't save ${server.name}`, message);
     } finally {
       setSaving(false);
     }

@@ -78,6 +78,13 @@ export function ConnectDialog({
   const [failure, setFailure] = useState<Failure | null>(null);
   /** What this attempt saved — kept after a failed discovery so a retry replaces it. */
   const [saved, setSaved] = useState<McpServer | null>(null);
+  // Failures show inline while the dialog is open; a toast only reports one
+  // that lands after it was closed.
+  const isOpen = useRef(intent);
+  isOpen.current = intent;
+  const reportClosed = (title: string, message: string) => {
+    if (!isOpen.current) toast.error(title, message);
+  };
 
   const connect = async (target: Preset, body: McpServerCreate) => {
     setPreset(target);
@@ -102,12 +109,12 @@ export function ConnectDialog({
       const message = server.last_error ?? "The server didn't answer.";
       setFailure({ message, hint: connectHint(message) });
       setStep(target.id === "demo" ? "pick" : "form");
-      toast.error(`Couldn't connect to ${server.name}`, message);
+      reportClosed(`Couldn't connect to ${server.name}`, message);
     } catch (err) {
       const message = (err as Error).message;
       setFailure({ message, hint: connectHint(message, err instanceof ApiError ? err.status : undefined) });
       setStep(target.id === "demo" ? "pick" : "form");
-      toast.error("Couldn't connect", message);
+      reportClosed(`Couldn't connect to ${body.name}`, message);
     }
   };
 
@@ -164,7 +171,7 @@ export function ConnectDialog({
       title: "Connect an app",
       description: "Give the agent tools from your own systems over MCP — to look things up during calls and record outcomes after.",
     },
-    form: { title: `Connect ${preset.title}` },
+    form: { title: preset.id === "custom" ? "Connect an MCP server" : `Connect ${preset.title}` },
     connecting: { title: `Connecting to ${preset.id === "demo" ? "the Demo CRM" : hostOf(draft.url)}…` },
     done: { title: "Connected" },
   };
@@ -273,7 +280,8 @@ function PresetGrid({
                 type="button"
                 onClick={() => onChoose(p)}
                 disabled={done}
-                data-autofocus={(i === 0 && !done) || (i === 1 && done) || undefined}
+                // The first tile that can be chosen: the demo, unless it's already connected.
+                data-autofocus={i === (demoConnected ? 1 : 0) || undefined}
                 className={cx(
                   "card card-interactive flex h-full w-full flex-col items-start gap-2 p-3.5 text-left disabled:cursor-default disabled:opacity-70",
                   p.id === "demo" && !done && "border-brand/35 bg-brand/[0.03]",
