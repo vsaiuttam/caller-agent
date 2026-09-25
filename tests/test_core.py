@@ -254,8 +254,10 @@ def test_a_long_pause_does_not_end_the_call() -> None:
         )
         return await session.run()
 
+    from src.voiceagent.voice.phrases import phrases_for
+
     texts = [t.text for t in asyncio.run(scenario())]
-    assert texts[1] == "Sorry — are you still there?", texts
+    assert texts[1] == phrases_for("en").still_there, texts
     assert "Sorry, yes, I'm here." in texts, texts
     assert texts[-1] == "Great, thanks. Goodbye.", texts
 
