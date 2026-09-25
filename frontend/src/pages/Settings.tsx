@@ -139,13 +139,15 @@ export default function Settings() {
   const { reload } = useHealth();
   const [params, setParams] = useSearchParams();
   const tab: Tab = params.get("tab") === "services" ? "services" : "apps";
-  const [connect, setConnect] = useState<ConnectIntent | null>(() => (params.has("connect") ? "pick" : null));
+  const [connect, setConnect] = useState<ConnectIntent | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  // ?connect is a one-shot request (from the command palette); drop it once
-  // honoured so a reload doesn't reopen the dialog.
+  // ?connect=1 (from the palette, the checklist, a campaign) opens the
+  // dialog — also when this page is already open. It's one-shot: dropped
+  // once honoured, so a reload doesn't reopen it.
   useEffect(() => {
     if (!params.has("connect")) return;
+    setConnect("pick");
     const next = new URLSearchParams(params);
     next.delete("connect");
     setParams(next, { replace: true });

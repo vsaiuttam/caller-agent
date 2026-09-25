@@ -21,6 +21,7 @@ import {
   IconLogout,
   IconMoon,
   IconPhone,
+  IconPlug,
   IconPlus,
   IconSearch,
   IconSun,
@@ -79,6 +80,7 @@ export default function CommandPalette({
       })),
       { id: "a-new", label: "New campaign", hint: "Start from scratch", icon: <IconPlus size={15} />, group: "Actions", run: go("/campaigns/new") },
       { id: "a-call", label: "Place a test call", hint: "Ring your own phone", icon: <IconPhone size={15} />, group: "Actions", run: go("/test-lab/phone") },
+      { id: "a-app", label: "Connect an app", hint: "Give the agent tools over MCP", icon: <IconPlug size={15} />, group: "Actions", run: go("/settings?connect=1") },
       {
         id: "a-theme",
         label: theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
