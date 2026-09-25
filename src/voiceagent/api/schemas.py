@@ -321,6 +321,10 @@ class FollowupResend(BaseModel):
     whatsapp: bool = False
 
 
+class LoginRequest(BaseModel):
+    password: str = Field(max_length=1000)
+
+
 class WhisperRequest(BaseModel):
     """Guidance for the agent on a live call, from someone listening in."""
 

@@ -28,6 +28,7 @@ from fastapi import (
     File,
     HTTPException,
     Query,
+    Request,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -95,6 +96,7 @@ from ..voice.live_feed import CallFeed
 from ..voice.phrases import phrases_for
 from ..voice.pipeline import dial_failure_message, prepare_telephony
 from ..voice.session import CallNotPlaced, CallSession
+from . import auth
 from .schemas import (
     DEFAULT_GREETING,
     BulkResult,
@@ -111,6 +113,7 @@ from .schemas import (
     FollowupResend,
     HourBucket,
     LiveCallRequest,
+    LoginRequest,
     ModelDefaults,
     ReviewDecision,
     SimulationRequest,
@@ -140,9 +143,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Database connections closed")
 
 
-app = FastAPI(title="Voice Agent Platform", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Samvaad API", version="1.0.0", lifespan=lifespan)
 
-# Dev only: Vite serves the UI on 5173 and calls us on 8000.
+# Opt-in; a no-op unless ADMIN_PASSWORD is set. See auth.py.
+app.add_middleware(auth.AuthMiddleware)
+
+# Added after the auth gate, so it runs before it: a 401 still carries the
+# CORS headers the console needs to read it, and preflights never need a
+# token. Dev only otherwise: Vite serves the UI on 5173 and calls us on 8000.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173").split(","),
@@ -341,6 +349,8 @@ async def health(db: AsyncSession = Depends(get_session)) -> dict:
         "provider_label": provider.label if provider else "",
         "providers_configured": [p.id for p in configured()],
         "telephony_mode": os.getenv("TELEPHONY", "mock"),
+        # Said on every screen when false: anyone with the link can dial.
+        "auth_enabled": auth.auth_enabled(),
         # Said plainly because the distinction bites: these check that a
         # credential is *present*, not that it works. Placeholder keys are the
         # one exception — `sk-ant-...` is recognised as unset rather than
@@ -348,6 +358,59 @@ async def health(db: AsyncSession = Depends(get_session)) -> dict:
         # spend a screen believing you have a key you don't have.
         "note": "Credentials are checked for presence, not validity.",
     }
+
+
+# --------------------------------------------------------------------------
+# Access control (opt-in; see auth.py)
+# --------------------------------------------------------------------------
+
+
+_login_throttle = auth.LoginThrottle()
+
+
+@app.post("/api/auth/login")
+async def login(body: LoginRequest, request: Request) -> dict:
+    """Trade the admin password for a token."""
+    if not auth.auth_enabled():
+        raise HTTPException(400, "Access control is off — set ADMIN_PASSWORD to turn it on.")
+
+    client = auth.client_address(request.headers, request.client.host if request.client else None)
+    if _login_throttle.blocked(client):
+        raise HTTPException(429, "Too many wrong passwords. Try again in a few minutes.")
+    if not auth.check_password(body.password):
+        _login_throttle.failed(client)
+        raise HTTPException(401, "That password is not right.")
+
+    _login_throttle.succeeded(client)
+    token, expires_at = auth.issue_token()
+    return {"token": token, "expires_at": expires_at.isoformat()}
+
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request) -> dict:
+    """Whether the console must log in first, and whether this request has.
+
+    `authenticated` means "may use the API": always true while access control
+    is off.
+    """
+    enabled = auth.auth_enabled()
+    return {
+        "auth_enabled": enabled,
+        "authenticated": not enabled or auth.verify_token(auth.request_token(request.scope) or ""),
+    }
+
+
+async def _socket_allowed(ws: WebSocket) -> bool:
+    """With auth on, a socket needs a valid `?token=`, else it closes with 4401.
+
+    Accepted first and then closed: a browser only sees the close code of a
+    socket that opened, and a refused handshake reaches it as a bare 1006.
+    """
+    if not auth.auth_enabled() or auth.verify_token(ws.query_params.get("token", "")):
+        return True
+    await ws.accept()
+    await ws.close(code=4401)
+    return False
 
 
 # --------------------------------------------------------------------------
@@ -2190,6 +2253,8 @@ async def live(ws: WebSocket) -> None:
     SQLite connection parked in an open transaction for that long will block
     the worker's contact claims.
     """
+    if not await _socket_allowed(ws):
+        return
     await ws.accept()
 
     try:
@@ -2351,6 +2416,8 @@ async def add_suppression(
 
 @app.websocket("/api/events")
 async def events(ws: WebSocket) -> None:
+    if not await _socket_allowed(ws):
+        return
     await ws.accept()
     try:
         async for event in bus.subscribe():
