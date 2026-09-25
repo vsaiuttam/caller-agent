@@ -55,7 +55,12 @@ stated.
 commitment was made that falls outside the stated goal, you resolved a time \
 you are not confident about, or the transcript is too garbled to trust.
 - If the person asked not to be contacted again, the disposition is \
-do_not_call, regardless of whatever else was accomplished on the call.\
+do_not_call, regardless of whatever else was accomplished on the call.
+- Set `sentiment` to the person's overall attitude on the call — positive, \
+neutral or negative — judged from what they said and how, not from whether \
+the goal was met: a friendly "no thanks" is neutral or positive, a booking \
+made through gritted teeth is negative. Put a short phrase from the call that \
+shows it in `sentiment_reason`.\
 """
 
 SCORING_RULES = """\
