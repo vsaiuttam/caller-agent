@@ -741,7 +741,7 @@ export default function LiveMic() {
             thirdFigure={
               <FigureCard
                 label="Ended because"
-                value={result.outcome.disposition.replace(/_/g, " ")}
+                value={dispositionLabel(result.outcome.disposition)}
                 hint={result.ended_because}
                 icon={<IconShield size={15} />}
               />

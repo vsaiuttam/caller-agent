@@ -140,6 +140,8 @@ export function CallConsole({
           <LiveTranscript
             turns={turns}
             personName={name}
+            // A call that never connected has nothing to read; don't hold the space.
+            className={stream.phase === "failed" && turns.length === 0 ? "h-28" : undefined}
             typing={stream.phase === "connected" && stream.liveState === "thinking"}
             empty={
               <span className="flex flex-col items-center gap-2">
@@ -213,7 +215,7 @@ function statusLine(stream: CallStream, name: string): string {
     case "done":
       return "Done — the outcome is ready";
     case "failed":
-      return "The call failed";
+      return stream.error ? `The call failed — ${stream.error}` : "The call failed";
     default:
       return stream.liveState === "speaking"
         ? "Agent is speaking"
@@ -452,12 +454,16 @@ function ConsoleOutcome({ stream, callId, name }: { stream: CallStream; callId: 
   const { result, detail, extracted } = stream;
   const latencies = stream.turns.filter((t) => t.latencyMs != null).map((t) => t.latencyMs as number);
   const sentiment = detail?.sentiment ?? extracted?.sentiment ?? result?.outcome.sentiment ?? null;
+  // The saved row's figure when we have it, else what we timed ourselves.
+  const talk =
+    detail?.duration_seconds ??
+    (stream.connectedAt && stream.endedAt ? Math.round((stream.endedAt - stream.connectedAt) / 1000) : null);
 
   const summaryCard = (
     <Card>
       <CardHeader
         title="How it went"
-        subtitle={`${name} · ${formatDuration(detail?.duration_seconds ?? null)} talk time`}
+        subtitle={talk != null ? `${name} · ${formatDuration(talk)} talk time` : name}
         action={
           <>
             <SentimentBadge value={sentiment} />

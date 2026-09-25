@@ -78,7 +78,7 @@ export function FigureCard({
         <p className="text-xs font-medium text-ink-muted">{label}</p>
         <span className={warn ? "text-warning" : "text-ink-muted/70"}>{icon}</span>
       </div>
-      <p className="tnum mt-1.5 text-xl font-semibold capitalize leading-none text-ink">{value}</p>
+      <p className="tnum mt-1.5 text-xl font-semibold leading-none text-ink">{value}</p>
       <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">{hint}</p>
     </Card>
   );

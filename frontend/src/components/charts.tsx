@@ -407,9 +407,10 @@ export function SentimentBar({ breakdown }: { breakdown: Partial<Record<Sentimen
 // Per-turn latency
 // ---------------------------------------------------------------------------
 
-const LAT_W = 320;
-const LAT_H = 96;
-const LAT_PAD = { top: 10, right: 4, bottom: 16, left: 4 };
+// Wide viewBox so the chart doesn't balloon in a wide card.
+const LAT_W = 520;
+const LAT_H = 104;
+const LAT_PAD = { top: 12, right: 4, bottom: 18, left: 4 };
 const FEELS_IMMEDIATE_MS = 800;
 
 export function LatencyBars({ values }: { values: number[] }) {
@@ -453,7 +454,7 @@ export function LatencyBars({ values }: { values: number[] }) {
           strokeOpacity="0.5"
           strokeDasharray="3 3"
         />
-        <text x={LAT_W - LAT_PAD.right} y={y(FEELS_IMMEDIATE_MS) - 3} textAnchor="end" fontSize="8" fill="var(--color-ink-muted)">
+        <text x={LAT_W - LAT_PAD.right} y={y(FEELS_IMMEDIATE_MS) - 4} textAnchor="end" fontSize="11" fill="var(--color-ink-muted)">
           0.8 s
         </text>
         {values.map((ms, i) => {
@@ -471,7 +472,7 @@ export function LatencyBars({ values }: { values: number[] }) {
                 opacity={hover === null || hover === i ? 1 : 0.45}
                 className="transition-opacity"
               />
-              <text x={cx} y={LAT_H - 4} textAnchor="middle" className="tnum" fontSize="8" fill="var(--color-ink-muted)">
+              <text x={cx} y={LAT_H - 4} textAnchor="middle" className="tnum" fontSize="11" fill="var(--color-ink-muted)">
                 {i + 1}
               </text>
             </g>

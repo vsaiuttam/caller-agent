@@ -12,7 +12,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { CallConsole } from "../components/live/CallConsole";
 import { LiveCallCard } from "../components/live/LiveCallCard";
-import { IconFlask, IconLive, IconPhone } from "../components/icons";
+import { IconCampaign, IconLive, IconPhone } from "../components/icons";
 import { Badge, ButtonLink, Callout, Card, EmptyState, Page, PageHeader, Skeleton } from "../components/ui";
 import { useLiveCalls } from "../data";
 import { useAsync, useDocumentTitle, useMediaQuery, useNow } from "../hooks";
@@ -93,7 +93,7 @@ export default function Live() {
                 <ButtonLink to="/test-lab/phone" icon={<IconPhone size={14} />}>
                   Place a test call
                 </ButtonLink>
-                <ButtonLink to="/campaigns" variant="secondary" icon={<IconFlask size={14} />}>
+                <ButtonLink to="/campaigns" variant="secondary" icon={<IconCampaign size={14} />}>
                   Go to campaigns
                 </ButtonLink>
               </>

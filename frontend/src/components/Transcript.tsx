@@ -180,7 +180,7 @@ export function LiveTranscript({
   personName,
   typing = false,
   empty,
-  className = "h-[min(56vh,520px)]",
+  className,
 }: {
   turns: DisplayTurn[];
   personName: string;
@@ -228,7 +228,7 @@ export function LiveTranscript({
       <div
         ref={box}
         onScroll={onScroll}
-        className={cx("overflow-y-auto overscroll-contain px-4 py-5 sm:px-5", className)}
+        className={cx("overflow-y-auto overscroll-contain px-4 py-5 sm:px-5", className ?? "h-[min(56vh,520px)]")}
         role="log"
         aria-live="polite"
         aria-relevant="additions"
