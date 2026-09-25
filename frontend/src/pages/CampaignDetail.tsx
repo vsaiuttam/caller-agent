@@ -15,12 +15,11 @@ import {
   EmptyState,
   ErrorNote,
   Field,
-  PageWrapper,
   Skeleton,
   StatusBadge,
-  formatDateTime,
   inputClass,
 } from "../components/ui";
+import { formatDateTime } from "../format";
 import { useAsync } from "../hooks";
 
 const DAY_NAMES = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -62,7 +61,7 @@ export default function CampaignDetail() {
   const canStart = c.status !== "running" && c.total_contacts > 0;
 
   return (
-    <PageWrapper className="mx-auto max-w-6xl px-3 py-4 sm:px-8 sm:py-7">
+    <div className="mx-auto max-w-6xl px-3 py-4 sm:px-8 sm:py-7">
       <Link
         to="/campaigns"
         className="inline-flex items-center gap-1.5 text-xs text-ink-muted transition hover:text-brand-bright"
@@ -104,7 +103,7 @@ export default function CampaignDetail() {
         <div className="space-y-4 lg:col-span-3">
           <ConversationEditor campaign={c} onSaved={campaign.reload} />
 
-          <Card hover={false}>
+          <Card>
             <CardHeader
               title="Contacts"
               subtitle={`${c.total_contacts} total · ${c.pending} pending · ${c.completed} completed`}
@@ -187,7 +186,7 @@ export default function CampaignDetail() {
           <FollowupSettings campaign={c} onSaved={campaign.reload} />
         </div>
       </div>
-    </PageWrapper>
+    </div>
   );
 }
 
@@ -315,7 +314,7 @@ function ConversationEditor({
     .replaceAll("{campaign_name}", campaign.name);
 
   return (
-    <Card hover={false}>
+    <Card>
       <CardHeader
         title="Conversation"
         subtitle="What the agent is briefed to do. Changes apply to calls placed after saving."

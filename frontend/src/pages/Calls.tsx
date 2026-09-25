@@ -16,12 +16,10 @@ import {
   EmptyState,
   ErrorNote,
   FollowupBadge,
-  PageWrapper,
   ScoreBadge,
   Skeleton,
-  formatDateTime,
-  formatDuration,
 } from "../components/ui";
+import { formatDateTime, formatDuration } from "../format";
 import { useAsync } from "../hooks";
 
 export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) {
@@ -45,7 +43,7 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
   const exportParams = filters;
 
   return (
-    <PageWrapper className="mx-auto max-w-7xl px-3 py-4 sm:px-6 sm:py-5">
+    <div className="mx-auto max-w-7xl px-3 py-4 sm:px-6 sm:py-5">
       <header className="mb-5 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold tracking-tight">
@@ -111,7 +109,7 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
       {calls.error && <ErrorNote message={calls.error} />}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
-        <Card className="overflow-hidden lg:col-span-2" hover={false}>
+        <Card className="overflow-hidden lg:col-span-2">
           <div className="max-h-[calc(100vh-13rem)] overflow-y-auto">
             {calls.loading ? (
               <div className="space-y-2 p-4">
@@ -153,7 +151,7 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
               }}
             />
           ) : (
-            <Card hover={false}>
+            <Card>
               <EmptyState
                 title="Select a call"
                 hint="You'll see the full transcript, what the agent extracted, and whether it was written to your systems."
@@ -162,7 +160,7 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
           )}
         </div>
       </div>
-    </PageWrapper>
+    </div>
   );
 }
 
@@ -198,7 +196,7 @@ function CallRow({
             <span className="truncate text-sm font-semibold">{call.contact_name}</span>
           </span>
           {call.qualification_band ? (
-            <ScoreBadge score={call.score} band={call.qualification_band} size="sm" />
+            <ScoreBadge score={call.score} band={call.qualification_band} />
           ) : (
             <DispositionBadge value={call.disposition} />
           )}
@@ -260,7 +258,7 @@ function Detail({ callId, onReviewed }: { callId: string; onReviewed: () => void
   return (
     <div className="space-y-3">
       {data.needs_human_review && (
-        <Card className="!border-warning/30 !bg-warning/5" hover={false}>
+        <Card className="!border-warning/30 !bg-warning/5">
           <div className="px-5 py-4">
             <p className="text-sm font-bold text-warning">Held for review</p>
             <p className="mt-1 text-xs leading-relaxed text-ink-secondary">
@@ -289,7 +287,7 @@ function Detail({ callId, onReviewed }: { callId: string; onReviewed: () => void
 
       <ScorecardResult scores={data.scores} qualification={data.qualification} />
 
-      <Card hover={false}>
+      <Card>
         <CardHeader title="Transcript" subtitle={`${data.transcript.length} turns`} />
         <div className="max-h-96 space-y-3 overflow-y-auto px-5 py-4">
           {data.transcript.length === 0 ? (
@@ -336,7 +334,7 @@ function Outcome({ data, onChanged }: { data: CallDetail; onChanged: () => void 
   const dispatch = data.dispatch_result;
 
   return (
-    <Card hover={false}>
+    <Card>
       <CardHeader
         title="Outcome"
         subtitle={formatDateTime(data.started_at)}

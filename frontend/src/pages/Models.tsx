@@ -24,7 +24,6 @@ import {
   CardHeader,
   ErrorNote,
   Field,
-  PageWrapper,
   Skeleton,
   inputClass,
 } from "../components/ui";
@@ -98,7 +97,7 @@ export default function Models() {
   };
 
   return (
-    <PageWrapper className="mx-auto max-w-[1180px] px-3 py-4 sm:px-6 sm:py-5">
+    <div className="mx-auto max-w-[1180px] px-3 py-4 sm:px-6 sm:py-5">
       <header className="mb-5 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold tracking-tight">Models</h1>
@@ -165,7 +164,7 @@ export default function Models() {
           <Estimator selection={current} pricingAsOf={catalog.data.pricing_as_of} />
         </div>
       )}
-    </PageWrapper>
+    </div>
   );
 }
 
@@ -359,7 +358,7 @@ function Estimator({
   const data = estimate.data;
 
   return (
-    <Card hover={false}>
+    <Card>
       <CardHeader
         title="What this will cost"
         subtitle={`Model spend only — telephony is billed by your carrier. Prices as of ${pricingAsOf}.`}

@@ -247,3 +247,181 @@ export const IconMenu = ({ size = 18, className }: IconProps) => (
     <path d="M4 6h16M4 12h16M4 18h16" />
   </svg>
 );
+
+export const IconLive = ({ size = 18, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <circle cx="12" cy="12" r="2.25" />
+    <path d="M8.2 8.2a5.4 5.4 0 0 0 0 7.6M15.8 8.2a5.4 5.4 0 0 1 0 7.6" />
+    <path d="M5.3 5.3a9.5 9.5 0 0 0 0 13.4M18.7 5.3a9.5 9.5 0 0 1 0 13.4" />
+  </svg>
+);
+
+export const IconPhoneOff = ({ size = 18, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M3.7 12.9a15 15 0 0 1 16.6 0c.6.4.8 1.2.5 1.9l-.9 1.9a1.5 1.5 0 0 1-1.9.7l-2.6-1.1a1.5 1.5 0 0 1-.9-1.5l.1-1.4a11 11 0 0 0-5.2 0l.1 1.4a1.5 1.5 0 0 1-.9 1.5L5.9 17.4a1.5 1.5 0 0 1-1.9-.7l-.9-1.9c-.3-.7-.1-1.5.6-1.9Z" />
+  </svg>
+);
+
+export const IconChevronDown = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="m6 9 6 6 6-6" />
+  </svg>
+);
+
+export const IconChevronRight = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="m9 6 6 6-6 6" />
+  </svg>
+);
+
+export const IconArrowDown = ({ size = 14, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M12 5v14" />
+    <path d="m6 13 6 6 6-6" />
+  </svg>
+);
+
+export const IconArrowRight = ({ size = 14, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M5 12h14" />
+    <path d="m13 6 6 6-6 6" />
+  </svg>
+);
+
+export const IconCopy = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <rect x="8.5" y="8.5" width="12" height="12" rx="2.5" />
+    <path d="M15.5 8.5V6a2.5 2.5 0 0 0-2.5-2.5H6A2.5 2.5 0 0 0 3.5 6v7A2.5 2.5 0 0 0 6 15.5h2.5" />
+  </svg>
+);
+
+export const IconLogout = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M14.5 4.5h3a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-3" />
+    <path d="M10 16.5 5.5 12 10 7.5" />
+    <path d="M5.5 12h10" />
+  </svg>
+);
+
+export const IconKeyboard = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <rect x="2.5" y="6" width="19" height="12" rx="2.5" />
+    <path d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M7.5 14h9" />
+  </svg>
+);
+
+export const IconSidebar = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <rect x="3" y="4" width="18" height="16" rx="3" />
+    <path d="M9.5 4v16" />
+  </svg>
+);
+
+export const IconSend = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M4.5 12 3.3 4.8a.8.8 0 0 1 1.1-.9l16 7.4a.8.8 0 0 1 0 1.4l-16 7.4a.8.8 0 0 1-1.1-.9L4.5 12Zm0 0h7" />
+  </svg>
+);
+
+export const IconWhisper = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M20 11.5a7.5 7.5 0 0 1-11 6.6L4 19.5l1.4-4.6A7.5 7.5 0 1 1 20 11.5Z" />
+    <path d="M9 11.5h.01M12.5 11.5h.01M16 11.5h.01" />
+  </svg>
+);
+
+export const IconRefresh = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3L19.5 9" />
+    <path d="M19.5 4v5h-5" />
+  </svg>
+);
+
+export const IconPlus = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
+export const IconLock = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <rect x="4.5" y="10.5" width="15" height="10" rx="2.5" />
+    <path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" />
+  </svg>
+);
+
+export const IconAlert = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 7.5v5.5M12 16.5h.01" />
+  </svg>
+);
+
+export const IconInfo = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 11v5.5M12 7.5h.01" />
+  </svg>
+);
+
+export const IconRows = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M4 6h16M4 12h16M4 18h16" />
+  </svg>
+);
+
+export const IconRowsCompact = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M4 5h16M4 9.7h16M4 14.3h16M4 19h16" />
+  </svg>
+);
+
+export const IconSmile = ({ size = 14, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M8.5 14a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01" />
+  </svg>
+);
+
+export const IconMeh = ({ size = 14, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M8.5 14.5h7M9 9.5h.01M15 9.5h.01" />
+  </svg>
+);
+
+export const IconFrown = ({ size = 14, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M8.5 16a4.5 4.5 0 0 1 7 0M9 9.5h.01M15 9.5h.01" />
+  </svg>
+);
+
+export const IconHelp = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M9.6 9.4a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.7M12 16.8h.01" />
+  </svg>
+);
+
+export const IconFile = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M13.5 3.5H7A2.5 2.5 0 0 0 4.5 6v12A2.5 2.5 0 0 0 7 20.5h10a2.5 2.5 0 0 0 2.5-2.5V9.5l-6-6Z" />
+    <path d="M13.5 3.5v6h6" />
+  </svg>
+);
+
+export const IconUser = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <circle cx="12" cy="8.5" r="3.75" />
+    <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
+  </svg>
+);
+
+export const IconExternal = ({ size = 14, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M14 4.5h5.5V10" />
+    <path d="M19.5 4.5 11 13" />
+    <path d="M18 14.5v3a2 2 0 0 1-2 2H6.5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3" />
+  </svg>
+);

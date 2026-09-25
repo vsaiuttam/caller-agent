@@ -10,7 +10,6 @@ import {
 import {
   Card,
   LiveDot,
-  PageWrapper,
   Skeleton,
 } from "../components/ui";
 import { usePolling } from "../hooks";
@@ -97,10 +96,10 @@ const PRIORITY_ORDER = [
 ];
 
 export default function Settings() {
-  const health = usePolling(() => api.health(), 30_000);
+  const health = usePolling(() => api.health(), 30_000).data;
 
   return (
-    <PageWrapper className="px-6 py-5">
+    <div className="px-6 py-5">
       <header className="mb-5">
         <h1 className="text-xl font-bold tracking-tight">Integrations</h1>
         <p className="mt-0.5 text-sm text-ink-muted">
@@ -196,6 +195,6 @@ export default function Settings() {
           )}
         </>
       )}
-    </PageWrapper>
+    </div>
   );
 }

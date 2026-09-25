@@ -15,7 +15,6 @@ import {
   CardHeader,
   ErrorNote,
   Field,
-  PageWrapper,
   inputClass,
 } from "../components/ui";
 import { useAsync } from "../hooks";
@@ -181,7 +180,7 @@ export default function NewCampaign() {
   };
 
   return (
-    <PageWrapper className="mx-auto max-w-6xl px-3 py-4 sm:px-8 sm:py-7">
+    <div className="mx-auto max-w-6xl px-3 py-4 sm:px-8 sm:py-7">
       <Link
         to="/campaigns"
         className="inline-flex items-center gap-1.5 text-xs text-ink-muted transition hover:text-brand-bright"
@@ -667,6 +666,6 @@ export default function NewCampaign() {
           </div>
         </div>
       </div>
-    </PageWrapper>
+    </div>
   );
 }

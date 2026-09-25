@@ -7,7 +7,6 @@ import {
   Card,
   EmptyState,
   ErrorNote,
-  PageWrapper,
   Skeleton,
 } from "../components/ui";
 import { useAsync } from "../hooks";
@@ -31,7 +30,7 @@ export default function Templates() {
   };
 
   return (
-    <PageWrapper className="px-3 py-4 sm:px-6 sm:py-5">
+    <div className="px-3 py-4 sm:px-6 sm:py-5">
       <header className="mb-5">
         <h1 className="text-xl font-bold tracking-tight">Templates</h1>
         <p className="mt-1 max-w-2xl text-sm text-ink-muted">
@@ -85,7 +84,7 @@ export default function Templates() {
           ))}
         </div>
       ) : visible.length === 0 ? (
-        <Card hover={false}>
+        <Card>
           <EmptyState
             title="Nothing in this category"
             hint="Try another category, or build a campaign from scratch."
@@ -113,7 +112,7 @@ export default function Templates() {
           onUse={() => use(preview)}
         />
       )}
-    </PageWrapper>
+    </div>
   );
 }
 

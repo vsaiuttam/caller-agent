@@ -5,7 +5,6 @@ import {
   Card,
   EmptyState,
   ErrorNote,
-  PageWrapper,
   Skeleton,
   StatusBadge,
 } from "../components/ui";
@@ -15,7 +14,7 @@ export default function Campaigns() {
   const { data: campaigns, loading, error } = useAsync(() => api.campaigns());
 
   return (
-    <PageWrapper className="mx-auto max-w-5xl px-3 py-4 sm:px-6 sm:py-5">
+    <div className="mx-auto max-w-5xl px-3 py-4 sm:px-6 sm:py-5">
       <header className="mb-5 flex items-start justify-between gap-6">
         <div>
           <h1 className="text-xl font-bold tracking-tight">Campaigns</h1>
@@ -38,7 +37,7 @@ export default function Campaigns() {
           ))}
         </div>
       ) : !campaigns?.length ? (
-        <Card hover={false}>
+        <Card>
           <EmptyState
             title="No campaigns yet"
             hint="Create one, load your contact list, then start it. Nothing dials until you press start."
@@ -99,6 +98,6 @@ export default function Campaigns() {
           })}
         </ul>
       )}
-    </PageWrapper>
+    </div>
   );
 }

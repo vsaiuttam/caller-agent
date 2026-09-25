@@ -1,201 +1,232 @@
 /**
- * Command palette (Ctrl/Cmd-K).
+ * Command palette (⌘K / Ctrl+K, or "/"). Jump to any page or campaign, or
+ * run an action, without leaving the keyboard.
+ *
+ * ARIA combobox pattern: the input owns the listbox and moves a virtual
+ * cursor with aria-activedescendant, so focus never leaves the input.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
+import { AnimatePresence, m } from "framer-motion";
 import { api, type Campaign } from "../api";
+import { useAuth } from "../auth";
+import { useTheme } from "../theme";
+import { T } from "../motion";
+import { NAV_ITEMS } from "./shell/nav";
 import {
-  IconBlock,
   IconCampaign,
-  IconChip,
-  IconDashboard,
-  IconFlask,
-  IconMic,
+  IconKeyboard,
+  IconLogout,
+  IconMoon,
   IconPhone,
-  IconReview,
+  IconPlus,
   IconSearch,
-  IconSettings,
-  IconSparkle,
+  IconSun,
 } from "./icons";
+import { Kbd } from "./ui";
 
 interface Command {
   id: string;
   label: string;
   hint: string;
-  to: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   group: string;
+  run: () => void;
 }
 
-const PAGES: Command[] = [
-  { id: "p-dash", label: "Overview", hint: "Dashboard", to: "/dashboard", icon: <IconDashboard size={15} />, group: "Go to" },
-  { id: "p-tpl", label: "Templates", hint: "Prebuilt campaigns", to: "/templates", icon: <IconSparkle size={15} />, group: "Go to" },
-  { id: "p-camp", label: "Campaigns", hint: "All campaigns", to: "/campaigns", icon: <IconCampaign size={15} />, group: "Go to" },
-  { id: "p-calls", label: "Calls", hint: "Call history", to: "/calls", icon: <IconPhone size={15} />, group: "Go to" },
-  { id: "p-review", label: "Review queue", hint: "Calls needing a human", to: "/review", icon: <IconReview size={15} />, group: "Go to" },
-  { id: "p-models", label: "Models", hint: "Choose the LLM and see the cost", to: "/models", icon: <IconChip size={15} />, group: "Go to" },
-  { id: "p-sim", label: "Test calls", hint: "Rehearse against a simulated person", to: "/simulator", icon: <IconFlask size={15} />, group: "Go to" },
-  { id: "p-live", label: "Live mic", hint: "Take the call yourself", to: "/live", icon: <IconMic size={15} />, group: "Go to" },
-  { id: "p-dnc", label: "Do not call", hint: "Suppression list", to: "/suppressions", icon: <IconBlock size={15} />, group: "Go to" },
-  { id: "p-set", label: "Integrations", hint: "Service connections & status", to: "/settings", icon: <IconSettings size={15} />, group: "Go to" },
-  { id: "a-new", label: "New campaign", hint: "Start from scratch", to: "/campaigns/new", icon: <IconCampaign size={15} />, group: "Create" },
-];
-
-export default function CommandPalette() {
+export default function CommandPalette({
+  open,
+  onClose,
+  onShowShortcuts,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onShowShortcuts: () => void;
+}) {
   const navigate = useNavigate();
-  const [open, setOpen] = useState(false);
+  const { theme, toggle } = useTheme();
+  const auth = useAuth();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setOpen((wasOpen) => !wasOpen);
-      }
-      if (e.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    if (!open) return;
+    setQuery("");
+    setActive(0);
+    const previous = document.activeElement as HTMLElement | null;
+    requestAnimationFrame(() => inputRef.current?.focus());
+    // Refetch each time: campaigns change, and this is cheap.
+    api.campaigns().then(setCampaigns).catch(() => setCampaigns([]));
+    return () => previous?.focus?.();
+  }, [open]);
 
-  useEffect(() => {
-    if (!open) {
-      setQuery("");
-      setActive(0);
-      return;
-    }
-    inputRef.current?.focus();
-    if (campaigns === null) {
-      api
-        .campaigns()
-        .then(setCampaigns)
-        .catch(() => setCampaigns([]));
-    }
-  }, [open, campaigns]);
-
-  const commands = useMemo(() => {
+  const commands = useMemo<Command[]>(() => {
+    const go = (to: string) => () => navigate(to);
     const all: Command[] = [
-      ...PAGES,
+      ...NAV_ITEMS.map((item) => ({
+        id: `page-${item.to}`,
+        label: item.label,
+        hint: item.hint,
+        icon: item.icon(15),
+        group: "Go to",
+        run: go(item.to),
+      })),
+      { id: "a-new", label: "New campaign", hint: "Start from scratch", icon: <IconPlus size={15} />, group: "Actions", run: go("/campaigns/new") },
+      { id: "a-call", label: "Place a test call", hint: "Ring your own phone", icon: <IconPhone size={15} />, group: "Actions", run: go("/test-lab/phone") },
+      {
+        id: "a-theme",
+        label: theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
+        hint: "Appearance",
+        icon: theme === "dark" ? <IconSun size={15} /> : <IconMoon size={15} />,
+        group: "Actions",
+        run: toggle,
+      },
+      { id: "a-keys", label: "Keyboard shortcuts", hint: "?", icon: <IconKeyboard size={15} />, group: "Actions", run: onShowShortcuts },
+      ...(auth.phase === "signed-in"
+        ? [{ id: "a-out", label: "Sign out", hint: "End this session", icon: <IconLogout size={15} />, group: "Actions", run: auth.signOut }]
+        : []),
       ...(campaigns ?? []).map((c) => ({
         id: `c-${c.id}`,
         label: c.name,
         hint: `${c.status} · ${c.total_contacts} contacts`,
-        to: `/campaigns/${c.id}`,
         icon: <IconCampaign size={15} />,
         group: "Campaigns",
+        run: go(`/campaigns/${c.id}`),
       })),
     ];
-
     const q = query.trim().toLowerCase();
     if (!q) return all;
-    return all.filter(
-      (c) =>
-        c.label.toLowerCase().includes(q) || c.hint.toLowerCase().includes(q),
-    );
-  }, [campaigns, query]);
+    return all.filter((c) => c.label.toLowerCase().includes(q) || c.hint.toLowerCase().includes(q));
+  }, [campaigns, query, navigate, theme, toggle, onShowShortcuts, auth.phase, auth.signOut]);
 
   const grouped = useMemo(() => {
     const groups = new Map<string, Command[]>();
-    commands.forEach((c) => {
-      const list = groups.get(c.group);
-      if (list) list.push(c);
-      else groups.set(c.group, [c]);
-    });
+    commands.forEach((c) => groups.set(c.group, [...(groups.get(c.group) ?? []), c]));
     return [...groups.entries()];
   }, [commands]);
 
-  const go = (command: Command) => {
-    setOpen(false);
-    navigate(command.to);
+  // Keep the highlighted row in view as the cursor moves.
+  useEffect(() => {
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-index="${active}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+
+  const execute = (command: Command) => {
+    onClose();
+    command.run();
   };
 
-  if (!open) return null;
+  return createPortal(
+    <AnimatePresence>
+      {open && (
+        <m.div
+          key="palette"
+          className="fixed inset-0 z-[65] flex items-start justify-center px-4 pt-[12vh]"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={T.fast}
+        >
+          <div className="absolute inset-0 bg-[var(--overlay)] backdrop-blur-[2px]" onClick={onClose} />
+          <m.div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Command palette"
+            initial={{ opacity: 0, y: -8, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -4, scale: 0.98 }}
+            transition={T.base}
+            className="relative w-full max-w-xl overflow-hidden rounded-2xl border border-line bg-raised elev-3"
+          >
+            <div className="flex items-center gap-3 border-b border-line px-4">
+              <IconSearch size={16} className="shrink-0 text-ink-muted" />
+              <input
+                ref={inputRef}
+                value={query}
+                role="combobox"
+                aria-expanded="true"
+                aria-controls={listId}
+                aria-activedescendant={commands[active] ? `${listId}-${active}` : undefined}
+                aria-autocomplete="list"
+                placeholder="Search pages, campaigns and actions…"
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setActive(0);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setActive((i) => Math.min(i + 1, commands.length - 1));
+                  } else if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setActive((i) => Math.max(i - 1, 0));
+                  } else if (e.key === "Enter" && commands[active]) {
+                    e.preventDefault();
+                    execute(commands[active]);
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    onClose();
+                  }
+                }}
+                className="h-12 w-full bg-transparent text-sm text-ink outline-none placeholder:text-ink-muted"
+              />
+              <Kbd>esc</Kbd>
+            </div>
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh]"
-      style={{ background: "var(--overlay-bg)", backdropFilter: "blur(4px)" }}
-      onClick={() => setOpen(false)}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Command palette"
-        className="w-full max-w-lg overflow-hidden rounded-xl border border-[var(--surface-border)] bg-surface shadow-2xl"
-        style={{ boxShadow: "var(--shadow-4)" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-2.5 border-b border-[var(--surface-border)] px-4 py-3">
-          <span className="text-ink-muted">
-            <IconSearch size={15} />
-          </span>
-          <input
-            ref={inputRef}
-            value={query}
-            placeholder="Search campaigns and pages\u2026"
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setActive(0);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "ArrowDown") {
-                e.preventDefault();
-                setActive((i) => Math.min(i + 1, commands.length - 1));
-              } else if (e.key === "ArrowUp") {
-                e.preventDefault();
-                setActive((i) => Math.max(i - 1, 0));
-              } else if (e.key === "Enter" && commands[active]) {
-                e.preventDefault();
-                go(commands[active]);
-              }
-            }}
-            className="w-full bg-transparent text-[13px] outline-none placeholder:text-ink-muted"
-          />
-          <kbd className="rounded border border-[var(--surface-border)] px-1.5 py-0.5 text-[10px] text-ink-muted">
-            esc
-          </kbd>
-        </div>
-
-        <div className="max-h-[52vh] overflow-y-auto py-1">
-          {commands.length === 0 ? (
-            <p className="px-4 py-8 text-center text-[13px] text-ink-muted">
-              Nothing matches &ldquo;{query}&rdquo;
-            </p>
-          ) : (
-            grouped.map(([group, items]) => (
-              <div key={group} className="mb-0.5">
-                <p className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-ink-muted">
-                  {group}
+            <div ref={listRef} id={listId} role="listbox" aria-label="Results" className="max-h-[52vh] overflow-y-auto p-1.5">
+              {commands.length === 0 ? (
+                <p className="px-4 py-10 text-center text-sm text-ink-muted">
+                  Nothing matches “{query}”.
                 </p>
-                {items.map((command) => {
-                  const index = commands.indexOf(command);
-                  return (
-                    <button
-                      key={command.id}
-                      type="button"
-                      onMouseEnter={() => setActive(index)}
-                      onClick={() => go(command)}
-                      className={`flex w-full items-center gap-2.5 px-4 py-2 text-left text-[13px] transition-colors ${
-                        index === active ? "bg-brand/8 text-ink" : "text-ink-secondary"
-                      }`}
-                    >
-                      <span className={index === active ? "text-brand" : "text-ink-muted"}>{command.icon}</span>
-                      <span className="flex-1 truncate">{command.label}</span>
-                      <span className="truncate text-xs text-ink-muted">
-                        {command.hint}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-    </div>
+              ) : (
+                grouped.map(([group, items]) => (
+                  <div key={group} role="group" aria-label={group} className="mb-1">
+                    <p className="px-2.5 pb-1 pt-2 text-2xs font-medium uppercase tracking-wider text-ink-muted">
+                      {group}
+                    </p>
+                    {items.map((command) => {
+                      const index = commands.indexOf(command);
+                      const selected = index === active;
+                      return (
+                        <div
+                          key={command.id}
+                          id={`${listId}-${index}`}
+                          role="option"
+                          aria-selected={selected}
+                          data-index={index}
+                          onMouseMove={() => setActive(index)}
+                          onClick={() => execute(command)}
+                          className={`flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 text-sm transition-colors ${
+                            selected ? "bg-subtle text-ink" : "text-ink-secondary"
+                          }`}
+                        >
+                          <span className={selected ? "text-brand" : "text-ink-muted"}>{command.icon}</span>
+                          <span className="flex-1 truncate font-medium">{command.label}</span>
+                          <span className="hidden truncate text-xs text-ink-muted sm:inline">{command.hint}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="hidden items-center gap-4 border-t border-line px-4 py-2.5 text-2xs text-ink-muted sm:flex">
+              <span className="flex items-center gap-1.5"><Kbd>↑</Kbd><Kbd>↓</Kbd> move</span>
+              <span className="flex items-center gap-1.5"><Kbd>↵</Kbd> open</span>
+              <span className="flex items-center gap-1.5"><Kbd>?</Kbd> all shortcuts</span>
+            </div>
+          </m.div>
+        </m.div>
+      )}
+    </AnimatePresence>,
+    document.body,
   );
 }

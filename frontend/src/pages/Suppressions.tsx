@@ -7,10 +7,9 @@ import {
   EmptyState,
   ErrorNote,
   Field,
-  PageWrapper,
-  formatDateTime,
   inputClass,
 } from "../components/ui";
+import { formatDateTime } from "../format";
 import { useAsync } from "../hooks";
 
 export default function Suppressions() {
@@ -36,7 +35,7 @@ export default function Suppressions() {
   };
 
   return (
-    <PageWrapper className="mx-auto max-w-4xl px-3 py-4 sm:px-6 sm:py-5">
+    <div className="mx-auto max-w-4xl px-3 py-4 sm:px-6 sm:py-5">
       <header className="mb-5">
         <h1 className="text-xl font-bold tracking-tight">Do not call</h1>
         <p className="mt-0.5 text-sm text-ink-muted">
@@ -44,7 +43,7 @@ export default function Suppressions() {
         </p>
       </header>
 
-      <Card className="mb-3" hover={false}>
+      <Card className="mb-3">
         <CardHeader title="Add a number" />
         <div className="flex items-end gap-3 px-5 py-4">
           <div className="w-56">
@@ -80,7 +79,7 @@ export default function Suppressions() {
 
       {error && <ErrorNote message={error} />}
 
-      <Card hover={false}>
+      <Card>
         <CardHeader title="Suppressed numbers" subtitle={`${data?.length ?? 0} entries`} />
         {loading ? (
           <p className="px-5 py-8 text-center text-sm text-ink-muted">Loading\u2026</p>
@@ -108,6 +107,6 @@ export default function Suppressions() {
           </ul>
         )}
       </Card>
-    </PageWrapper>
+    </div>
   );
 }
