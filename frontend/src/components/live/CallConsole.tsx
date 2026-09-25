@@ -23,8 +23,6 @@ import {
   IconClock,
   IconClose,
   IconCoin,
-  IconCopy,
-  IconDownload,
   IconPhoneOff,
   IconRefresh,
   IconSend,
@@ -33,7 +31,7 @@ import {
 } from "../icons";
 import OutcomeCard from "../OutcomeCard";
 import { ScorecardResult } from "../Scorecard";
-import { LiveTranscript, transcriptText, type DisplayTurn } from "../Transcript";
+import { LiveTranscript, TranscriptActions, type DisplayTurn } from "../Transcript";
 import {
   Badge,
   Button,
@@ -374,67 +372,6 @@ function StatusStepper({ phase, failedFrom }: { phase: CallPhase; failedFrom: Ca
         );
       })}
     </ol>
-  );
-}
-
-function TranscriptActions({
-  callId,
-  turns,
-  personName,
-}: {
-  callId: string;
-  turns: DisplayTurn[];
-  personName: string;
-}) {
-  const [downloading, setDownloading] = useState<"txt" | "json" | null>(null);
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(transcriptText(turns, personName));
-      toast.success("Transcript copied", `${turns.length} lines on your clipboard.`);
-    } catch {
-      toast.error("Couldn't copy", "The browser blocked clipboard access.");
-    }
-  };
-
-  const download = async (format: "txt" | "json") => {
-    setDownloading(format);
-    try {
-      await api.downloadTranscript(callId, format);
-    } catch (err) {
-      toast.error("Download failed", (err as Error).message);
-    } finally {
-      setDownloading(null);
-    }
-  };
-
-  const disabled = turns.length === 0;
-  return (
-    <div className="flex items-center gap-1">
-      <Button size="sm" variant="ghost" icon={<IconCopy size={13} />} onClick={copy} disabled={disabled}>
-        Copy
-      </Button>
-      <Button
-        size="sm"
-        variant="ghost"
-        icon={<IconDownload size={13} />}
-        loading={downloading === "txt"}
-        onClick={() => download("txt")}
-        disabled={disabled}
-      >
-        TXT
-      </Button>
-      <Button
-        size="sm"
-        variant="ghost"
-        icon={<IconDownload size={13} />}
-        loading={downloading === "json"}
-        onClick={() => download("json")}
-        disabled={disabled}
-      >
-        JSON
-      </Button>
-    </div>
   );
 }
 

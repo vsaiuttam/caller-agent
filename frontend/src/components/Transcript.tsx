@@ -9,11 +9,12 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, m, useReducedMotion } from "framer-motion";
+import { api } from "../api";
 import { formatMs, formatOffset } from "../format";
 import { T } from "../motion";
 import { LogoMark } from "./Logo";
-import { IconArrowDown, IconWhisper } from "./icons";
-import { Tooltip, cx } from "./ui";
+import { IconArrowDown, IconCopy, IconDownload, IconWhisper } from "./icons";
+import { Button, Tooltip, cx, toast } from "./ui";
 
 export interface DisplayTurn {
   key: string;
@@ -266,6 +267,70 @@ export function LiveTranscript({
           </m.button>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+/** Copy to clipboard, and download the server's TXT / JSON export. */
+export function TranscriptActions({
+  callId,
+  turns,
+  personName,
+}: {
+  callId: string;
+  turns: DisplayTurn[];
+  personName: string;
+}) {
+  const [downloading, setDownloading] = useState<"txt" | "json" | null>(null);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(transcriptText(turns, personName));
+      toast.success("Transcript copied", `${turns.length} lines on your clipboard.`);
+    } catch {
+      toast.error("Couldn't copy", "The browser blocked clipboard access.");
+    }
+  };
+
+  const download = async (format: "txt" | "json") => {
+    setDownloading(format);
+    try {
+      await api.downloadTranscript(callId, format);
+    } catch (err) {
+      toast.error("Download failed", (err as Error).message);
+    } finally {
+      setDownloading(null);
+    }
+  };
+
+  const disabled = turns.length === 0;
+  return (
+    <div className="flex items-center gap-1" role="group" aria-label="Transcript actions">
+      <Button size="sm" variant="ghost" icon={<IconCopy size={13} />} onClick={copy} disabled={disabled}>
+        Copy
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        icon={<IconDownload size={13} />}
+        loading={downloading === "txt"}
+        onClick={() => download("txt")}
+        disabled={disabled}
+        aria-label="Download transcript as text"
+      >
+        TXT
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        icon={<IconDownload size={13} />}
+        loading={downloading === "json"}
+        onClick={() => download("json")}
+        disabled={disabled}
+        aria-label="Download transcript as JSON"
+      >
+        JSON
+      </Button>
     </div>
   );
 }
