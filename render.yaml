@@ -71,6 +71,12 @@ services:
       - key: TWILIO_WHATSAPP_CONTENT_SID
         sync: false
 
+      # Access control — set a password so a public deploy can't place calls
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: AUTH_SECRET
+        sync: false
+
       # CORS — your Vercel frontend URL + local dev
       - key: CORS_ORIGINS
         value: "https://frontend-nu-blond-93.vercel.app,http://localhost:5173"

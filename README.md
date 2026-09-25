@@ -1,4 +1,6 @@
-# Voice Agent Platform
+# Samvaad
+
+*AI voice agents that sound human.* Samvaad (संवाद) means "conversation".
 
 Outbound calling with a conversational AI agent: place calls from a contact
 list, hold a natural conversation against a per-campaign goal, extract what was
@@ -161,6 +163,29 @@ Delivery receipts update the call record (queued → sent → delivered → read
 and a failure is shown in words, with a **Resend** button for when the fix
 was on your side.
 
+### 9. Watch a call live, and steer it
+
+A real test call starts immediately and opens a live console. The
+conversation streams in turn by turn, with the agent's reply time on each
+turn, and every turn is saved as it happens, so nothing is lost if the page
+closes. While the call runs you can **whisper**: a private instruction the
+agent follows from its next turn ("offer the 10% discount"), which the person
+never hears. You can also **end the call**, and the agent says a proper
+goodbye in the call's language. **Live** lists every call in progress.
+Transcripts download as TXT or JSON from any call.
+
+Calls end the way people end them. When the person is done ("thank you",
+"bye", "bas", "shukriya"), the agent says one warm goodbye in the call's
+language and hangs up. The stock lines ("are you still there?", the
+voicemail message) come in English, Hindi, Urdu and Hinglish.
+
+### 10. Lock it down
+
+A deployed console is a public URL that can place calls on your Twilio
+account. Set `ADMIN_PASSWORD` and the console asks for it, and every API route
+needs the token it issues. Twilio's webhooks stay open, because Twilio can't
+log in. Unset, everything stays open, and the console shows a banner saying so.
+
 ## Layout
 
 ```
@@ -182,7 +207,10 @@ src/voiceagent/
     runner.py          Concurrency-capped dispatch loop
     events.py          In-process pub/sub for the live feed
   voice/
-    session.py         Turn-taking and barge-in (transport-agnostic)
+    session.py         Turn-taking, barge-in, graceful endings (transport-agnostic)
+    phrases.py         Stock lines per language: silence, goodbyes, fillers
+    live_feed.py       Relays a call's turns and state; saves each turn
+    live_registry.py   Calls in progress in this process (whisper, end call)
     pipeline.py        One call, end to end
     livekit_adapter.py LiveKit/Deepgram/Cartesia  ⚠ version-sensitive
   postcall/
@@ -193,6 +221,7 @@ src/voiceagent/
     mocks.py           Scripted caller + logging stubs
   api/
     app.py             REST + WebSocket
+    auth.py            Opt-in admin password, signed tokens
 frontend/              React + Vite + TypeScript + Tailwind
 ```
 
