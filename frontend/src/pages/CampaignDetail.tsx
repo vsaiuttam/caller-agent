@@ -1,8 +1,9 @@
 import { useEffect, useState, type DragEvent } from "react";
 import { useParams } from "react-router-dom";
-import { api, type BulkResult, type Campaign, type Contact } from "../api";
+import { api, campaignTools, type BulkResult, type Campaign, type Contact } from "../api";
 import { parseContactsCsv } from "../csv";
 import { IconCampaign, IconFlask, IconPause, IconPlay, IconUpload } from "../components/icons";
+import { CampaignToolsCard, sameChoice, type ToolChoice } from "../components/mcp/CampaignTools";
 import { useCrumb } from "../components/shell/AppShell";
 import {
   Button,
@@ -126,6 +127,7 @@ export default function CampaignDetail() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-5 lg:items-start">
         <div className="min-w-0 space-y-4 lg:col-span-3">
           <ConversationEditor campaign={c} onSaved={campaign.setData} />
+          <ToolsEditor campaign={c} onSaved={campaign.setData} />
           <ContactsTable contacts={contacts.data} loading={contacts.loading} error={contacts.error} onRetry={contacts.reload} total={c.total_contacts} />
         </div>
 
@@ -370,6 +372,45 @@ function ConversationEditor({ campaign, onSaved }: { campaign: Campaign; onSaved
         </Field>
       </div>
     </Card>
+  );
+}
+
+function ToolsEditor({ campaign, onSaved }: { campaign: Campaign; onSaved: (c: Campaign) => void }) {
+  const [value, setValue] = useState<ToolChoice>(() => campaignTools(campaign));
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setValue(campaignTools(campaign)), [campaign]);
+  const dirty = !sameChoice(value, campaignTools(campaign));
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      onSaved(await api.updateCampaign(campaign.id, value));
+      const n = value.mcp_tools.length + value.mcp_post_call_tools.length;
+      toast.success("Tools saved", n ? "Calls placed from now on can use them." : "Calls placed from now on use no tools.");
+    } catch (err) {
+      toast.error("Couldn't save the tools", (err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <CampaignToolsCard
+      value={value}
+      onChange={setValue}
+      action={
+        dirty && (
+          <>
+            <Button size="sm" variant="ghost" onClick={() => setValue(campaignTools(campaign))} disabled={saving}>
+              Discard
+            </Button>
+            <Button size="sm" onClick={save} loading={saving}>
+              Save changes
+            </Button>
+          </>
+        )
+      }
+    />
   );
 }
 

@@ -3,11 +3,13 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   DEFAULT_GREETING,
   api,
+  campaignTools,
   type CampaignCreate,
   type CampaignTemplate,
   type NewContact,
 } from "../api";
 import { IconCampaign, IconUpload } from "../components/icons";
+import { CampaignToolsCard } from "../components/mcp/CampaignTools";
 import { ScorecardEditor } from "../components/Scorecard";
 import {
   Button,
@@ -63,6 +65,9 @@ const BLANK: CampaignCreate = {
   sms_followup: true,
   whatsapp_followup: true,
   webhook_url: null,
+  mcp_tools: [],
+  mcp_post_call_tools: [],
+  mcp_post_call_instructions: "",
 };
 
 /** Seed the builder from a template handed over by the Templates page. */
@@ -294,6 +299,8 @@ export default function NewCampaign() {
               </Field>
             </div>
           </Card>
+
+          <CampaignToolsCard value={campaignTools(form)} onChange={(next) => setForm((f) => ({ ...f, ...next }))} />
         </div>
 
         {/* Contacts, rules, models */}
