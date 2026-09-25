@@ -172,6 +172,9 @@ class _Reply:
     seconds: float
     # The session hung up after this turn: play it, then end the call.
     final: bool = False
+    # Played while a tool runs: the rest of the turn follows at /twilio/wait,
+    # so Twilio is sent straight there instead of listening for an answer.
+    interim: bool = False
     delivered: asyncio.Event = field(default_factory=asyncio.Event)
     play_until: float = 0.0  # monotonic time playback should finish
 
@@ -262,29 +265,54 @@ class TwilioSpeaker:
     Sarvam synthesis for each one immediately, so audio is being made while
     the model is still writing — and ``flush()`` queues the complete turn as a
     single reply. ``CallSession`` calls ``flush()`` after each generation loop.
+
+    A turn that stops for a tool is the exception: ``flush_interim()`` sends
+    what has been said so far ahead of the rest, so "let me check" plays
+    while the checking happens.
     """
 
     def __init__(self, state: _CallState) -> None:
         self._state = state
         self._pending: list[tuple[str, asyncio.Future[str | None] | None]] = []
+        # Whether an interim has gone out in the turn now being spoken.
+        self._interim_sent = False
 
     async def say(self, text: str) -> None:
         """Buffer a chunk and start synthesizing it. Queues nothing yet."""
         text = text.strip()
         if text:
-            audio = (
-                synthesis(text, _tts_language(self._state.language))
-                if VOICE_PROVIDER == "sarvam"
-                else None
-            )
-            self._pending.append((text, audio))
+            self._pending.append((text, self._synthesis(text)))
+
+    def _synthesis(self, text: str) -> asyncio.Future[str | None] | None:
+        if VOICE_PROVIDER != "sarvam":
+            return None
+        return synthesis(text, _tts_language(self._state.language))
 
     async def flush(self) -> None:
         """Queue the buffered turn as ONE reply for the webhook."""
+        self._interim_sent = False
+        pending, self._pending = self._pending, []
+        if pending:
+            await self._queue(pending)
+
+    async def flush_interim(self) -> None:
+        """A tool is about to run: play what the turn has said so far, now.
+
+        If it has said nothing yet, the call's "one moment, let me check"
+        covers the wait instead — once per turn, however many tools it uses.
+        """
         pending, self._pending = self._pending, []
         if not pending:
-            return
+            if self._interim_sent:
+                return
+            checking = phrases_for(self._state.language).checking
+            pending = [(checking, self._synthesis(checking))]
+        self._interim_sent = True
+        await self._queue(pending, interim=True)
 
+    async def _queue(
+        self, pending: list[tuple[str, asyncio.Future[str | None] | None]], *, interim: bool = False
+    ) -> None:
         audio_ids = await asyncio.gather(
             *(_audio_id_or_none(future) for _, future in pending)
         )
@@ -292,6 +320,7 @@ class TwilioSpeaker:
         reply = _Reply(
             segments=segments,
             seconds=sum(_segment_seconds(text, audio_id) for text, audio_id in segments),
+            interim=interim,
         )
         self._state.last_reply = reply
         await self._state.response_queue.put(reply)
@@ -813,8 +842,10 @@ def _reply_twiml(room_name: str, reply: _Reply, language: str) -> str:
 
     Each sentence plays as pre-synthesized Sarvam audio with <Play>, or with
     Twilio's built-in <Say> where synthesis failed or isn't configured. A
-    final reply is played outside <Gather> and followed by <Hangup/>. The
-    caller is listened to in the call's language.
+    final reply is played outside <Gather> and followed by <Hangup/>; an
+    interim one — played while a tool runs — is followed straight by a
+    <Redirect> to collect the rest of the turn, because the caller has
+    nothing to answer yet. The caller is listened to in the call's language.
     """
     base = _webhook_base()
     speak = "".join(_speak_twiml(text, audio_id) for text, audio_id in reply.segments)
@@ -822,6 +853,11 @@ def _reply_twiml(room_name: str, reply: _Reply, language: str) -> str:
 
     if reply.final:
         return f'<?xml version="1.0" encoding="UTF-8"?><Response>{speak}<Hangup/></Response>'
+    if reply.interim:
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            f'<Response>{speak}<Redirect method="POST">{base}/twilio/wait/{room_name}</Redirect></Response>'
+        )
 
     gather_attrs = (
         f'input="speech" action="{base}/twilio/gather/{room_name}" method="POST" '
@@ -907,11 +943,12 @@ class TwilioTelephony:
 
         Remembers the call's language — what <Gather> listens for and which
         voice language Sarvam speaks in — and, with the Sarvam voice, starts
-        synthesizing the greeting and this language's acknowledgements, so
-        both are ready by the time someone answers.
+        synthesizing the greeting, this language's acknowledgements and its
+        "let me check", so all are ready by the time someone answers.
         """
         _prepared_languages[room_name] = language
-        for line in (greeting, *phrases_for(language).acknowledgements):
+        phrases = phrases_for(language)
+        for line in (greeting, *phrases.acknowledgements, phrases.checking):
             prefetch_speech(line, language)
 
     async def _ensure_server(self) -> None:
