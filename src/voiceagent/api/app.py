@@ -362,12 +362,14 @@ async def health(db: AsyncSession = Depends(get_session)) -> dict:
     }
 
     mcp_servers = 0
+    users = 0
     try:
         await db.execute(select(func.count()).select_from(Campaign))
         checks["database"] = True
         mcp_servers = await db.scalar(
             select(func.count()).select_from(McpServer).where(McpServer.enabled.is_(True))
         ) or 0
+        users = await db.scalar(select(func.count()).select_from(User)) or 0
     except Exception:  # noqa: BLE001
         logger.exception("Health check: database unreachable")
         checks["database"] = False
@@ -389,6 +391,12 @@ async def health(db: AsyncSession = Depends(get_session)) -> dict:
         "telephony_mode": os.getenv("TELEPHONY", "mock"),
         # Said on every screen when false: anyone with the link can dial.
         "auth_enabled": auth.auth_enabled(),
+        # "owner" until someone registers: the next person to register
+        # becomes the owner.
+        "accounts": {
+            "users": users,
+            "registration_mode": auth.registration_mode() if users else "owner",
+        },
         # Connected apps: how many are switched on, whether this provider's
         # models can use them at all, and whether their credentials are
         # encrypted at rest (false until SECRETS_KEY or AUTH_SECRET is set).
@@ -613,14 +621,6 @@ async def auth_status(request: Request, db: AsyncSession = Depends(get_session))
     enabled = auth.auth_enabled()
     claims = await auth.authenticate(auth.request_token(request.scope)) if enabled else None
 
-    if enabled and not has_users:
-        # Only ADMIN_PASSWORD is configured: answer in exactly the
-        # pre-accounts shape, which tests/test_auth.py pins with ==. This
-        # hides `user` and `registration` (mode "owner", setup code required)
-        # in the one state where the register page needs them; dropping this
-        # branch gives the full answer, at the cost of those assertions.
-        return {"auth_enabled": True, "authenticated": claims is not None}
-
     user = None
     if claims is not None:
         user = await _principal(db, claims)
@@ -647,6 +647,202 @@ async def _principal(db: AsyncSession, claims: dict) -> dict | None:
     if user is None or user.disabled:
         return None
     return _public_user(user)
+
+
+# --------------------------------------------------------------------------
+# Team: users and invites (owner and admins only)
+# --------------------------------------------------------------------------
+
+# How far back the invite list reaches. Every pending invite is inside it,
+# since none lasts longer than 30 days.
+INVITE_HISTORY_DAYS = 30
+
+
+async def _team_manager(request: Request, db: AsyncSession = Depends(get_session)) -> dict:
+    """The owner or admin making this request, as `{id, email, name, role}`.
+
+    The role comes from the database, not the token, so a demotion applies
+    to sessions already open. The admin password counts as the owner.
+    """
+    if not auth.auth_enabled():
+        # The gate is off, so nobody is signed in — and with no accounts
+        # there is no team to manage yet.
+        raise HTTPException(403, "Create the owner account first.")
+    claims = await auth.authenticate(auth.request_token(request.scope))
+    actor = await _principal(db, claims) if claims else None
+    if actor is None:
+        raise HTTPException(401, "Authentication required", headers={"WWW-Authenticate": "Bearer"})
+    if actor["role"] not in ("owner", "admin"):
+        raise HTTPException(403, "Only the owner or an admin can manage the team.")
+    return actor
+
+
+async def _manageable(db: AsyncSession, actor: dict, user_id: str) -> User:
+    """The teammate `actor` may change or remove, or the HTTP error saying why not."""
+    target = await db.get(User, user_id)
+    if target is None:
+        raise HTTPException(404, "No such user.")
+    if target.role == "owner":
+        raise HTTPException(403, "The owner account can't be changed or removed.")
+    if actor["role"] == "admin" and target.role == "admin" and target.id != actor["id"]:
+        raise HTTPException(403, "Admins can't change other admins. Ask the owner.")
+    return target
+
+
+def _team_user(user: User) -> TeamUserOut:
+    return TeamUserOut(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        role=user.role,
+        disabled=bool(user.disabled),
+        created_at=_utc(user.created_at),
+        last_login_at=_utc(user.last_login_at) if user.last_login_at else None,
+    )
+
+
+@app.get("/api/team/users", response_model=list[TeamUserOut])
+async def list_team(
+    actor: dict = Depends(_team_manager), db: AsyncSession = Depends(get_session)
+) -> list[TeamUserOut]:
+    users = (await db.scalars(select(User).order_by(User.created_at))).all()
+    return [_team_user(user) for user in users]
+
+
+@app.patch("/api/team/users/{user_id}", response_model=TeamUserOut)
+async def update_teammate(
+    user_id: str,
+    body: TeamUserUpdate,
+    actor: dict = Depends(_team_manager),
+    db: AsyncSession = Depends(get_session),
+) -> TeamUserOut:
+    """Change a teammate's role, or disable / re-enable them."""
+    target = await _manageable(db, actor, user_id)
+    if body.disabled and target.id == actor["id"]:
+        raise HTTPException(403, "You can't disable your own account.")
+    # Implied by "only the owner can invite admins": otherwise an admin
+    # could invite a member and promote them, and the rule would mean nothing.
+    if body.role == "admin" and target.role != "admin" and actor["role"] != "owner":
+        raise HTTPException(403, "Only the owner can make someone an admin.")
+
+    if body.role is not None:
+        target.role = body.role
+    if body.disabled is not None:
+        target.disabled = body.disabled
+    if target.disabled:
+        # Before the commit, so a failed write errs toward locked out.
+        auth.revoke_subject(target.id)
+    await db.commit()
+    if not target.disabled:
+        auth.restore_subject(target.id)
+    return _team_user(target)
+
+
+@app.delete("/api/team/users/{user_id}", status_code=204)
+async def remove_teammate(
+    user_id: str,
+    actor: dict = Depends(_team_manager),
+    db: AsyncSession = Depends(get_session),
+) -> Response:
+    target = await _manageable(db, actor, user_id)
+    if target.id == actor["id"]:
+        raise HTTPException(403, "You can't remove your own account.")
+    auth.revoke_subject(target.id)
+    await db.delete(target)
+    await db.commit()
+    return Response(status_code=204)
+
+
+@app.post("/api/team/invites", status_code=201)
+async def create_invite(
+    body: InviteCreate,
+    actor: dict = Depends(_team_manager),
+    db: AsyncSession = Depends(get_session),
+) -> dict:
+    """Make a single-use invite. The response is the only place the code
+    ever appears: only its hash is stored."""
+    if body.role == "admin" and actor["role"] != "owner":
+        raise HTTPException(403, "Only the owner can invite admins.")
+    email = auth.normalize_email(body.email or "") or None
+    if email is not None:
+        problem = auth.email_problem(email)
+        if problem:
+            raise HTTPException(400, problem)
+
+    code = auth.new_invite_code()
+    now = datetime.now(timezone.utc)
+    invite = Invite(
+        id=str(uuid.uuid4()),
+        code_hash=auth.invite_code_hash(code),
+        email=email,
+        role=body.role,
+        created_by=actor["id"],
+        created_at=now,
+        expires_at=now + timedelta(days=body.expires_in_days),
+        revoked=False,
+    )
+    db.add(invite)
+    await db.commit()
+    return {
+        "id": invite.id,
+        "code": code,
+        "email": invite.email,
+        "role": invite.role,
+        "expires_at": invite.expires_at.isoformat(),
+    }
+
+
+def _invite_status(invite: Invite, now: datetime) -> str:
+    if invite.used_at is not None:
+        return "used"
+    if invite.revoked:
+        return "revoked"
+    if _utc(invite.expires_at) <= now:
+        return "expired"
+    return "pending"
+
+
+@app.get("/api/team/invites", response_model=list[InviteOut])
+async def list_invites(
+    actor: dict = Depends(_team_manager), db: AsyncSession = Depends(get_session)
+) -> list[InviteOut]:
+    """Pending invites and the last 30 days of the rest, newest first. No codes."""
+    now = datetime.now(timezone.utc)
+    invites = (
+        await db.scalars(
+            select(Invite)
+            .where(Invite.created_at >= now - timedelta(days=INVITE_HISTORY_DAYS))
+            .order_by(Invite.created_at.desc())
+            .limit(200)
+        )
+    ).all()
+    return [
+        InviteOut(
+            id=invite.id,
+            email=invite.email,
+            role=invite.role,
+            created_at=_utc(invite.created_at),
+            expires_at=_utc(invite.expires_at),
+            used_at=_utc(invite.used_at) if invite.used_at else None,
+            revoked=bool(invite.revoked),
+            status=_invite_status(invite, now),
+        )
+        for invite in invites
+    ]
+
+
+@app.delete("/api/team/invites/{invite_id}", status_code=204)
+async def revoke_invite(
+    invite_id: str,
+    actor: dict = Depends(_team_manager),
+    db: AsyncSession = Depends(get_session),
+) -> Response:
+    invite = await db.get(Invite, invite_id)
+    if invite is None:
+        raise HTTPException(404, "No such invite.")
+    invite.revoked = True
+    await db.commit()
+    return Response(status_code=204)
 
 
 async def _socket_allowed(ws: WebSocket) -> bool:
