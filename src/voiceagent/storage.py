@@ -260,9 +260,10 @@ class Call(Base):
     # the calendar event / record write went through.
     dispatch_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # Every MCP tool the call used, during it and after it: {at, phase,
-    # server, tool, arguments, ok, duration_ms, excerpt, error}. Saved with
-    # the transcript, so a tool that booked something is on the record even
-    # when the call itself went wrong.
+    # server, tool, tool_id, invocation_id, arguments, ok, duration_ms,
+    # excerpt, error} — see mcp/toolbox.py. Saved with the transcript, so a
+    # tool that booked something is on the record even when the call itself
+    # went wrong.
     tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
 
     # --- Qualification ---------------------------------------------------

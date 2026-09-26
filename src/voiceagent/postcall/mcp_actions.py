@@ -32,7 +32,7 @@ from ..llm import (
     parse_chat_call,
 )
 from ..mcp.ids import SEPARATOR
-from ..mcp.toolbox import EXCERPT_CHARS, CallToolbox, Toolbox, ToolLog, ToolResult
+from ..mcp.toolbox import EXCERPT_CHARS, CallToolbox, Toolbox, ToolLog, ToolResult, tool_event
 from ..models import CallOutcome, Contact, Disposition
 from ..providers import ANTHROPIC_API, active
 
@@ -188,11 +188,11 @@ class _Actions:
         server, tool = self._names(call.tool)
         self.log.add(
             {
-                "phase": "post_call",
-                "server": server,
-                "tool": tool,
+                **tool_event(
+                    phase="post_call", server=server, tool=tool, tool_id=call.tool,
+                    arguments=call.arguments,
+                ),
                 "status": "ok" if result.ok else "error",
-                "arguments": call.arguments,
                 "duration_ms": int((time.perf_counter() - started) * 1000),
                 "excerpt": result.text[:EXCERPT_CHARS],
                 "error": None if result.ok else result.text[:EXCERPT_CHARS],

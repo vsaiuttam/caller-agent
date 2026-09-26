@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -195,12 +196,10 @@ class CallToolbox:
         if tool is None:
             return ToolResult(False, f"There is no tool called {tool_id} on this call.")
 
-        event = {
-            "phase": self._phase,
-            "server": tool.endpoint.name,
-            "tool": tool.name,
-            "arguments": arguments,
-        }
+        event = tool_event(
+            phase=self._phase, server=tool.endpoint.name, tool=tool.name, tool_id=tool_id,
+            arguments=arguments,
+        )
         await self._emit(
             {**event, "status": "started", "duration_ms": None, "excerpt": None, "error": None}
         )
@@ -303,6 +302,24 @@ def result_text(result) -> str:
 # --------------------------------------------------------------------------
 
 
+def tool_event(*, phase: str, server: str, tool: str, tool_id: str, arguments: dict) -> dict[str, Any]:
+    """What every event about one tool call shares.
+
+    `server` is the app's display name, `tool` the tool's own name and
+    `tool_id` the id the model called it by. `invocation_id` is new for each
+    call and the same on its "started" and its "ok"/"error" events — the only
+    way to pair them when the same tool runs twice at once.
+    """
+    return {
+        "phase": phase,
+        "server": server,
+        "tool": tool,
+        "tool_id": tool_id,
+        "invocation_id": uuid.uuid4().hex[:12],
+        "arguments": arguments,
+    }
+
+
 def log_entry(event: dict[str, Any]) -> dict[str, Any]:
     """A finished tool event in the shape stored on `Call.tool_calls`."""
     return {
@@ -310,6 +327,8 @@ def log_entry(event: dict[str, Any]) -> dict[str, Any]:
         "phase": event["phase"],
         "server": event["server"],
         "tool": event["tool"],
+        "tool_id": event["tool_id"],
+        "invocation_id": event["invocation_id"],
         "arguments": event["arguments"],
         "ok": event["status"] == "ok",
         "duration_ms": event["duration_ms"],
