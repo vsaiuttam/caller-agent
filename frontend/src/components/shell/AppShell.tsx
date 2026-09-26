@@ -116,7 +116,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       >
         Skip to content
       </a>
-      <div className="flex h-full">
+      <div className="flex h-dvh overflow-hidden">
         {/* Desktop sidebar */}
         <aside
           className={cx(
@@ -178,7 +178,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             onSearch={() => setPaletteOpen(true)}
             onShortcuts={() => setShortcutsOpen(true)}
           />
-          <main id="main" tabIndex={-1} className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden outline-none">
+          <main id="main" tabIndex={-1} className="relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden outline-none">
             <AuthBanner />
             <div className="flex-1">{children}</div>
             <AppFooter onShortcuts={() => setShortcutsOpen(true)} />
