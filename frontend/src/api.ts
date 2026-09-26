@@ -711,6 +711,12 @@ export interface HourBucket {
   connected: number;
 }
 
+/** How far back the Overview looks; volume is hourly for 24h, daily beyond. */
+export type StatsPeriod = "24h" | "7d" | "30d";
+
+/** Shared by every page that lists or counts calls, so the choice carries over. */
+export const INCLUDE_TESTS_KEY = "samvaad.includeTestCalls";
+
 export interface DashboardStats {
   campaigns_running: number;
   calls_today: number;
@@ -922,7 +928,13 @@ function normaliseHealth(raw: Partial<Health>): Health {
 }
 
 export const api = {
-  stats: () => request<DashboardStats>("/api/stats"),
+  stats: (opts: { include_simulations?: boolean; period?: StatsPeriod } = {}) =>
+    request<DashboardStats>(
+      `/api/stats?${new URLSearchParams({
+        include_simulations: String(!!opts.include_simulations),
+        period: opts.period ?? "24h",
+      })}`,
+    ),
   health: async () => normaliseHealth(await request<Partial<Health>>("/api/health")),
 
   authStatus: () => request<AuthStatus>("/api/auth/status", undefined, { reportUnauthorized: false }),

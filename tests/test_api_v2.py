@@ -867,6 +867,61 @@ def test_the_dashboard_counts_sentiment_for_real_calls_only() -> None:
     assert breakdown.get("neutral", 0) == 0, breakdown
 
 
+def test_the_dashboard_can_include_test_calls_and_widen_its_period() -> None:
+    """Before any campaign runs, test calls are the only history — the
+    dashboard can opt in to them, and look back a week or a month."""
+
+    async def scenario() -> dict[str, dict]:
+        now = datetime.now(timezone.utc)
+        async with _api() as (http, sessions):
+            async with sessions() as db:
+                db.add(storage.Campaign(id="camp-1", name="Smile Dental", goal="Confirm."))
+                db.add(storage.Contact(id="ct-1", campaign_id="camp-1", full_name="Asha Rao", phone_e164="+15555550100"))
+                rows = [
+                    (timedelta(hours=1), True, "positive"),   # test call, today
+                    (timedelta(hours=2), False, "positive"),  # real call, today
+                    (timedelta(days=3), True, "negative"),    # test call, this week
+                    (timedelta(days=20), False, None),        # real call, this month
+                ]
+                for i, (ago, simulated, sentiment) in enumerate(rows):
+                    db.add(
+                        storage.Call(
+                            id=f"call-{i}", contact_id="ct-1", campaign_id="camp-1",
+                            status=storage.CallStatus.COMPLETED, started_at=now - ago,
+                            disposition="completed", is_simulation=simulated,
+                            **({"sentiment": sentiment} if sentiment else {}),
+                        )
+                    )
+                await db.commit()
+            out = {}
+            for key, query in {
+                "default": "",
+                "tests": "?include_simulations=true",
+                "week": "?include_simulations=true&period=7d",
+                "month": "?include_simulations=true&period=30d",
+                "month_real": "?period=30d",
+            }.items():
+                r = await http.get(f"/api/stats{query}")
+                assert r.status_code == 200, (key, r.status_code, r.text)
+                out[key] = r.json()
+            r = await http.get("/api/stats?period=1y")
+            assert r.status_code == 422, (r.status_code, r.text)
+            return out
+
+    s = asyncio.run(scenario())
+    assert s["default"]["calls_today"] == 1, s["default"]["calls_today"]
+    assert s["tests"]["calls_today"] == 2, s["tests"]["calls_today"]
+    assert s["tests"]["sentiment_breakdown"] == {"positive": 2}, s["tests"]["sentiment_breakdown"]
+    assert s["week"]["calls_today"] == 3, s["week"]["calls_today"]
+    assert s["month"]["calls_today"] == 4, s["month"]["calls_today"]
+    assert s["month_real"]["calls_today"] == 2, s["month_real"]["calls_today"]
+
+    hourly, daily = s["tests"]["volume_by_hour"], s["month"]["volume_by_hour"]
+    assert 24 <= len(hourly) <= 25 and sum(b["total"] for b in hourly) == 2, hourly
+    assert 30 <= len(daily) <= 31 and sum(b["total"] for b in daily) == 4, daily
+    assert all(b["hour"].endswith("T00:00:00+00:00") for b in daily), daily[:2]
+
+
 # ---------------------------------------------------------------------------
 
 

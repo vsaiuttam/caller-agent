@@ -4,9 +4,9 @@
  * recent conversations.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, type CallSummary } from "../api";
+import { api, INCLUDE_TESTS_KEY, type CallSummary, type HourBucket, type StatsPeriod } from "../api";
 import { useAuth } from "../auth";
 import { AgentAvatar } from "../components/AgentAvatar";
 import { ColumnChart, DonutChart, SentimentBar, VolumeChart } from "../components/charts";
@@ -34,6 +34,7 @@ import {
   PageHeader,
   Segmented,
   SentimentBadge,
+  Switch,
   Skeleton,
   Stat,
   TestBadge,
@@ -45,15 +46,15 @@ import { useAsync, useDocumentTitle, useEventStream, useLocalStorage, useNow, us
 
 export default function Dashboard() {
   useDocumentTitle("Overview");
-  const stats = usePolling(() => api.stats(), 15_000);
-  // Campaign calls first; with none yet, the latest test calls (badged "Test")
-  // rather than an empty card that reads as if nothing ever happened.
-  const recent = useAsync(async () => {
-    const real = await api.calls({ limit: 8 });
-    if (real.length) return { calls: real, tests: false };
-    return { calls: await api.calls({ include_simulations: true, limit: 8 }), tests: true };
-  }, []);
+  // Test calls are counted unless switched off: before a campaign runs they're
+  // the only history there is, and each one is badged "Test" in the lists.
+  const [includeTests, setIncludeTests] = useLocalStorage(INCLUDE_TESTS_KEY, true);
+  const [period, setPeriod] = useLocalStorage<StatsPeriod>("samvaad.overview.period", "24h");
+  const stats = usePolling(() => api.stats({ include_simulations: includeTests, period }), 15_000);
+  useEffect(() => stats.reload(), [includeTests, period]); // eslint-disable-line react-hooks/exhaustive-deps
+  const recent = useAsync(() => api.calls({ include_simulations: includeTests, limit: 8 }), [includeTests]);
   const s = stats.data;
+  const span = PERIOD_TEXT[period];
 
   // A finished call changes the recent list; refresh it without a spinner.
   useEventStream((event) => {
@@ -64,7 +65,7 @@ export default function Dashboard() {
     <Page width="wide">
       <PageHeader
         title={greeting()}
-        description="Rolling 24 hours, compared with the 24 before. Test calls are never counted."
+        description={`${span.rolling}, compared with the ${span.prior}. ${includeTests ? "Test calls included." : "Campaign calls only."}`}
         actions={
           <>
             <ButtonLink to="/app/test-lab/phone" variant="secondary" icon={<IconPhone size={14} />}>
@@ -81,15 +82,30 @@ export default function Dashboard() {
 
       <LiveStrip />
 
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <Segmented
+          label="Period"
+          size="sm"
+          value={period}
+          onChange={setPeriod}
+          options={[
+            { value: "24h", label: "24 hours" },
+            { value: "7d", label: "7 days" },
+            { value: "30d", label: "30 days" },
+          ]}
+        />
+        <Switch checked={includeTests} onChange={setIncludeTests} label="Include test calls" className="items-center gap-2" />
+      </div>
+
       {stats.error && !s && (
         <div className="mb-4">
-          <ErrorNote message={stats.error} onRetry={stats.reload} title="Couldn't load today's numbers" />
+          <ErrorNote message={stats.error} onRetry={stats.reload} title="Couldn't load these numbers" />
         </div>
       )}
 
       {/* KPIs */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <Stat label="Calls today" value={s?.calls_today.toLocaleString() ?? "—"} delta={s?.calls_delta} loading={!s} icon={<IconPhone size={15} />} />
+        <Stat label={span.calls} value={s?.calls_today.toLocaleString() ?? "—"} delta={s?.calls_delta} loading={!s} icon={<IconPhone size={15} />} />
         <Stat
           label="Connect rate"
           value={s ? formatPercent(s.connect_rate) : "—"}
@@ -125,11 +141,11 @@ export default function Dashboard() {
 
       {/* Volume + outcomes */}
       <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-12">
-        <VolumeCard data={s?.volume_by_hour} className="lg:col-span-8" />
+        <VolumeCard data={s?.volume_by_hour} period={period} className="lg:col-span-8" />
         <Card className="lg:col-span-4">
           <CardHeader
             title="Outcomes"
-            subtitle="Last 24 hours"
+            subtitle={span.last}
             action={
               (s?.pending_review ?? 0) > 0 && (
                 <Link to="/app/review" className="flex items-center gap-1 text-xs font-medium text-warning hover:underline">
@@ -139,7 +155,7 @@ export default function Dashboard() {
             }
           />
           <div className="px-5 py-5">
-            {s ? <DonutChart breakdown={s.disposition_breakdown} /> : <Skeleton className="h-36" />}
+            {s ? <DonutChart breakdown={s.disposition_breakdown} emptyMessage={`No finished calls, ${span.last.toLowerCase()}.`} /> : <Skeleton className="h-36" />}
           </div>
         </Card>
       </div>
@@ -149,23 +165,19 @@ export default function Dashboard() {
         <Card className="overflow-hidden lg:col-span-8">
           <CardHeader
             title="Recent calls"
-            subtitle={
-              recent.data?.tests && recent.data.calls.length
-                ? "No campaign calls yet, so these are your latest test calls"
-                : "The latest conversations, newest first"
-            }
+            subtitle={includeTests ? "The latest conversations, newest first" : "The latest campaign calls, newest first"}
             action={
               <Link to="/app/calls" className="flex items-center gap-1 text-xs font-medium text-brand hover:underline">
                 View all <IconArrowRight size={12} />
               </Link>
             }
           />
-          <RecentCalls calls={recent.data?.calls ?? null} loading={recent.loading} error={recent.error} onRetry={recent.reload} />
+          <RecentCalls calls={recent.data} loading={recent.loading} error={recent.error} onRetry={recent.reload} />
         </Card>
 
         <div className="space-y-3 lg:col-span-4">
           <Card>
-            <CardHeader title="Sentiment" subtitle="How people felt, across real calls" />
+            <CardHeader title="Sentiment" subtitle={`How people felt, ${span.last.toLowerCase()}`} />
             <div className="px-5 py-4">
               {!s ? (
                 <Skeleton className="h-16" />
@@ -201,13 +213,36 @@ function greeting(): string {
 
 // ---------------------------------------------------------------------------
 
-function VolumeCard({ data, className }: { data: Parameters<typeof VolumeChart>[0]["data"] | undefined; className: string }) {
+const PERIOD_TEXT: Record<StatsPeriod, { rolling: string; prior: string; last: string; calls: string }> = {
+  "24h": { rolling: "Rolling 24 hours", prior: "24 before", last: "Last 24 hours", calls: "Calls today" },
+  "7d": { rolling: "Last 7 days", prior: "7 before", last: "Last 7 days", calls: "Calls, 7 days" },
+  "30d": { rolling: "Last 30 days", prior: "30 before", last: "Last 30 days", calls: "Calls, 30 days" },
+};
+
+/** Bucket labels in the viewer's own time zone (the API labels in UTC). */
+function localBuckets(data: HourBucket[], daily: boolean): HourBucket[] {
+  return data.map((d) => {
+    const t = new Date(d.hour);
+    const label = daily
+      ? t.toLocaleDateString(undefined, { day: "numeric", month: "short" })
+      : t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    return { ...d, label };
+  });
+}
+
+function VolumeCard({ data, period, className }: { data: HourBucket[] | undefined; period: StatsPeriod; className: string }) {
+  const daily = period !== "24h";
+  const local = useMemo(() => (data ? localBuckets(data, daily) : undefined), [data, daily]);
   const [view, setView] = useLocalStorage<"trend" | "blocks">("samvaad.overview.volume", "trend");
   return (
     <Card className={className}>
       <CardHeader
         title="Call volume"
-        subtitle={view === "trend" ? "Hourly, last 24 hours" : "In 3-hour blocks"}
+        subtitle={
+          view === "trend"
+            ? `${daily ? "Daily" : "Hourly"}, ${PERIOD_TEXT[period].last.toLowerCase()}`
+            : period === "24h" ? "In 3-hour blocks" : period === "7d" ? "By day" : "In 3-day blocks"
+        }
         action={
           <Segmented
             label="Volume view"
@@ -222,7 +257,13 @@ function VolumeCard({ data, className }: { data: Parameters<typeof VolumeChart>[
         }
       />
       <div className="px-3 pb-3 pt-4 sm:px-4">
-        {!data ? <Skeleton className="h-44" /> : view === "trend" ? <VolumeChart data={data} /> : <ColumnChart data={data} />}
+        {!local ? (
+          <Skeleton className="h-44" />
+        ) : view === "trend" ? (
+          <VolumeChart data={local} />
+        ) : (
+          <ColumnChart data={local} groupHours={period === "7d" ? 1 : 3} />
+        )}
       </div>
     </Card>
   );

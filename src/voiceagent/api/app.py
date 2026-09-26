@@ -37,7 +37,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, true, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -884,10 +884,19 @@ def _delta(current: float, previous: float) -> float | None:
 
 
 # Simulated calls run the same code and land in the same table, which is what
-# makes them worth trusting — but they are rehearsals. Every aggregate on this
-# page filters them out, or a morning of prompt-tuning would show up as a great
-# day of calling.
+# makes them worth trusting — but they are rehearsals. Aggregates filter them
+# out by default, or a morning of prompt-tuning would show up as a great day of
+# calling. The dashboard can opt in (include_simulations) — before a campaign
+# has run, test calls are the only history there is.
 REAL_CALLS = Call.is_simulation.is_(False)
+ANY_CALL = true()
+
+# Dashboard periods: how far back, and how wide each volume-chart bucket is.
+STATS_PERIODS: dict[str, tuple[timedelta, timedelta]] = {
+    "24h": (timedelta(hours=24), timedelta(hours=1)),
+    "7d": (timedelta(days=7), timedelta(days=1)),
+    "30d": (timedelta(days=30), timedelta(days=1)),
+}
 
 
 @dataclass
@@ -900,8 +909,8 @@ class WindowStats:
     billable_input_tokens: int
 
 
-async def _window_stats(db: AsyncSession, start: datetime, end: datetime) -> WindowStats:
-    in_window = (Call.started_at >= start, Call.started_at < end, REAL_CALLS)
+async def _window_stats(db: AsyncSession, start: datetime, end: datetime, scope=REAL_CALLS) -> WindowStats:
+    in_window = (Call.started_at >= start, Call.started_at < end, scope)
 
     rows = (
         await db.execute(
@@ -952,13 +961,24 @@ async def _window_stats(db: AsyncSession, start: datetime, end: datetime) -> Win
 
 
 @app.get("/api/stats", response_model=DashboardStats)
-async def stats(db: AsyncSession = Depends(get_session)) -> DashboardStats:
-    now = datetime.now(timezone.utc)
-    window_start = now - timedelta(hours=24)
-    prior_start = now - timedelta(hours=48)
+async def stats(
+    include_simulations: bool = False,
+    period: str = Query(default="24h", pattern="^(24h|7d|30d)$"),
+    db: AsyncSession = Depends(get_session),
+) -> DashboardStats:
+    """Dashboard figures for `period`, compared with the period before it.
 
-    current = await _window_stats(db, window_start, now)
-    prior = await _window_stats(db, prior_start, window_start)
+    `calls_today` and `volume_by_hour` keep their names for compatibility; they
+    cover the whole period, and the volume buckets are daily beyond 24h.
+    """
+    scope = ANY_CALL if include_simulations else REAL_CALLS
+    span, step = STATS_PERIODS[period]
+    now = datetime.now(timezone.utc)
+    window_start = now - span
+    prior_start = now - 2 * span
+
+    current = await _window_stats(db, window_start, now, scope)
+    prior = await _window_stats(db, prior_start, window_start, scope)
 
     breakdown = current.breakdown
     rate_now, reached, total = _connect_rate(breakdown)
@@ -980,12 +1000,12 @@ async def stats(db: AsyncSession = Depends(get_session)) -> DashboardStats:
     in_progress = await db.scalar(
         select(func.count())
         .select_from(Call)
-        .where(Call.status.in_([CallStatus.DIALING, CallStatus.CONNECTED]), REAL_CALLS)
+        .where(Call.status.in_([CallStatus.DIALING, CallStatus.CONNECTED]), scope)
     )
     pending_review = await db.scalar(
         select(func.count())
         .select_from(Call)
-        .where(Call.needs_human_review.is_(True), Call.reviewed_at.is_(None), REAL_CALLS)
+        .where(Call.needs_human_review.is_(True), Call.reviewed_at.is_(None), scope)
     )
     suppressed = await db.scalar(select(func.count()).select_from(Suppression))
 
@@ -999,7 +1019,7 @@ async def stats(db: AsyncSession = Depends(get_session)) -> DashboardStats:
         pending_review=pending_review or 0,
         suppressed_total=suppressed or 0,
         disposition_breakdown=breakdown,
-        sentiment_breakdown=await _sentiment_breakdown(db, window_start, now),
+        sentiment_breakdown=await _sentiment_breakdown(db, window_start, now, scope),
         calls_delta=_delta(current.total_calls, prior.total_calls),
         connect_rate_delta=_delta(rate_now, rate_prev),
         avg_duration_delta=_delta(current.avg_duration, prior.avg_duration),
@@ -1009,18 +1029,20 @@ async def stats(db: AsyncSession = Depends(get_session)) -> DashboardStats:
             round(current.spend_usd / reached, 4) if reached else 0.0
         ),
         cache_hit_rate=cache_hit_rate,
-        volume_by_hour=await _volume_by_hour(db, window_start, now),
+        volume_by_hour=await _volume_by_hour(db, window_start, now, scope, step),
     )
 
 
-async def _sentiment_breakdown(db: AsyncSession, start: datetime, end: datetime) -> dict[str, int]:
+async def _sentiment_breakdown(
+    db: AsyncSession, start: datetime, end: datetime, scope=REAL_CALLS
+) -> dict[str, int]:
     rows = (
         await db.execute(
             select(Call.sentiment, func.count())
             .where(
                 Call.started_at >= start,
                 Call.started_at < end,
-                REAL_CALLS,
+                scope,
                 Call.sentiment.is_not(None),
             )
             .group_by(Call.sentiment)
@@ -1029,8 +1051,14 @@ async def _sentiment_breakdown(db: AsyncSession, start: datetime, end: datetime)
     return {sentiment: count for sentiment, count in rows}
 
 
-async def _volume_by_hour(db: AsyncSession, start: datetime, end: datetime):
-    """24 hourly buckets, zero-filled.
+async def _volume_by_hour(
+    db: AsyncSession,
+    start: datetime,
+    end: datetime,
+    scope=REAL_CALLS,
+    step: timedelta = timedelta(hours=1),
+):
+    """Zero-filled buckets `step` wide (hourly, or daily for longer periods).
 
     Bucketing happens in Python rather than SQL: date-truncation syntax differs
     between SQLite and Postgres, and at 24h of calls the row count is small
@@ -1039,22 +1067,27 @@ async def _volume_by_hour(db: AsyncSession, start: datetime, end: datetime):
     rows = (
         await db.execute(
             select(Call.started_at, Call.disposition).where(
-                Call.started_at >= start, Call.started_at < end, REAL_CALLS
+                Call.started_at >= start, Call.started_at < end, scope
             )
         )
     ).all()
 
+    daily = step >= timedelta(days=1)
+
+    def floor(t: datetime) -> datetime:
+        t = t.replace(minute=0, second=0, microsecond=0)
+        return t.replace(hour=0) if daily else t
+
     buckets: dict[datetime, dict[str, int]] = {}
-    cursor = start.replace(minute=0, second=0, microsecond=0)
+    cursor = floor(start)
     while cursor <= end:
         buckets[cursor] = {"total": 0, "connected": 0}
-        cursor += timedelta(hours=1)
+        cursor += step
 
     for started_at, disposition in rows:
         if started_at.tzinfo is None:  # SQLite round-trips naive datetimes
             started_at = started_at.replace(tzinfo=timezone.utc)
-        key = started_at.replace(minute=0, second=0, microsecond=0)
-        bucket = buckets.get(key)
+        bucket = buckets.get(floor(started_at))
         if bucket is None:
             continue
         bucket["total"] += 1
@@ -1064,7 +1097,7 @@ async def _volume_by_hour(db: AsyncSession, start: datetime, end: datetime):
     return [
         HourBucket(
             hour=hour.isoformat(),
-            label=hour.strftime("%H:%M"),
+            label=hour.strftime("%d %b" if daily else "%H:%M"),
             total=counts["total"],
             connected=counts["connected"],
         )

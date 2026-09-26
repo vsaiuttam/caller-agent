@@ -52,7 +52,7 @@ export function VolumeChart({ data }: { data: HourBucket[] }) {
         viewBox={`0 0 ${AREA_W} ${AREA_H}`}
         className="w-full"
         role="img"
-        aria-label={`Call volume over the last 24 hours, peaking at ${Math.max(...data.map((d) => d.total))} calls in an hour`}
+        aria-label={`Call volume, ${data[0]?.label ?? ""} to ${data[data.length - 1]?.label ?? ""}, peaking at ${Math.max(...data.map((d) => d.total))} calls in one interval`}
         onMouseLeave={() => setHover(null)}
       >
         <defs>
@@ -75,10 +75,11 @@ export function VolumeChart({ data }: { data: HourBucket[] }) {
         <path d={areaPath} fill="url(#volume-fill)" />
         <path d={linePath} fill="none" stroke="var(--color-brand)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
 
-        {/* Hour labels every 4th bucket, so they never collide; the edge
+        {/* About seven labels whatever the bucket count (every 4th of 24
+            hours, every 2nd of 7 days), so they never collide; the edge
             labels anchor inward so they aren't clipped. */}
         {data.map((d, i) =>
-          i % 4 === 0 ? (
+          i % Math.max(1, Math.ceil(data.length / 7)) === 0 ? (
             <text
               key={d.hour}
               x={x(i)}
@@ -253,9 +254,11 @@ const MAX_SEGMENTS = 5;
 export function DonutChart({
   breakdown,
   centerLabel = "calls",
+  emptyMessage = "No finished calls in the last 24 hours.",
 }: {
   breakdown: Record<string, number>;
   centerLabel?: string;
+  emptyMessage?: string;
 }) {
   const [hover, setHover] = useState<number | null>(null);
 
@@ -268,7 +271,7 @@ export function DonutChart({
   }, [breakdown]);
 
   const total = segments.reduce((s, [, n]) => s + n, 0);
-  if (total === 0) return <ChartEmpty message="No finished calls in the last 24 hours." />;
+  if (total === 0) return <ChartEmpty message={emptyMessage} />;
 
   const R = 54;
   const STROKE = 18;

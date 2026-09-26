@@ -10,6 +10,7 @@ import { useMemo, useState, type KeyboardEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   api,
+  INCLUDE_TESTS_KEY,
   type CallDetail,
   type CallFilters,
   type CallSummary,
@@ -86,7 +87,9 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
   const selected = params.get("call");
   const wide = useMediaQuery("(min-width: 1024px)");
 
-  const [includeTests, setIncludeTests] = useLocalStorage("samvaad.calls.tests", false);
+  // Shown by default, badged "Test": before a campaign runs, test calls are the
+  // whole call history. Shared with the Overview, so one switch rules both.
+  const [includeTests, setIncludeTests] = useLocalStorage(INCLUDE_TESTS_KEY, true);
   const [density, setDensity] = useLocalStorage<Density>("samvaad.calls.density", "comfortable");
   const [sort, setSort] = useState<"recent" | "score">("recent");
   const [band, setBand] = useState<QualificationBand | "">("");
