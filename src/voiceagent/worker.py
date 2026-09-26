@@ -61,13 +61,18 @@ def build_telephony():
     )
 
 
-async def main() -> None:
-    await init_db()
+def build_runner():
+    """The campaign dispatch loop and the model client it owns.
 
+    Returns (runner, client), or None when no model provider is configured.
+    Used by this process's main() and by the API, which runs the loop in its
+    own process by default (DIALER_IN_API): Twilio's webhooks land on the API,
+    and a call's state lives in the process that placed it.
+    """
     provider = active()
     if provider is None:
         logger.error(missing_key_message())
-        return
+        return None
 
     client = make_client(provider)
     logger.info("Model provider: %s", provider.label)
@@ -82,8 +87,16 @@ async def main() -> None:
         # Scripted calls go to made-up people; never text their numbers.
         followups=os.getenv("TELEPHONY", "mock").lower() != "mock",
     )
+    return CampaignRunner(SessionLocal, pipeline.place_call), client
 
-    runner = CampaignRunner(SessionLocal, pipeline.place_call)
+
+async def main() -> None:
+    await init_db()
+
+    built = build_runner()
+    if built is None:
+        return
+    runner, client = built
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

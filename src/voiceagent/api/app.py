@@ -171,10 +171,56 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Before serving: whether anyone has registered decides whether the
     # console is locked, and tokens must verify from the first request.
     await auth.load_accounts()
+    dialer = _start_dialer()
     yield
+    if dialer is not None:
+        await _stop_dialer(*dialer)
     from ..storage import engine
     await engine.dispose()
     logger.info("Database connections closed")
+
+
+def dialer_in_api() -> bool:
+    """Whether this process dials running campaigns (default: yes).
+
+    Twilio's call webhooks land on this process, and a call's state lives in
+    the process that placed it, so with Twilio the dialler has to run here.
+    Set DIALER_IN_API=false only when running `python -m src.voiceagent.worker`
+    with LiveKit, which carries its own media.
+    """
+    return os.getenv("DIALER_IN_API", "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _start_dialer():
+    if not dialer_in_api():
+        logger.info("Dialler: off in this process (DIALER_IN_API=false)")
+        return None
+    from ..worker import build_runner
+
+    built = build_runner()
+    if built is None:
+        logger.warning("Dialler: not started, no model provider configured")
+        return None
+    runner, client = built
+    task = asyncio.create_task(runner.run_forever(), name="campaign-dialler")
+    logger.info("Dialler: running in the API process")
+    return runner, client, task
+
+
+async def _stop_dialer(runner, client, task) -> None:
+    """Stop taking new contacts and give live calls a moment to finish.
+
+    Hosts allow ~30 s between SIGTERM and SIGKILL; past 25 s the remaining
+    calls are cut rather than the process killed mid-write.
+    """
+    runner.stop()
+    try:
+        await asyncio.wait_for(task, timeout=25)
+    except asyncio.TimeoutError:
+        logger.warning("Dialler: calls still in flight at shutdown, cancelling")
+    except Exception:
+        logger.exception("Dialler stopped with an error")
+    await client.close()
 
 
 app = FastAPI(title="Samvaad API", version="1.0.0", lifespan=lifespan)

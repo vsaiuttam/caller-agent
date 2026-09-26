@@ -31,11 +31,20 @@ whatever it heard first.
 
 | Process | Command | Scales |
 |---|---|---|
-| API + UI | `uvicorn src.voiceagent.api.app:app` | 1–2 |
-| Call worker | `python -m src.voiceagent.worker` | horizontally |
+| API + UI + dialler | `uvicorn src.voiceagent.api.app:app` | 1–2 |
+| Extra call workers (LiveKit only) | `python -m src.voiceagent.worker` | horizontally |
 
-They share only the database. Workers claim contacts with a conditional
-`UPDATE`, so several can run against one campaign without coordination.
+The API dials running campaigns itself (`DIALER_IN_API`, on by default). With
+Twilio it must: Twilio's call webhooks land on the API, and a call's state
+lives in the process that placed it. Separate workers suit LiveKit, which
+carries its own media; set `DIALER_IN_API=false` on the API when you run them.
+Dialling processes share only the database and claim contacts with a
+conditional `UPDATE`, so several can run against one campaign without
+coordination.
+
+On Render's free plan the service sleeps after 15 minutes without traffic,
+and a sleeping service doesn't dial. Use a paid instance for campaigns, or
+keep it awake with an uptime monitor on `/api/health`.
 
 ## Running it
 
