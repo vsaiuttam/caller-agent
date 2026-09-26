@@ -14,7 +14,7 @@
  */
 
 import { useRef, useState, type FormEvent } from "react";
-import { Link, Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api";
 import { useAuth } from "../auth";
 import { BRAND } from "../brand";
@@ -38,9 +38,7 @@ import { APP, safeNext } from "../routes";
 export default function Login() {
   const auth = useAuth();
   const [params] = useSearchParams();
-  const location = useLocation();
   const next = safeNext(params.get("next"));
-  const signedOut = (location.state as { signedOut?: boolean } | null)?.signedOut === true;
   const [mood, setMood] = useState<AgentState>("idle");
   useDocumentTitle("Sign in");
 
@@ -55,7 +53,7 @@ export default function Login() {
       ) : auth.phase === "open" ? (
         <OpenConsole next={next} />
       ) : (
-        <SignInForm next={next} signedOut={signedOut} setMood={setMood} />
+        <SignInForm next={next} notice={auth.lockReason} setMood={setMood} />
       )}
     </AuthLayout>
   );
@@ -125,11 +123,11 @@ type Errors = { email?: string; password?: string; form?: string };
 
 function SignInForm({
   next,
-  signedOut,
+  notice,
   setMood,
 }: {
   next: string;
-  signedOut: boolean;
+  notice: "signed-out" | "expired" | null;
   setMood: (mood: AgentState) => void;
 }) {
   const { signIn, recheck, registration } = useAuth();
@@ -210,9 +208,9 @@ function SignInForm({
         {returnTo && ` You'll go back to ${returnTo} afterwards.`}
       </AuthHeading>
 
-      {signedOut && !errors.form && (
+      {notice && !errors.form && (
         <Callout tone="info" className="mt-6">
-          You've signed out.
+          {notice === "signed-out" ? "You've signed out." : "Your session ended. Sign in again to carry on."}
         </Callout>
       )}
       {errors.form === "lockout" ? (

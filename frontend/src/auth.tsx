@@ -52,6 +52,11 @@ interface AuthContextValue {
   /** Null on a backend from before accounts. */
   registration: RegistrationInfo | null;
   /**
+   * Why we are locked: "signed-out" (you pressed Sign out), "expired" (a
+   * request came back 401 mid-session), or null (never signed in here).
+   */
+  lockReason: "signed-out" | "expired" | null;
+  /**
    * Throws ApiError on wrong credentials (401), a disabled account (403) or a
    * lockout (429). `onAccepted` runs as soon as the server says yes, and the
    * app opens `holdMs` later — time for the agent to wave you in.
@@ -70,6 +75,7 @@ const AuthContext = createContext<AuthContextValue>({
   enabled: false,
   user: null,
   registration: null,
+  lockReason: null,
   signIn: async () => {},
   register: async () => {},
   signOut: () => {},
@@ -82,6 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<AuthPhase>("checking");
   const [user, setUser] = useState<AuthUser | null>(null);
   const [registration, setRegistration] = useState<RegistrationInfo | null>(null);
+  const [lockReason, setLockReason] = useState<AuthContextValue["lockReason"]>(null);
   const [attempt, setAttempt] = useState(0);
 
   const apply = useCallback((status: AuthStatus) => {
@@ -121,6 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () =>
       onUnauthorized(() => {
         setUser(null);
+        setLockReason((r) => r ?? "expired");
         setPhase("locked");
       }),
     [],
@@ -145,6 +153,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession({ token: result.token, expires_at: result.expires_at });
       onAccepted?.();
       await Promise.all([adopt(result.user ?? null), wait(holdMs)]);
+      setLockReason(null);
       setPhase("signed-in");
     },
     [adopt],
@@ -156,12 +165,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession({ token: result.token, expires_at: result.expires_at });
       onAccepted?.();
       await Promise.all([adopt(result.user ?? null), wait(holdMs)]);
+      setLockReason(null);
       setPhase("signed-in");
     },
     [adopt],
   );
 
   const signOut = useCallback(() => {
+    // Reason first: setSession(null) notifies listeners synchronously.
+    setLockReason("signed-out");
     setSession(null);
     setUser(null);
     setPhase("locked");
@@ -174,6 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         enabled: phase === "signed-in" || phase === "locked",
         user,
         registration,
+        lockReason,
         signIn,
         register,
         signOut,
@@ -189,15 +202,17 @@ export function useAuth() {
   return useContext(AuthContext);
 }
 
-/** Sign out and land on the login page (plain `/login`, no `next`). */
+/**
+ * Sign out and land on the login page (plain `/login`, no `next`). The
+ * console's guard also sends a signed-out visitor to plain `/login`, so it
+ * doesn't matter which of the two updates React renders first.
+ */
 export function useSignOut() {
   const { signOut } = useAuth();
   const navigate = useNavigate();
   return useCallback(() => {
-    // Both updates land in one render, so the console's guard never sees
-    // "locked" while still on an /app URL and never adds a `next`.
     signOut();
-    navigate(LOGIN, { replace: true, state: { signedOut: true } });
+    navigate(LOGIN, { replace: true });
   }, [signOut, navigate]);
 }
 

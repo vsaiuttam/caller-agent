@@ -6,7 +6,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
-import { useAuth, useSignOut } from "../../auth";
+import { ROLE_LABEL, canManageTeam, useAuth, useSignOut } from "../../auth";
 import { BRAND } from "../../brand";
 import { useHealth, useLiveCalls, useStats, useStreamStatus } from "../../data";
 import { useLocalStorage } from "../../hooks";
@@ -29,8 +29,9 @@ import {
   IconSidebar,
   IconSun,
   IconUser,
+  IconUsers,
 } from "../icons";
-import { Drawer, IconButton, Kbd, Popover, Tooltip, cx } from "../ui";
+import { Badge, Drawer, IconButton, Kbd, Popover, Tooltip, cx } from "../ui";
 import { NAV_GROUPS, NAV_ITEMS, crumbsFor, type NavItem } from "./nav";
 
 // ---------------------------------------------------------------------------
@@ -481,30 +482,53 @@ function HealthPill() {
 // Account
 // ---------------------------------------------------------------------------
 
+/** "Meera Iyer" → "MI"; one name → its first two letters. */
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "";
+  return (parts.length === 1 ? parts[0].slice(0, 2) : parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 function UserMenu({ onShortcuts, onSignOut }: { onShortcuts: () => void; onSignOut: () => void }) {
   const [open, setOpen] = useState(false);
+  const { user, registration } = useAuth();
   const item =
     "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-ink-secondary transition-colors hover:bg-subtle hover:text-ink";
+  // Legacy admin-password sessions (and backends without accounts) have no email.
+  const name = user?.name || "Administrator";
+  const detail = user?.email || "Signed in with the admin password";
+  const role = user ? ROLE_LABEL[user.role] : "Owner";
+  const short = user?.email ? initials(name) : "";
   return (
     <div className="relative">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        aria-label="Account"
-        className="flex h-9 w-9 items-center justify-center rounded-full border border-line bg-subtle text-ink-secondary transition-colors hover:text-ink"
+        aria-label={`Account: ${name}`}
+        className="flex h-10 w-10 items-center justify-center rounded-full border border-line bg-subtle text-xs font-semibold text-ink-secondary transition-colors hover:border-line-strong hover:text-ink sm:h-9 sm:w-9"
       >
-        <IconUser size={16} />
+        {short || <IconUser size={16} />}
       </button>
-      <Popover open={open} onClose={() => setOpen(false)} label="Account" className="w-60 p-1.5">
-        <div className="flex items-center gap-2.5 px-2.5 py-2">
-          <IconLock size={15} className="text-good" />
-          <div>
-            <p className="text-sm font-medium text-ink">Administrator</p>
-            <p className="text-2xs text-ink-muted">Password-protected workspace</p>
+      <Popover open={open} onClose={() => setOpen(false)} label="Account" className="w-64 p-1.5">
+        <div className="flex items-start gap-2.5 px-2.5 py-2">
+          <IconLock size={15} className="mt-0.5 shrink-0 text-good" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-ink">{name}</p>
+            <p className="truncate text-xs text-ink-muted" title={detail}>
+              {detail}
+            </p>
+            <Badge tone={user?.role === "member" ? "neutral" : "brand"} className="mt-1.5">
+              {role}
+            </Badge>
           </div>
         </div>
         <div className="my-1 h-px bg-line" />
+        {registration !== null && canManageTeam(user) && (
+          <Link to="/app/settings?tab=team" className={item} onClick={() => setOpen(false)}>
+            <IconUsers size={15} /> Team and invites
+          </Link>
+        )}
         <button type="button" className={item} onClick={() => { setOpen(false); onShortcuts(); }}>
           <IconKeyboard size={15} /> Keyboard shortcuts
         </button>

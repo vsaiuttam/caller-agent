@@ -11,7 +11,7 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, m } from "framer-motion";
 import { api, type Campaign } from "../api";
-import { useAuth, useSignOut } from "../auth";
+import { canManageTeam, useAuth, useSignOut } from "../auth";
 import { useTheme } from "../theme";
 import { T } from "../motion";
 import { NAV_ITEMS } from "./shell/nav";
@@ -25,6 +25,7 @@ import {
   IconPlus,
   IconSearch,
   IconSun,
+  IconUsers,
 } from "./icons";
 import { Kbd } from "./ui";
 
@@ -82,6 +83,9 @@ export default function CommandPalette({
       { id: "a-new", label: "New campaign", hint: "Start from scratch", icon: <IconPlus size={15} />, group: "Actions", run: go("/app/campaigns/new") },
       { id: "a-call", label: "Place a test call", hint: "Ring your own phone", icon: <IconPhone size={15} />, group: "Actions", run: go("/app/test-lab/phone") },
       { id: "a-app", label: "Connect an app", hint: "Give the agent tools over MCP", icon: <IconPlug size={15} />, group: "Actions", run: go("/app/settings?connect=1") },
+      ...(auth.registration !== null && canManageTeam(auth.user)
+        ? [{ id: "a-invite", label: "Invite a teammate", hint: "Team and invites", icon: <IconUsers size={15} />, group: "Actions", run: go("/app/settings?tab=team") }]
+        : []),
       {
         id: "a-theme",
         label: theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
@@ -106,7 +110,7 @@ export default function CommandPalette({
     const q = query.trim().toLowerCase();
     if (!q) return all;
     return all.filter((c) => c.label.toLowerCase().includes(q) || c.hint.toLowerCase().includes(q));
-  }, [campaigns, query, navigate, theme, toggle, onShowShortcuts, auth.phase, signOut]);
+  }, [campaigns, query, navigate, theme, toggle, onShowShortcuts, auth.phase, auth.registration, auth.user, signOut]);
 
   const grouped = useMemo(() => {
     const groups = new Map<string, Command[]>();

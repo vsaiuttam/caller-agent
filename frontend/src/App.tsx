@@ -16,7 +16,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./auth";
 import { Logo } from "./components/Logo";
 import { Skeleton, Toaster } from "./components/ui";
-import { APP, LEGACY_SECTIONS, loginFor } from "./routes";
+import { APP, LEGACY_SECTIONS, LOGIN, loginFor } from "./routes";
 
 const Landing = lazy(() => import("./pages/Landing"));
 const Login = lazy(() => import("./pages/Login"));
@@ -87,10 +87,11 @@ export default function App() {
 
 /** The console needs an answer from /api/auth/status before it can open. */
 function RequireConsole() {
-  const { phase } = useAuth();
+  const { phase, lockReason } = useAuth();
   const location = useLocation();
   if (phase === "checking") return <Splash />;
-  if (phase === "locked") return <Navigate to={loginFor(location)} replace />;
+  // Signing out means leaving, not "come back here after signing in".
+  if (phase === "locked") return <Navigate to={lockReason === "signed-out" ? LOGIN : loginFor(location)} replace />;
   return <ConsoleLayout />;
 }
 

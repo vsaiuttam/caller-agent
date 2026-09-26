@@ -40,6 +40,9 @@ export default function Register() {
   const next = safeNext(params.get("next"));
   const invite = params.get("invite") ?? "";
   const [mood, setMood] = useState<AgentState>("idle");
+  // Set when this page created the account, so the invite still in the URL
+  // doesn't read as "you were already signed in".
+  const [created, setCreated] = useState(false);
   useDocumentTitle("Create an account");
 
   const loginHref = next === APP ? LOGIN : `${LOGIN}?next=${encodeURIComponent(next)}`;
@@ -50,7 +53,7 @@ export default function Register() {
   else if (auth.phase === "signed-in") {
     // Opening someone's invite link while signed in: say so rather than
     // silently dropping the invite.
-    if (!invite) return <Navigate to={next} replace />;
+    if (!invite || created) return <Navigate to={next} replace />;
     body = <AlreadySignedIn next={next} />;
   } else if (!auth.registration) body = <NotAvailable loginHref={loginHref} open={auth.phase === "open"} next={next} />;
   else if (auth.registration.mode === "closed") body = <Closed loginHref={loginHref} />;
@@ -62,6 +65,7 @@ export default function Register() {
         invite={invite}
         loginHref={loginHref}
         setMood={setMood}
+        onCreated={() => setCreated(true)}
       />
     );
 
@@ -174,12 +178,14 @@ function RegisterForm({
   invite,
   loginHref,
   setMood,
+  onCreated,
 }: {
   mode: Exclude<RegistrationMode, "closed">;
   setupRequired: boolean;
   invite: string;
   loginHref: string;
   setMood: (mood: AgentState) => void;
+  onCreated: () => void;
 }) {
   const { register, recheck } = useAuth();
   const [values, setValues] = useState({ name: "", email: "", password: "", invite_code: invite, setup_code: "" });
@@ -251,7 +257,14 @@ function RegisterForm({
     setBusy(true);
     setMood("thinking");
     try {
-      await register(body, () => setMood("ended"), 900);
+      await register(
+        body,
+        () => {
+          setMood("ended");
+          onCreated();
+        },
+        900,
+      );
     } catch (err) {
       setBusy(false);
       setMood("error");
