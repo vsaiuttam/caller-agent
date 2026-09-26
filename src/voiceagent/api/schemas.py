@@ -7,10 +7,11 @@ leave the server (full phone numbers go out masked; see `CallSummary`).
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..catalog import (
     DEFAULT_CONVERSATION_EFFORT,
@@ -88,6 +89,17 @@ class CampaignCreate(BaseModel):
     webhook_url: str | None = Field(
         default=None, max_length=500, description="POSTed once per completed call."
     )
+    # Tool ids from connected apps (GET /api/mcp/tools). Checked against the
+    # servers on save, so a stale id fails here rather than mid-call.
+    mcp_tools: list[str] = Field(
+        default_factory=list, description="Tools the agent may use during the call."
+    )
+    mcp_post_call_tools: list[str] = Field(
+        default_factory=list, description="Tools used after the call to record its outcome."
+    )
+    mcp_post_call_instructions: str = Field(
+        default="", max_length=4000, description="What to record after the call, and where."
+    )
 
 
 class CampaignUpdate(BaseModel):
@@ -114,6 +126,9 @@ class CampaignUpdate(BaseModel):
     sms_followup: bool | None = None
     whatsapp_followup: bool | None = None
     webhook_url: str | None = None
+    mcp_tools: list[str] | None = None
+    mcp_post_call_tools: list[str] | None = None
+    mcp_post_call_instructions: str | None = Field(default=None, max_length=4000)
 
 
 class CampaignOut(CampaignCreate):
@@ -314,6 +329,8 @@ class CallDetail(CallSummary):
     whatsapp_sid: str | None = None
     whatsapp_status: str | None = None
     followup_errors: dict[str, str] | None = None
+    # Every tool the call used, during it and after it. See storage.Call.
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class FollowupResend(BaseModel):
@@ -352,6 +369,100 @@ class SuppressionOut(BaseModel):
     phone_masked: str
     reason: str
     created_at: datetime
+
+
+# --------------------------------------------------------------------------
+# Connected apps (MCP servers)
+# --------------------------------------------------------------------------
+
+# An HTTP header name is a token (RFC 9110); values may not break the line.
+_HEADER_NAME = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,100}$")
+
+
+def _check_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
+    if headers is None:
+        return None
+    if len(headers) > 20:
+        raise ValueError("At most 20 headers.")
+    for name, value in headers.items():
+        if not _HEADER_NAME.match(name):
+            raise ValueError(f"{name!r} is not a valid header name.")
+        if "\r" in value or "\n" in value or len(value) > 8000:
+            raise ValueError(f"The value of {name} is not a valid header value.")
+    return headers
+
+
+class McpServerCreate(BaseModel):
+    """A server to connect. The URL and header values are sealed and never returned."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=100)
+    url: str = Field(min_length=1, max_length=2000, description="https://…, or builtin://demo.")
+    # "auto" tries streamable HTTP, then SSE, and keeps the one that worked.
+    transport: Literal["auto", "streamable_http", "sse"] = "auto"
+    headers: dict[str, str] = Field(default_factory=dict, description="e.g. Authorization.")
+
+    @field_validator("headers")
+    @classmethod
+    def valid_headers(cls, headers: dict[str, str] | None) -> dict[str, str] | None:
+        return _check_headers(headers)
+
+
+class McpServerUpdate(BaseModel):
+    """Partial update. `headers`, when present, replaces every header."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    url: str | None = Field(default=None, min_length=1, max_length=2000)
+    headers: dict[str, str] | None = None
+    enabled: bool | None = None
+
+    @field_validator("headers")
+    @classmethod
+    def valid_headers(cls, headers: dict[str, str] | None) -> dict[str, str] | None:
+        return _check_headers(headers)
+
+
+class McpToolOut(BaseModel):
+    id: str = Field(description="What campaigns store and the model calls it by.")
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+
+
+class McpServerOut(BaseModel):
+    """A connected server as the console sees it: never its URL or header values."""
+
+    id: str
+    name: str
+    slug: str
+    transport: str
+    host: str
+    header_names: list[str]
+    enabled: bool
+    status: str
+    last_error: str | None
+    checked_at: datetime | None
+    tools: list[McpToolOut]
+
+
+class McpCatalogTool(McpToolOut):
+    """A tool that can run right now, for a campaign's tool picker."""
+
+    server_id: str
+    server_name: str
+
+
+class McpToolTest(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class McpToolTestResult(BaseModel):
+    ok: bool
+    text: str
+    duration_ms: int
 
 
 # --------------------------------------------------------------------------
