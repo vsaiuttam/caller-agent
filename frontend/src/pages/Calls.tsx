@@ -109,6 +109,15 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
     [reviewOnly, includeTests, sort, band, campaignId, disposition],
   );
 
+  // With test calls hidden and nothing else to show, check whether test calls
+  // exist, so the empty state can say they're hidden rather than "No calls yet".
+  const probeTests = !includeTests && !reviewOnly && !campaignId && !disposition && !band && calls.data?.length === 0;
+  const hiddenTests = useAsync(
+    () => (probeTests ? api.calls({ include_simulations: true, limit: 200 }) : Promise.resolve(null)),
+    [probeTests],
+  );
+  const hiddenTestCount = probeTests ? (hiddenTests.data?.length ?? 0) : 0;
+
   // Search and sentiment filter client-side: instant, and the API has no
   // parameter for either.
   const visible = useMemo(() => {
@@ -263,12 +272,23 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start">
         <Card className="overflow-hidden lg:sticky lg:top-20">
           <div className="max-h-[calc(100dvh-16rem)] min-h-64 overflow-y-auto">
-            {calls.loading ? (
+            {calls.loading || (probeTests && hiddenTests.loading) ? (
               <div className="space-y-2 p-4">
                 {[0, 1, 2, 3, 4].map((i) => (
                   <Skeleton key={i} className="h-16" />
                 ))}
               </div>
+            ) : visible.length === 0 && hiddenTestCount > 0 && !filtered ? (
+              <EmptyState
+                avatar="idle"
+                title="Only test calls so far"
+                hint={`${hiddenTestCount >= 200 ? "200+" : hiddenTestCount} test ${hiddenTestCount === 1 ? "call is" : "calls are"} hidden. This list shows campaign calls unless "Include test calls" is on.`}
+                action={
+                  <Button size="sm" onClick={() => setIncludeTests(true)}>
+                    Show test calls
+                  </Button>
+                }
+              />
             ) : visible.length === 0 ? (
               <EmptyState
                 avatar={reviewOnly ? "ended" : "idle"}

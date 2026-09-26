@@ -46,7 +46,13 @@ import { useAsync, useDocumentTitle, useEventStream, useLocalStorage, useNow, us
 export default function Dashboard() {
   useDocumentTitle("Overview");
   const stats = usePolling(() => api.stats(), 15_000);
-  const recent = useAsync(() => api.calls({ limit: 8 }), []);
+  // Campaign calls first; with none yet, the latest test calls (badged "Test")
+  // rather than an empty card that reads as if nothing ever happened.
+  const recent = useAsync(async () => {
+    const real = await api.calls({ limit: 8 });
+    if (real.length) return { calls: real, tests: false };
+    return { calls: await api.calls({ include_simulations: true, limit: 8 }), tests: true };
+  }, []);
   const s = stats.data;
 
   // A finished call changes the recent list; refresh it without a spinner.
@@ -143,14 +149,18 @@ export default function Dashboard() {
         <Card className="overflow-hidden lg:col-span-8">
           <CardHeader
             title="Recent calls"
-            subtitle="The latest conversations, newest first"
+            subtitle={
+              recent.data?.tests && recent.data.calls.length
+                ? "No campaign calls yet, so these are your latest test calls"
+                : "The latest conversations, newest first"
+            }
             action={
               <Link to="/app/calls" className="flex items-center gap-1 text-xs font-medium text-brand hover:underline">
                 View all <IconArrowRight size={12} />
               </Link>
             }
           />
-          <RecentCalls calls={recent.data} loading={recent.loading} error={recent.error} onRetry={recent.reload} />
+          <RecentCalls calls={recent.data?.calls ?? null} loading={recent.loading} error={recent.error} onRetry={recent.reload} />
         </Card>
 
         <div className="space-y-3 lg:col-span-4">
