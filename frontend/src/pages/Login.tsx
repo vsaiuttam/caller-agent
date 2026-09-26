@@ -1,140 +1,336 @@
 /**
- * Sign in — shown only when the backend has ADMIN_PASSWORD set.
+ * Sign in, at /login. Public. What it shows depends on the server:
+ *
+ *   checking     a skeleton while /api/auth/status answers
+ *   signed in    straight on to `next` (or the overview)
+ *   open         auth is off: "Enter the console", and how to lock it
+ *   unreachable  Retry, or continue to the console anyway
+ *   locked       email + password (accounts), with the shared admin password
+ *                as a secondary way in; only the admin password on backends
+ *                from before accounts
  *
  * The agent reacts: it listens while you type, thinks while the server
  * checks, frowns at a wrong password and waves you in on success.
  */
 
-import { useState, type FormEvent } from "react";
-import { m } from "framer-motion";
-import { Navigate, useSearchParams } from "react-router-dom";
-import { safeNext } from "../routes";
+import { useRef, useState, type FormEvent } from "react";
+import { Link, Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api";
 import { useAuth } from "../auth";
 import { BRAND } from "../brand";
-import { AgentAvatar, type AgentState } from "../components/AgentAvatar";
-import { Logo } from "../components/Logo";
-import { IconLock } from "../components/icons";
-import { Button, Field, Input } from "../components/ui";
-import { rise } from "../motion";
+import type { AgentState } from "../components/AgentAvatar";
+import {
+  AuthField,
+  AuthHeading,
+  AuthLayout,
+  AuthSkeleton,
+  EMAIL_SHAPE,
+  PasswordInput,
+  authInputClass,
+  useCooldown,
+} from "../components/site/AuthLayout";
+import { pageNameFor } from "../components/shell/nav";
+import { IconArrowRight, IconLock, IconRefresh } from "../components/icons";
+import { Button, Callout } from "../components/ui";
 import { useDocumentTitle } from "../hooks";
+import { APP, safeNext } from "../routes";
 
 export default function Login() {
-  const { phase, signIn } = useAuth();
+  const auth = useAuth();
   const [params] = useSearchParams();
+  const location = useLocation();
   const next = safeNext(params.get("next"));
-  const [password, setPassword] = useState("");
-  const [show, setShow] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const signedOut = (location.state as { signedOut?: boolean } | null)?.signedOut === true;
   const [mood, setMood] = useState<AgentState>("idle");
   useDocumentTitle("Sign in");
 
-  if (phase === "signed-in" || phase === "open") return <Navigate to={next} replace />;
+  if (auth.phase === "signed-in") return <Navigate to={next} replace />;
+
+  return (
+    <AuthLayout mood={auth.phase === "unknown" ? "error" : mood}>
+      {auth.phase === "checking" ? (
+        <AuthSkeleton />
+      ) : auth.phase === "unknown" ? (
+        <Unreachable next={next} />
+      ) : auth.phase === "open" ? (
+        <OpenConsole next={next} />
+      ) : (
+        <SignInForm next={next} signedOut={signedOut} setMood={setMood} />
+      )}
+    </AuthLayout>
+  );
+}
+
+/** `/register`, carrying `next` along when it isn't the default. */
+function registerHref(next: string) {
+  return next === APP ? "/register" : `/register?next=${encodeURIComponent(next)}`;
+}
+
+// ---------------------------------------------------------------------------
+
+function OpenConsole({ next }: { next: string }) {
+  const navigate = useNavigate();
+  const { registration } = useAuth();
+  return (
+    <div>
+      <AuthHeading title="The console is open">
+        Access control is off on this server, so anyone with the link can use the console and place calls.
+      </AuthHeading>
+      <Button size="lg" className="mt-8 w-full" iconRight={<IconArrowRight size={15} />} onClick={() => navigate(next)}>
+        Enter the console
+      </Button>
+      <p className="mt-6 text-sm leading-relaxed text-ink-secondary">
+        To require a sign-in, set <code className="rounded bg-subtle px-1 py-0.5 font-mono text-[0.8125rem] text-ink">ADMIN_PASSWORD</code> on
+        the server
+        {registration?.mode === "owner" ? (
+          <>
+            , or{" "}
+            <Link to={registerHref(next)} className="font-medium text-brand underline-offset-4 hover:underline">
+              create the owner account
+            </Link>
+            .
+          </>
+        ) : (
+          " and restart it."
+        )}
+      </p>
+    </div>
+  );
+}
+
+function Unreachable({ next }: { next: string }) {
+  const navigate = useNavigate();
+  const { recheck } = useAuth();
+  return (
+    <div>
+      <AuthHeading title="Can't reach the server">
+        We couldn't ask the {BRAND.name} server whether this console is locked. Check that the API is running, then
+        try again.
+      </AuthHeading>
+      <div className="mt-8 flex flex-col gap-3">
+        <Button size="lg" icon={<IconRefresh size={15} />} onClick={recheck}>
+          Try again
+        </Button>
+        <Button size="lg" variant="secondary" onClick={() => navigate(next)}>
+          Continue to the console
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+type Errors = { email?: string; password?: string; form?: string };
+
+function SignInForm({
+  next,
+  signedOut,
+  setMood,
+}: {
+  next: string;
+  signedOut: boolean;
+  setMood: (mood: AgentState) => void;
+}) {
+  const { signIn, recheck, registration } = useAuth();
+  const accounts = registration !== null;
+  // Before the first account exists, the admin password is the only way in.
+  const ownerPending = registration?.mode === "owner";
+  const [legacy, setLegacy] = useState(!accounts || ownerPending);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [errors, setErrors] = useState<Errors>({});
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const cooldown = useCooldown();
+  const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const returnTo = next === APP ? null : pageNameFor(next.split(/[?#]/)[0]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!password || busy) return;
+    if (busy || cooldown.active) return;
+    const found: Errors = {};
+    if (!legacy) {
+      if (!email.trim()) found.email = "Enter your email address.";
+      else if (!EMAIL_SHAPE.test(email.trim())) found.email = "That doesn't look like an email address.";
+    }
+    if (!password) found.password = legacy ? "Enter the admin password." : "Enter your password.";
+    setErrors(found);
+    if (found.email) return emailRef.current?.focus();
+    if (found.password) return passwordRef.current?.focus();
+
     setBusy(true);
-    setError(null);
     setMood("thinking");
     try {
-      await signIn(password, () => setMood("ended"), 900);
+      await signIn(legacy ? { password } : { email: email.trim(), password }, () => setMood("ended"), 900);
     } catch (err) {
       setMood("error");
-      setError(
-        err instanceof ApiError && err.status === 401
-          ? "That password isn't right. Try again."
-          : err instanceof ApiError && err.status === 429
-            ? "Too many attempts. Wait a few minutes, then try again."
-            : (err as Error).message,
-      );
       setBusy(false);
+      const e = err instanceof ApiError ? err : new ApiError((err as Error).message, 0);
+      if (e.status === 401) {
+        setErrors({
+          password: legacy
+            ? "That password isn't right. Check it and try again."
+            : "That email and password don't match an account. Check both and try again.",
+        });
+        passwordRef.current?.select();
+        passwordRef.current?.focus();
+      } else if (e.status === 429) {
+        cooldown.start(60);
+        setErrors({ form: "lockout" });
+      } else if (e.status === 400 && /off/i.test(e.message)) {
+        // Access control was switched off since this page loaded.
+        recheck();
+      } else {
+        setErrors({ form: e.message || "Sign-in failed. Try again." });
+      }
     }
   };
 
+  const switchMode = () => {
+    setLegacy((l) => !l);
+    setErrors({});
+    setPassword("");
+  };
+
   return (
-    <div className="grid min-h-full lg:grid-cols-[1.1fr_1fr]">
-      {/* Brand panel */}
-      <div className="relative hidden overflow-hidden border-r border-line bg-surface lg:flex lg:flex-col lg:justify-between lg:p-12">
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -left-32 -top-32 h-[520px] w-[520px] rounded-full bg-brand/10 blur-3xl"
-        />
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -bottom-40 right-0 h-[420px] w-[420px] rounded-full bg-info/8 blur-3xl"
-        />
-        <Logo size={32} />
-        <div className="relative">
-          <AgentAvatar state={mood} size="lg" />
-          <h1 className="mt-8 max-w-md text-3xl font-semibold leading-tight tracking-tight text-ink">
-            {BRAND.tagline}
-          </h1>
-          <p className="mt-3 max-w-md text-sm leading-relaxed text-ink-secondary">{BRAND.description}</p>
-        </div>
-        <p className="relative text-xs text-ink-muted">
-          <span lang="hi">{BRAND.nativeName}</span> — “conversation”.
-        </p>
-      </div>
-
-      {/* Form */}
-      <div className="flex items-center justify-center px-4 py-12 sm:px-8">
-        <m.div {...rise} className="w-full max-w-sm">
-          <div className="mb-8 flex flex-col items-center text-center lg:hidden">
-            <AgentAvatar state={mood} size="md" />
-            <Logo size={28} className="mt-5" />
-          </div>
-
-          <div className="flex items-center gap-2 text-xs font-medium text-ink-muted">
+    <div>
+      <AuthHeading
+        eyebrow={
+          <>
             <IconLock size={14} /> Protected workspace
-          </div>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-ink">Welcome back</h2>
-          <p className="mt-1.5 text-sm text-ink-secondary">
-            Enter the workspace password to open the {BRAND.name} console.
-          </p>
+          </>
+        }
+        title="Sign in"
+      >
+        {legacy
+          ? `Enter the workspace's admin password to open the ${BRAND.name} console.`
+          : `Use your ${BRAND.name} account to open the console.`}
+        {returnTo && ` You'll go back to ${returnTo} afterwards.`}
+      </AuthHeading>
 
-          <form onSubmit={submit} className="mt-8 space-y-4" noValidate>
-            {/* Lets password managers file the credential under a name. */}
-            <input type="text" name="username" autoComplete="username" value="admin" readOnly hidden />
-            <Field label="Password" error={error}>
-              <div className="relative">
-                <Input
-                  type={show ? "text" : "password"}
-                  autoComplete="current-password"
-                  autoFocus
-                  value={password}
-                  aria-invalid={!!error}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    setError(null);
-                    if (!busy) setMood(e.target.value ? "listening" : "idle");
-                  }}
-                  onBlur={() => !busy && mood === "listening" && setMood("idle")}
-                  className="h-11 pr-16"
-                  placeholder="••••••••"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShow((s) => !s)}
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded px-2 py-1 text-xs font-medium text-ink-muted transition-colors hover:text-ink"
-                  aria-label={show ? "Hide password" : "Show password"}
-                >
-                  {show ? "Hide" : "Show"}
-                </button>
-              </div>
-            </Field>
-            <Button type="submit" size="lg" className="w-full" loading={busy} disabled={!password}>
-              {busy ? "Checking…" : "Sign in"}
-            </Button>
-          </form>
+      {signedOut && !errors.form && (
+        <Callout tone="info" className="mt-6">
+          You've signed out.
+        </Callout>
+      )}
+      {errors.form === "lockout" ? (
+        <Callout tone="warning" className="mt-6" title="Too many attempts">
+          Wait a minute before trying again. Repeated wrong passwords from one device are slowed down on purpose.
+        </Callout>
+      ) : (
+        errors.form && (
+          <Callout tone="critical" className="mt-6">
+            {errors.form}
+          </Callout>
+        )
+      )}
 
-          <p className="mt-8 text-center text-xs leading-relaxed text-ink-muted">
-            The password is the server's <code className="font-mono">ADMIN_PASSWORD</code>. Sessions last 12 hours by
-            default.
+      <form onSubmit={submit} className="mt-6 space-y-5" noValidate>
+        {legacy ? (
+          // Lets password managers file the shared password under a name.
+          <input type="text" name="username" autoComplete="username" value="admin" readOnly hidden />
+        ) : (
+          <AuthField label="Email" error={errors.email}>
+            {({ id, describedBy, invalid }) => (
+              <input
+                ref={emailRef}
+                id={id}
+                type="email"
+                name="email"
+                autoComplete="username"
+                inputMode="email"
+                autoFocus
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (errors.email) setErrors((x) => ({ ...x, email: undefined }));
+                  if (!busy) setMood(e.target.value ? "listening" : "idle");
+                }}
+                aria-invalid={invalid}
+                aria-describedby={describedBy}
+                className={authInputClass}
+                placeholder="you@company.com"
+              />
+            )}
+          </AuthField>
+        )}
+
+        <AuthField
+          label={legacy ? "Admin password" : "Password"}
+          error={errors.password}
+          aside={
+            !legacy && (
+              <button
+                type="button"
+                onClick={() => setForgotOpen((o) => !o)}
+                aria-expanded={forgotOpen}
+                className="rounded-sm text-xs font-medium text-ink-secondary underline-offset-4 hover:text-ink hover:underline"
+              >
+                Forgot?
+              </button>
+            )
+          }
+          hint={
+            !legacy && forgotOpen
+              ? "There's no email reset. Ask your workspace owner or an admin: they can remove your account and send you a new invite."
+              : undefined
+          }
+        >
+          {({ id, describedBy, invalid }) => (
+            <PasswordInput
+              ref={passwordRef}
+              id={id}
+              name="password"
+              autoComplete="current-password"
+              autoFocus={legacy}
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                if (errors.password) setErrors((x) => ({ ...x, password: undefined }));
+                if (!busy) setMood(e.target.value ? "listening" : "idle");
+              }}
+              onBlur={() => !busy && setMood("idle")}
+              aria-invalid={invalid}
+              aria-describedby={describedBy}
+            />
+          )}
+        </AuthField>
+
+        <Button type="submit" size="lg" className="w-full" loading={busy} disabled={cooldown.active}>
+          {busy ? "Checking…" : cooldown.active ? `Try again in ${cooldown.label}` : "Sign in"}
+        </Button>
+      </form>
+
+      <div className="mt-6 space-y-3 text-sm">
+        {accounts && registration.mode !== "closed" && (
+          <p className="text-ink-secondary">
+            {ownerPending ? "No accounts yet. " : "New here? "}
+            <Link to={registerHref(next)} className="font-medium text-brand underline-offset-4 hover:underline">
+              {ownerPending ? "Create the owner account" : "Create an account"}
+            </Link>
           </p>
-        </m.div>
+        )}
+        {accounts && !ownerPending && (
+          <button
+            type="button"
+            onClick={switchMode}
+            className="rounded-sm font-medium text-ink-secondary underline-offset-4 hover:text-ink hover:underline"
+          >
+            {legacy ? "Sign in with your email instead" : "Use the admin password instead"}
+          </button>
+        )}
       </div>
+
+      <p className="mt-8 border-t border-line pt-5 text-xs leading-relaxed text-ink-muted">
+        {legacy ? (
+          <>
+            The admin password is the server's <code className="font-mono">ADMIN_PASSWORD</code>.{" "}
+          </>
+        ) : null}
+        A session lasts 12 hours unless the server is set otherwise.
+      </p>
     </div>
   );
 }

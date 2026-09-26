@@ -20,6 +20,7 @@ import { APP, LEGACY_SECTIONS, loginFor } from "./routes";
 
 const Landing = lazy(() => import("./pages/Landing"));
 const Login = lazy(() => import("./pages/Login"));
+const Register = lazy(() => import("./pages/Register"));
 const ConsoleLayout = lazy(() => import("./components/shell/ConsoleLayout"));
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
@@ -45,6 +46,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
 
           <Route path={APP} element={<RequireConsole />}>
             <Route index element={<Dashboard />} />

@@ -348,15 +348,87 @@ export interface Health {
   provider_supports_tools?: boolean;
   /** False when server URLs and headers are stored unencrypted (no SECRETS_KEY / AUTH_SECRET). */
   secrets_sealed?: boolean;
+  /** Accounts round. Absent on older backends. */
+  accounts?: { users: number; registration_mode: string };
+}
+
+/** Accounts round: who is signed in. Legacy admin-password sessions report
+ *  `{id: "admin", email: "", name: "Admin", role: "owner"}`. */
+export type UserRole = "owner" | "admin" | "member";
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+}
+
+/**
+ * How new people get in. "owner" while no account exists yet (the first
+ * registration becomes the owner); then the server's REGISTRATION_MODE.
+ */
+export type RegistrationMode = "owner" | "invite" | "open" | "closed";
+
+export interface RegistrationInfo {
+  mode: RegistrationMode;
+  /** The owner bootstrap must present ADMIN_PASSWORD as `setup_code`. */
+  setup_code_required: boolean;
 }
 
 export interface AuthStatus {
   auth_enabled: boolean;
   authenticated: boolean;
+  /** Absent on backends from before accounts. */
+  user?: AuthUser | null;
+  registration?: RegistrationInfo;
 }
 
 export interface LoginResult {
   token: string;
+  expires_at: string;
+  user?: AuthUser;
+}
+
+/** `{email, password}` for an account, or `{password}` for the legacy admin password. */
+export type Credentials = { email: string; password: string } | { password: string };
+
+export interface RegisterRequest {
+  name: string;
+  email: string;
+  password: string;
+  invite_code?: string;
+  setup_code?: string;
+}
+
+export interface TeamUser {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  disabled: boolean;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+export type InviteStatus = "pending" | "used" | "expired" | "revoked";
+
+export interface TeamInvite {
+  id: string;
+  email: string | null;
+  role: "member" | "admin";
+  created_at: string;
+  expires_at: string;
+  used_at: string | null;
+  revoked: boolean;
+  status: InviteStatus;
+}
+
+/** Returned once, at creation: the only time the code is ever shown. */
+export interface CreatedInvite {
+  id: string;
+  code: string;
+  email: string | null;
+  role: "member" | "admin";
   expires_at: string;
 }
 
@@ -845,6 +917,7 @@ function normaliseHealth(raw: Partial<Health>): Health {
     mcp_servers: raw.mcp_servers,
     provider_supports_tools: raw.provider_supports_tools,
     secrets_sealed: raw.secrets_sealed,
+    accounts: raw.accounts,
   };
 }
 
@@ -853,9 +926,22 @@ export const api = {
   health: async () => normaliseHealth(await request<Partial<Health>>("/api/health")),
 
   authStatus: () => request<AuthStatus>("/api/auth/status", undefined, { reportUnauthorized: false }),
-  /** 401 here means a wrong password, not an expired session. */
-  login: (password: string) =>
-    request<LoginResult>("/api/auth/login", post({ password }), { reportUnauthorized: false }),
+  /** 401 here means wrong credentials, not an expired session. */
+  login: (credentials: Credentials) =>
+    request<LoginResult>("/api/auth/login", post(credentials), { reportUnauthorized: false }),
+  /** 201 with a session; 400 bad input, 403 closed / bad code, 409 email taken, 429 throttled. */
+  register: (body: RegisterRequest) =>
+    request<LoginResult & { user: AuthUser }>("/api/auth/register", post(body), { reportUnauthorized: false }),
+
+  // Team (owner and admin only). 404 on backends from before accounts.
+  teamUsers: () => request<TeamUser[]>("/api/team/users"),
+  updateTeamUser: (id: string, body: { role?: "admin" | "member"; disabled?: boolean }) =>
+    request<TeamUser>(`/api/team/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),
+  removeTeamUser: (id: string) => request<void>(`/api/team/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  teamInvites: () => request<TeamInvite[]>("/api/team/invites"),
+  createInvite: (body: { email?: string; role: "member" | "admin"; expires_in_days: number }) =>
+    request<CreatedInvite>("/api/team/invites", post(body)),
+  revokeInvite: (id: string) => request<void>(`/api/team/invites/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   templates: () => request<TemplateCatalog>("/api/templates"),
   languages: () => request<LanguageOption[]>("/api/languages"),
