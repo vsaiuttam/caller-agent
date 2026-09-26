@@ -45,3 +45,7 @@ frontend/dist/
 service-account.json
 *.pem
 *.key
+
+# Claude Code: commit shared skills, not personal settings or agent worktrees
+.claude/settings.local.json
+.claude/worktrees/

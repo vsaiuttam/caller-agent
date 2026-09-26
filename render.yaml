@@ -71,7 +71,10 @@ services:
       - key: TWILIO_WHATSAPP_CONTENT_SID
         sync: false
 
-      # Access control — set a password so a public deploy can't place calls
+      # Access control. The first registered account becomes the owner; after
+      # that sign-up is invite-only unless REGISTRATION_MODE says otherwise.
+      - key: REGISTRATION_MODE
+        sync: false
       - key: ADMIN_PASSWORD
         sync: false
       - key: AUTH_SECRET

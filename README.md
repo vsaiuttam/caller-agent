@@ -179,12 +179,27 @@ Calls end the way people end them. When the person is done ("thank you",
 language and hangs up. The stock lines ("are you still there?", the
 voicemail message) come in English, Hindi, Urdu and Hinglish.
 
-### 10. Lock it down
+### 10. Accounts and locking it down
 
 A deployed console is a public URL that can place calls on your Twilio
-account. Set `ADMIN_PASSWORD` and the console asks for it, and every API route
-needs the token it issues. Twilio's webhooks stay open, because Twilio can't
-log in. Unset, everything stays open, and the console shows a banner saying so.
+account, so lock it before sharing it.
+
+- **Create the owner account.** The first person to register at `/register`
+  becomes the owner, and from then on every API route needs a signed-in user.
+  If `ADMIN_PASSWORD` is set, creating the owner also asks for it, so a stranger
+  can't claim a fresh deploy first.
+- **Invite your team.** Under **Settings → Team**, owners and admins create
+  single-use invite links (optionally bound to an email, admin or member,
+  expiring in 1–30 days), change roles, and disable or remove people. A
+  disabled user is locked out immediately. `REGISTRATION_MODE=open` lets anyone
+  register, and `closed` stops new accounts.
+- **Keep a break-glass sign-in.** `ADMIN_PASSWORD` still works as an owner-level
+  sign-in.
+
+Passwords are stored as scrypt hashes, and invite codes only as SHA-256 hashes.
+Sign-in and sign-up are rate-limited. Twilio's webhooks stay open, because
+Twilio can't log in. With no accounts and no `ADMIN_PASSWORD`, everything stays
+open and the console says so.
 
 ### 11. Connect your apps (MCP)
 
