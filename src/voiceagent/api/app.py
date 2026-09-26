@@ -473,12 +473,11 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
         return {"token": token, "expires_at": expires_at.isoformat(), "user": auth.BREAK_GLASS_USER}
 
     user = await db.scalar(select(User).where(User.email == email))
+    stored = user.password_hash if user is not None else None
     # Checked even when there is no such user, so both failures cost the same
     # time. In a thread: scrypt would otherwise stall live call audio.
     matches = await asyncio.to_thread(
-        auth.check_password_hash,
-        body.password,
-        user.password_hash if user is not None else auth.stand_in_hash(),
+        lambda: auth.check_password_hash(body.password, stored or auth.stand_in_hash())
     )
     if user is None or not matches:
         _login_throttle.failed(client)

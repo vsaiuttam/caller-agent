@@ -484,8 +484,9 @@ def _b64decode(text: str) -> bytes:
 class LoginThrottle:
     """Counts failed logins per client, in memory, over a sliding window.
 
-    In-process like the event bus: enough to make guessing a password from
-    one address slow, which is the threat a single shared password faces.
+    In-process like the event bus: enough to make guessing a password, a
+    setup code or an invite code from one address slow. Login and register
+    each keep their own.
     """
 
     def __init__(
