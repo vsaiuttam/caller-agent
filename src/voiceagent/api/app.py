@@ -38,6 +38,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import storage
@@ -100,9 +101,11 @@ from ..storage import (
     CampaignStatus,
     Contact,
     ContactStatus,
+    Invite,
     McpServer,
     Setting,
     Suppression,
+    User,
     get_session,
     init_db,
 )
@@ -128,6 +131,8 @@ from .schemas import (
     EstimateRequest,
     FollowupResend,
     HourBucket,
+    InviteCreate,
+    InviteOut,
     LiveCallRequest,
     LoginRequest,
     McpCatalogTool,
@@ -138,10 +143,13 @@ from .schemas import (
     McpToolTest,
     McpToolTestResult,
     ModelDefaults,
+    RegisterRequest,
     ReviewDecision,
     SimulationRequest,
     SuppressionCreate,
     SuppressionOut,
+    TeamUserOut,
+    TeamUserUpdate,
     TestCallRequest,
     WhisperRequest,
 )
@@ -397,43 +405,248 @@ async def health(db: AsyncSession = Depends(get_session)) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Access control (opt-in; see auth.py)
+# Access control and accounts (opt-in; see auth.py)
 # --------------------------------------------------------------------------
 
 
 _login_throttle = auth.LoginThrottle()
+# Separate counters, so fumbling one form costs nothing on the other. On
+# register, a failure is a wrong setup code, an unusable invite code, or an
+# email that is taken — the answers worth guessing at.
+_register_throttle = auth.LoginThrottle()
+
+# One answer for an unknown email and a wrong password alike.
+LOGIN_FAILED = "Wrong email or password."
+
+
+def _client(request: Request) -> str:
+    return auth.client_address(request.headers, request.client.host if request.client else None)
+
+
+def _public_user(user: User) -> dict:
+    return {"id": user.id, "email": user.email, "name": user.name, "role": user.role}
+
+
+async def _any_users(db: AsyncSession) -> bool:
+    """Whether anyone has registered, per the in-process flag, else per the
+    database — which also catches the flag up when another worker process
+    registered the first user."""
+    if auth.users_exist():
+        return True
+    try:
+        found = await db.scalar(select(User.id).limit(1)) is not None
+    except Exception:  # noqa: BLE001
+        logger.exception("Accounts: could not read the users table")
+        return False
+    if found:
+        auth.set_users_exist(True)
+    return found
 
 
 @app.post("/api/auth/login")
-async def login(body: LoginRequest, request: Request) -> dict:
-    """Trade the admin password for a token."""
+async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends(get_session)) -> dict:
+    """Trade an email and password — or the admin password — for a token."""
     if not auth.auth_enabled():
-        raise HTTPException(400, "Access control is off — set ADMIN_PASSWORD to turn it on.")
+        raise HTTPException(
+            400, "Access control is off — register the owner account, or set ADMIN_PASSWORD, to turn it on."
+        )
 
-    client = auth.client_address(request.headers, request.client.host if request.client else None)
+    client = _client(request)
     if _login_throttle.blocked(client):
         raise HTTPException(429, "Too many wrong passwords. Try again in a few minutes.")
-    if not auth.check_password(body.password):
+
+    email = auth.normalize_email(body.email or "")
+    if not email:
+        if not auth.check_password(body.password):
+            _login_throttle.failed(client)
+            raise HTTPException(401, "That password is not right.")
+        _login_throttle.succeeded(client)
+        token, expires_at = auth.issue_token()
+        return {"token": token, "expires_at": expires_at.isoformat(), "user": auth.BREAK_GLASS_USER}
+
+    user = await db.scalar(select(User).where(User.email == email))
+    # Checked even when there is no such user, so both failures cost the same
+    # time. In a thread: scrypt would otherwise stall live call audio.
+    matches = await asyncio.to_thread(
+        auth.check_password_hash,
+        body.password,
+        user.password_hash if user is not None else auth.stand_in_hash(),
+    )
+    if user is None or not matches:
         _login_throttle.failed(client)
-        raise HTTPException(401, "That password is not right.")
+        raise HTTPException(401, LOGIN_FAILED)
+    # Only said to someone who knew the password, so it reveals nothing.
+    if user.disabled:
+        raise HTTPException(403, "This account is disabled")
 
     _login_throttle.succeeded(client)
-    token, expires_at = auth.issue_token()
-    return {"token": token, "expires_at": expires_at.isoformat()}
+    user.last_login_at = datetime.now(timezone.utc)
+    await db.commit()
+    token, expires_at = auth.issue_token(subject=user.id, role=user.role)
+    return {"token": token, "expires_at": expires_at.isoformat(), "user": _public_user(user)}
+
+
+@app.post("/api/auth/register", status_code=201)
+async def register(
+    body: RegisterRequest, request: Request, db: AsyncSession = Depends(get_session)
+) -> dict:
+    """Create an account and sign it in.
+
+    The first account is the owner, and creating it is what locks the
+    console; with ADMIN_PASSWORD set it must present that as `setup_code`,
+    so a stranger who finds a public deploy first can't claim it. After
+    that, REGISTRATION_MODE decides: an invite code, anyone, or nobody.
+    """
+    client = _client(request)
+    if _register_throttle.blocked(client):
+        raise HTTPException(429, "Too many attempts. Try again in a few minutes.")
+
+    # The database, not the in-process flag: this decides who becomes owner.
+    bootstrap = await db.scalar(select(User.id).limit(1)) is None
+    mode = "owner" if bootstrap else auth.registration_mode()
+    if mode == "closed":
+        raise HTTPException(403, "Registration is closed. Ask your workspace owner for access.")
+
+    email = auth.normalize_email(body.email)
+    name = body.name.strip() or email.split("@")[0]
+    problem = auth.email_problem(email) or auth.password_problem(body.password, email)
+    if problem is None and len(name) > auth.MAX_NAME_LENGTH:
+        problem = f"Use at most {auth.MAX_NAME_LENGTH} characters for your name."
+    if problem:
+        raise HTTPException(400, problem)
+
+    now = datetime.now(timezone.utc)
+    invite: Invite | None = None
+    if mode == "owner":
+        role = "owner"
+        if auth.admin_password_set() and not auth.check_password(body.setup_code or ""):
+            _register_throttle.failed(client)
+            raise HTTPException(
+                403,
+                "That setup code is not right." if body.setup_code
+                else "Enter the setup code (this deploy's ADMIN_PASSWORD) to create the owner account.",
+            )
+    else:
+        code = (body.invite_code or "").strip()
+        if not code and mode == "invite":
+            raise HTTPException(403, "An invite code is required to join this workspace.")
+        role = "member"
+        if code:
+            # Honoured in open mode too: it is how someone joins as an admin.
+            invite = await db.scalar(select(Invite).where(Invite.code_hash == auth.invite_code_hash(code)))
+            refusal = _invite_refusal(invite, email, now)
+            if refusal:
+                _register_throttle.failed(client)
+                raise HTTPException(403, refusal)
+            role = invite.role
+
+    # After the code checks, so without a valid invite nobody can use this
+    # to find out which emails have accounts.
+    if await db.scalar(select(User.id).where(User.email == email)) is not None:
+        _register_throttle.failed(client)
+        raise HTTPException(409, "An account with this email already exists. Sign in instead.")
+
+    user = User(
+        id=str(uuid.uuid4()),
+        email=email,
+        name=name,
+        password_hash=await asyncio.to_thread(auth.hash_password, body.password),
+        role=role,
+        disabled=False,
+        created_at=now,
+    )
+    try:
+        db.add(user)
+        if invite is not None:
+            # Claimed conditionally, in the same transaction as the new user:
+            # two people racing one code can't both get in.
+            claimed = await db.execute(
+                update(Invite)
+                .where(Invite.id == invite.id, Invite.used_at.is_(None), Invite.revoked.is_(False))
+                .values(used_at=now, used_by=user.id)
+            )
+            if claimed.rowcount != 1:
+                await db.rollback()
+                raise HTTPException(403, "This invite has already been used. Ask for a new one.")
+        await db.commit()
+    except IntegrityError:
+        # Lost a race: the same email registered a moment ago, or (on a
+        # fresh deploy) someone else became the owner first — the database
+        # allows exactly one.
+        await db.rollback()
+        raise HTTPException(
+            409,
+            "The owner account was created a moment ago. Sign in, or ask the owner for an invite."
+            if bootstrap else "An account with this email already exists. Sign in instead.",
+        ) from None
+
+    if not auth.users_exist():
+        auth.set_users_exist(True)
+    token, expires_at = auth.issue_token(subject=user.id, role=user.role)
+    return {"token": token, "expires_at": expires_at.isoformat(), "user": _public_user(user)}
+
+
+def _invite_refusal(invite: Invite | None, email: str, now: datetime) -> str | None:
+    """Why this invite can't admit `email`, in words, or None if it can."""
+    if invite is None:
+        return "That invite code isn't valid. Check the link, or ask for a new invite."
+    if invite.revoked:
+        return "This invite has been revoked. Ask for a new one."
+    if invite.used_at is not None:
+        return "This invite has already been used. Ask for a new one."
+    if _utc(invite.expires_at) <= now:
+        return "This invite has expired. Ask for a new one."
+    if invite.email and invite.email != email:
+        return "This invite is for a different email address."
+    return None
 
 
 @app.get("/api/auth/status")
-async def auth_status(request: Request) -> dict:
-    """Whether the console must log in first, and whether this request has.
+async def auth_status(request: Request, db: AsyncSession = Depends(get_session)) -> dict:
+    """Whether the console must sign in first, whether this request has and
+    as whom, and how someone new can register.
 
     `authenticated` means "may use the API": always true while access control
     is off.
     """
+    has_users = await _any_users(db)
     enabled = auth.auth_enabled()
+    claims = await auth.authenticate(auth.request_token(request.scope)) if enabled else None
+
+    if enabled and not has_users:
+        # Only ADMIN_PASSWORD is configured: answer in exactly the
+        # pre-accounts shape, which tests/test_auth.py pins with ==. This
+        # hides `user` and `registration` (mode "owner", setup code required)
+        # in the one state where the register page needs them; dropping this
+        # branch gives the full answer, at the cost of those assertions.
+        return {"auth_enabled": True, "authenticated": claims is not None}
+
+    user = None
+    if claims is not None:
+        user = await _principal(db, claims)
+        if user is None:  # disabled or removed since the token was checked
+            claims = None
     return {
         "auth_enabled": enabled,
-        "authenticated": not enabled or auth.verify_token(auth.request_token(request.scope) or ""),
+        "authenticated": not enabled or claims is not None,
+        "user": user,
+        "registration": {
+            "mode": auth.registration_mode() if has_users else "owner",
+            "setup_code_required": not has_users and auth.admin_password_set(),
+        },
     }
+
+
+async def _principal(db: AsyncSession, claims: dict) -> dict | None:
+    """Who a verified token speaks for, as `{id, email, name, role}`: the
+    break-glass owner, or the user as they are now (their role may have
+    changed since the token was issued)."""
+    if claims["sub"] == auth.LEGACY_SUBJECT:
+        return dict(auth.BREAK_GLASS_USER)
+    user = await db.get(User, claims["sub"])
+    if user is None or user.disabled:
+        return None
+    return _public_user(user)
 
 
 async def _socket_allowed(ws: WebSocket) -> bool:

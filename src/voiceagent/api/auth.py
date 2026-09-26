@@ -35,6 +35,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from collections import deque
@@ -84,7 +85,11 @@ _users_exist = False
 
 
 def auth_enabled() -> bool:
-    return bool(os.getenv("ADMIN_PASSWORD", "")) or _users_exist
+    return admin_password_set() or _users_exist
+
+
+def admin_password_set() -> bool:
+    return bool(os.getenv("ADMIN_PASSWORD", ""))
 
 
 def users_exist() -> bool:
@@ -161,6 +166,88 @@ def check_password_hash(password: str, stored: str) -> bool:
     except ValueError:
         return False
     return hmac.compare_digest(actual, expected)
+
+
+_stand_in_hash: str | None = None
+
+
+def stand_in_hash() -> str:
+    """A real hash of nothing anyone knows, to check against when an email has
+    no account — so a wrong email costs the same scrypt as a wrong password,
+    and response time can't be used to find out who has an account."""
+    global _stand_in_hash
+    if _stand_in_hash is None:
+        _stand_in_hash = hash_password(secrets.token_urlsafe(32))
+    return _stand_in_hash
+
+
+# --------------------------------------------------------------------------
+# Account rules
+# --------------------------------------------------------------------------
+
+REGISTRATION_MODES = ("invite", "open", "closed")
+MIN_PASSWORD_LENGTH = 10
+MAX_PASSWORD_LENGTH = 128
+MAX_EMAIL_LENGTH = 254  # RFC 5321's limit on a forward path
+MAX_NAME_LENGTH = 100
+
+# Deliberately loose — something@something.tld, no spaces. The only real test
+# of an address is mail reaching it, and there is no mail service here; this
+# catches typos, not fraud.
+_EMAIL_SHAPE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
+# How an admin-password session appears wherever a user is expected.
+BREAK_GLASS_USER = {"id": LEGACY_SUBJECT, "email": "", "name": "Admin", "role": "owner"}
+
+
+def registration_mode() -> str:
+    """Who may register once the owner exists: REGISTRATION_MODE, read now.
+
+    Anything unrecognised reads as `invite`, so a typo in the setting can
+    neither open the workspace to everyone nor lock out invited people.
+    """
+    mode = os.getenv("REGISTRATION_MODE", "").strip().lower()
+    return mode if mode in REGISTRATION_MODES else "invite"
+
+
+def normalize_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def email_problem(email: str) -> str | None:
+    """What is wrong with an (already normalised) email, in words, or None."""
+    if not email:
+        return "Enter your email address."
+    if len(email) > MAX_EMAIL_LENGTH:
+        return f"That email address is too long (at most {MAX_EMAIL_LENGTH} characters)."
+    if not _EMAIL_SHAPE.fullmatch(email):
+        return "That doesn't look like an email address."
+    return None
+
+
+def password_problem(password: str, email: str) -> str | None:
+    """Which password rule is broken, in words, or None."""
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return f"Use at least {MIN_PASSWORD_LENGTH} characters for your password."
+    if len(password) > MAX_PASSWORD_LENGTH:
+        return f"Use at most {MAX_PASSWORD_LENGTH} characters for your password."
+    if password.isdigit():
+        return "Your password can't be all digits."
+    if normalize_email(password) == email:
+        return "Your password can't be your email address."
+    return None
+
+
+def new_invite_code() -> str:
+    # 192 bits: not guessable in any number of tries the throttle allows.
+    return secrets.token_urlsafe(24)
+
+
+def invite_code_hash(code: str) -> str:
+    """What is stored for an invite code. A plain hash, not scrypt: the code
+    is random and long, so there is nothing for a slow hash to protect, and
+    a fast one can be looked up by equality."""
+    return hashlib.sha256(code.strip().encode()).hexdigest()
 
 
 # --------------------------------------------------------------------------
