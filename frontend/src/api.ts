@@ -597,8 +597,14 @@ export type ToolPhase = "in_call" | "post_call";
 export interface ToolCallLog {
   at: string;
   phase: ToolPhase;
+  /** The server's display name. */
   server: string;
+  /** The bare MCP tool name. */
   tool: string;
+  /** Unique within the call; the same on a tool's "started" event and its result. */
+  invocation_id?: string;
+  /** Namespaced `{server_slug}__{name}`. */
+  tool_id?: string;
   arguments: JsonValue;
   ok: boolean;
   duration_ms: number | null;
@@ -611,8 +617,14 @@ export interface ToolCallLog {
 export interface CallToolEvent {
   call_id: string;
   phase: ToolPhase;
+  /** The server's display name. */
   server: string;
+  /** The bare MCP tool name. */
   tool: string;
+  /** Unique within the call; the same on "started" and its "ok"/"error". */
+  invocation_id?: string;
+  /** Namespaced `{server_slug}__{name}`. */
+  tool_id?: string;
   status: "started" | "ok" | "error";
   arguments: JsonValue;
   duration_ms: number | null;

@@ -73,15 +73,20 @@ function markConnected(state: CallStream, at: string): CallStream {
   return next.connectedAt ? next : { ...next, connectedAt: ms(at) };
 }
 
-const sameTool = (a: ToolActivity, p: CallToolEvent) => a.phase === p.phase && a.server === p.server && a.tool === p.tool;
+/** The same invocation when both carry an id; otherwise the same tool on the same server and phase. */
+const sameTool = (a: ToolActivity, p: CallToolEvent) =>
+  a.invocationId && p.invocation_id
+    ? a.invocationId === p.invocation_id
+    : a.phase === p.phase && a.server === p.server && a.tool === p.tool;
 
 /**
- * "started" adds a row; "ok"/"error" completes the latest open row for the
- * same tool (or adds a finished one if its start was missed). Replayed
- * events are recognised and dropped.
+ * "started" adds a row; "ok"/"error" completes its open row — found by
+ * invocation id, else the latest open row for the same tool — or adds a
+ * finished one if its start was missed. Replayed events are dropped.
  */
 function applyToolEvent(rows: DisplayTurn[], p: CallToolEvent, at: string): DisplayTurn[] {
   const activity: ToolActivity = {
+    invocationId: p.invocation_id,
     phase: p.phase,
     server: p.server,
     tool: p.tool,
@@ -94,7 +99,10 @@ function applyToolEvent(rows: DisplayTurn[], p: CallToolEvent, at: string): Disp
   const row: DisplayTurn = { key: `tool-${at}-${rows.length}`, role: "tool", text: toolActivity(p.tool), at, tool: activity };
 
   if (p.status === "started") {
-    return rows.some((r) => r.at === at && r.tool && sameTool(r.tool, p)) ? rows : [...rows, row];
+    const seen = p.invocation_id
+      ? rows.some((r) => r.tool?.invocationId === p.invocation_id)
+      : rows.some((r) => r.at === at && r.tool && sameTool(r.tool, p));
+    return seen ? rows : [...rows, row];
   }
   let open = -1;
   rows.forEach((r, i) => {
@@ -102,7 +110,11 @@ function applyToolEvent(rows: DisplayTurn[], p: CallToolEvent, at: string): Disp
   });
   if (open >= 0) return rows.map((r, i) => (i === open ? { ...r, tool: activity } : r));
   const replayed = rows.some(
-    (r) => r.tool && sameTool(r.tool, p) && r.tool.status === p.status && r.tool.durationMs === p.duration_ms,
+    (r) =>
+      r.tool &&
+      sameTool(r.tool, p) &&
+      r.tool.status === p.status &&
+      (!!p.invocation_id || r.tool.durationMs === p.duration_ms),
   );
   return replayed ? rows : [...rows, row];
 }
@@ -132,11 +144,17 @@ function reduce(state: CallStream, action: Action): CallStream {
       }));
     }
     // Likewise the saved tool log, once it holds more finished calls than we
-    // saw live. Rows still running after its last entry stay.
+    // saw live. Rows still running stay: those the log doesn't have by
+    // invocation id, or (without ids) those started after its last entry.
     const saved = d.tool_calls ?? [];
     if (saved.length > next.tools.filter((t) => t.tool?.status !== "started").length) {
       const last = Date.parse(saved[saved.length - 1].at);
-      const running = next.tools.filter((t) => t.tool?.status === "started" && ms(t.at) > last);
+      const savedIds = new Set(saved.map((e) => e.invocation_id).filter(Boolean));
+      const running = next.tools.filter((t) => {
+        if (t.tool?.status !== "started") return false;
+        const id = t.tool.invocationId;
+        return id ? !savedIds.has(id) : ms(t.at) > last;
+      });
       next.tools = [...saved.map(toolTurnFromLog), ...running];
     }
     if (d.transcript.length > 0 || d.status === "connected") next = markConnected(next, d.started_at);

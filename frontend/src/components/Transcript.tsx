@@ -20,6 +20,8 @@ import { Button, CodeBlock, Eyebrow, Tooltip, cx, toast } from "./ui";
 
 /** One tool the agent ran, as the live feed and the call log report it. */
 export interface ToolActivity {
+  /** Pairs a tool's start with its result; absent on older backends. */
+  invocationId?: string;
   phase: ToolPhase;
   server: string;
   tool: string;
@@ -52,6 +54,7 @@ export function toolTurnFromLog(entry: ToolCallLog, index: number): DisplayTurn 
     text: toolActivity(entry.tool),
     at: entry.at,
     tool: {
+      invocationId: entry.invocation_id,
       phase: entry.phase,
       server: entry.server,
       tool: entry.tool,
