@@ -2,8 +2,8 @@
  * Follow one call in real time (§1.2).
  *
  * Source of truth, in order of preference:
- *   1. `/api/events` — call.state / call.turn / call.whisper / call.ended /
- *      call.extracted / call.failed, filtered by call_id;
+ *   1. `/api/events` — call.state / call.turn / call.whisper / call.tool /
+ *      call.ended / call.extracted / call.failed, filtered by call_id;
  *   2. `GET /api/calls/{id}` — polled every few seconds while the socket is
  *      down (the backend saves the transcript after every turn), and fetched
  *      once whenever the socket comes back, to fill any gap.
@@ -18,6 +18,7 @@ import {
   type CallDetail,
   type CallExtractedPayload,
   type CallStateName,
+  type CallToolEvent,
   type LiveCallInfo,
   type LiveEvent,
   type TestCallResult,
@@ -25,7 +26,8 @@ import {
 import { eventStream } from "../../events";
 import { useEventStream } from "../../hooks";
 import type { AgentState } from "../AgentAvatar";
-import type { DisplayTurn } from "../Transcript";
+import { toolActivity } from "../mcp/toolText";
+import { toolTurnFromLog, type DisplayTurn, type ToolActivity } from "../Transcript";
 
 export type CallPhase = "dialing" | "ringing" | "connected" | "wrapping" | "done" | "failed";
 
@@ -36,8 +38,12 @@ export interface CallStream {
   /** The last phase reached before failing — where the stepper shows the break. */
   failedFrom: CallPhase | null;
   liveState: CallStateName | null;
+  /** While liveState is "working": the tool ids the agent paused to run. */
+  workingTools: string[];
   turns: DisplayTurn[];
   whispers: DisplayTurn[];
+  /** Tool rows (role "tool"), in the order they started. */
+  tools: DisplayTurn[];
   startedAt: number;
   connectedAt: number | null;
   endedAt: number | null;
@@ -67,6 +73,52 @@ function markConnected(state: CallStream, at: string): CallStream {
   return next.connectedAt ? next : { ...next, connectedAt: ms(at) };
 }
 
+/** The same invocation when both carry an id; otherwise the same tool on the same server and phase. */
+const sameTool = (a: ToolActivity, p: CallToolEvent) =>
+  a.invocationId && p.invocation_id
+    ? a.invocationId === p.invocation_id
+    : a.phase === p.phase && a.server === p.server && a.tool === p.tool;
+
+/**
+ * "started" adds a row; "ok"/"error" completes its open row — found by
+ * invocation id, else the latest open row for the same tool — or adds a
+ * finished one if its start was missed. Replayed events are dropped.
+ */
+function applyToolEvent(rows: DisplayTurn[], p: CallToolEvent, at: string): DisplayTurn[] {
+  const activity: ToolActivity = {
+    invocationId: p.invocation_id,
+    phase: p.phase,
+    server: p.server,
+    tool: p.tool,
+    status: p.status,
+    arguments: p.arguments,
+    durationMs: p.duration_ms,
+    excerpt: p.excerpt,
+    error: p.error,
+  };
+  const row: DisplayTurn = { key: `tool-${at}-${rows.length}`, role: "tool", text: toolActivity(p.tool), at, tool: activity };
+
+  if (p.status === "started") {
+    const seen = p.invocation_id
+      ? rows.some((r) => r.tool?.invocationId === p.invocation_id)
+      : rows.some((r) => r.at === at && r.tool && sameTool(r.tool, p));
+    return seen ? rows : [...rows, row];
+  }
+  let open = -1;
+  rows.forEach((r, i) => {
+    if (r.tool?.status === "started" && sameTool(r.tool, p)) open = i;
+  });
+  if (open >= 0) return rows.map((r, i) => (i === open ? { ...r, tool: activity } : r));
+  const replayed = rows.some(
+    (r) =>
+      r.tool &&
+      sameTool(r.tool, p) &&
+      r.tool.status === p.status &&
+      (!!p.invocation_id || r.tool.durationMs === p.duration_ms),
+  );
+  return replayed ? rows : [...rows, row];
+}
+
 function reduce(state: CallStream, action: Action): CallStream {
   if (action.type === "whisper") {
     const turn: DisplayTurn = { key: `w-${action.at}`, role: "whisper", text: action.text, at: action.at };
@@ -91,6 +143,20 @@ function reduce(state: CallStream, action: Action): CallStream {
         at: t.started_at,
       }));
     }
+    // Likewise the saved tool log, once it holds more finished calls than we
+    // saw live. Rows still running stay: those the log doesn't have by
+    // invocation id, or (without ids) those started after its last entry.
+    const saved = d.tool_calls ?? [];
+    if (saved.length > next.tools.filter((t) => t.tool?.status !== "started").length) {
+      const last = Date.parse(saved[saved.length - 1].at);
+      const savedIds = new Set(saved.map((e) => e.invocation_id).filter(Boolean));
+      const running = next.tools.filter((t) => {
+        if (t.tool?.status !== "started") return false;
+        const id = t.tool.invocationId;
+        return id ? !savedIds.has(id) : ms(t.at) > last;
+      });
+      next.tools = [...saved.map(toolTurnFromLog), ...running];
+    }
     if (d.transcript.length > 0 || d.status === "connected") next = markConnected(next, d.started_at);
     if (d.status === "completed") next = advance(next, d.outcome || d.disposition ? "done" : "wrapping");
     if (d.status === "failed") {
@@ -114,9 +180,12 @@ function reduce(state: CallStream, action: Action): CallStream {
     case "call.connected":
       return markConnected(state, event.at);
     case "call.state": {
-      const live = { ...state, liveState: event.payload.state };
-      return event.payload.state === "ended" ? advance(live, "wrapping") : markConnected(live, event.at);
+      const { state: liveState, tools } = event.payload;
+      const live = { ...state, liveState, workingTools: liveState === "working" ? (tools ?? []) : [] };
+      return liveState === "ended" ? advance(live, "wrapping") : markConnected(live, event.at);
     }
+    case "call.tool":
+      return { ...state, tools: applyToolEvent(state.tools, event.payload, event.at) };
     case "call.turn": {
       const p = event.payload;
       const last = state.turns[state.turns.length - 1];
@@ -167,13 +236,16 @@ function initial(seed: LiveCallInfo | undefined, startedAt: number | undefined):
       }))
     : [];
   const state = seed?.state as CallStateName | undefined;
-  const connected = seededTurns.length > 0 || state === "speaking" || state === "listening" || state === "thinking";
+  const connected =
+    seededTurns.length > 0 || state === "speaking" || state === "listening" || state === "thinking" || state === "working";
   return {
     phase: state === "ended" ? "wrapping" : connected ? "connected" : "dialing",
     failedFrom: null,
     liveState: connected ? (state ?? null) : null,
+    workingTools: [],
     turns: seededTurns,
     whispers: [],
+    tools: [],
     startedAt: seed ? ms(seed.started_at) : (startedAt ?? Date.now()),
     connectedAt: connected && seed ? ms(seed.started_at) : null,
     endedAt: null,
@@ -253,6 +325,8 @@ export function avatarStateFor(phase: CallPhase, live: CallStateName | null): Ag
   if (phase === "failed") return "error";
   if (phase === "wrapping" || phase === "done") return "ended";
   if (phase === "dialing" || phase === "ringing") return "ringing";
+  // Waiting on a tool looks like thinking: eyes up, dots rising.
+  if (live === "working") return "thinking";
   if (live === "speaking" || live === "listening" || live === "thinking") return live;
   return "listening";
 }

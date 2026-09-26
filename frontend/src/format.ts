@@ -44,6 +44,22 @@ export function formatMs(ms: number): string {
   return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
 }
 
+/** Indented JSON for display. */
+export function formatJson(value: unknown): string {
+  return JSON.stringify(value, null, 2) ?? String(value);
+}
+
+/** Tool output is often JSON in a string: indent it when it is, else leave it be. */
+export function prettyText(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return text;
+  try {
+    return formatJson(JSON.parse(trimmed));
+  } catch {
+    return text;
+  }
+}
+
 /** Offset of `iso` from `startIso` as mm:ss — the transcript clock. */
 export function formatOffset(iso: string, startIso: string): string {
   const s = Math.max(0, (new Date(iso).getTime() - new Date(startIso).getTime()) / 1000);

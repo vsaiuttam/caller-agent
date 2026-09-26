@@ -31,8 +31,9 @@ import {
   IconSearch,
   IconSmile,
 } from "../components/icons";
+import { ToolCallsCard } from "../components/mcp/ToolCallsCard";
 import { ScorecardResult } from "../components/Scorecard";
-import { TranscriptActions, TranscriptList, type DisplayTurn } from "../components/Transcript";
+import { TranscriptActions, TranscriptList, toolTurnFromLog, withTools, type DisplayTurn } from "../components/Transcript";
 import {
   Badge,
   Button,
@@ -433,14 +434,16 @@ function CallDetailPanel({
   }
   if (error || !data) return <ErrorNote message={error ?? "Call not found"} onRetry={reload} />;
 
-  const turns: DisplayTurn[] = data.transcript.map((t, i) => ({
+  const toolCalls = data.tool_calls ?? [];
+  const speech: DisplayTurn[] = data.transcript.map((t, i) => ({
     key: `d-${i}`,
     role: t.role,
     text: t.text,
     latencyMs: t.latency_ms ?? null,
     at: t.started_at,
   }));
-  const latencies = turns.filter((t) => t.latencyMs != null).map((t) => t.latencyMs as number);
+  const turns = withTools(speech, toolCalls.map(toolTurnFromLog));
+  const latencies = speech.filter((t) => t.latencyMs != null).map((t) => t.latencyMs as number);
   const refresh = () => {
     reload();
     onChanged();
@@ -556,6 +559,8 @@ function CallDetailPanel({
         </div>
       </Card>
 
+      <ToolCallsCard calls={toolCalls} startedAt={data.started_at} skipped={data.dispatch_result?.mcp_actions_skipped} />
+
       {data.recording_url && (
         <Card>
           <CardHeader
@@ -573,7 +578,7 @@ function CallDetailPanel({
       <Card>
         <CardHeader
           title="Transcript"
-          subtitle={`${turns.length} turns`}
+          subtitle={`${speech.length} turns${toolCalls.length ? ` · ${toolCalls.length} tool ${toolCalls.length === 1 ? "call" : "calls"}` : ""}`}
           action={<TranscriptActions callId={data.id} turns={turns} personName={data.contact_name} />}
         />
         {latencies.length > 1 && (

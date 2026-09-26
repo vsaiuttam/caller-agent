@@ -404,6 +404,59 @@ export const IconUser = ({ size = 16, className }: IconProps) => (
   </svg>
 );
 
+/** A plug — connected apps. */
+export const IconPlug = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M9 3v4.5M15 3v4.5" />
+    <path d="M6.5 7.5h11V11a5.5 5.5 0 0 1-11 0V7.5Z" />
+    <path d="M12 16.5V21" />
+  </svg>
+);
+
+/** A wrench — a tool the agent can use. */
+export const IconWrench = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M14.7 6.3a4 4 0 0 0 5.2 5.2l-8.6 8.6a2.1 2.1 0 0 1-3-3l8.6-8.6a4 4 0 0 0-2.2-2.2Z" />
+    <path d="M14.7 6.3 17 4a4 4 0 0 1 3 3l-2.3 2.3" />
+  </svg>
+);
+
+export const IconEye = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
+    <circle cx="12" cy="12" r="2.75" />
+  </svg>
+);
+
+export const IconEyeOff = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M9.9 5.8A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-2.6 3.4M6.6 7.3A16.5 16.5 0 0 0 2.5 12S6 18.5 12 18.5a9.4 9.4 0 0 0 4.4-1.1" />
+    <path d="M10 10.1a2.75 2.75 0 0 0 3.9 3.9" />
+    <path d="m4 4 16 16" />
+  </svg>
+);
+
+export const IconTrash = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M4.5 7h15M9.5 7V4.5h5V7" />
+    <path d="M6.5 7l.8 12a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4l.8-12" />
+  </svg>
+);
+
+export const IconPencil = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M15.5 4.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L15.5 4.5Z" />
+  </svg>
+);
+
+/** Curly braces — raw JSON. */
+export const IconBraces = ({ size = 16, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M8 4H7a2 2 0 0 0-2 2v3.5a2.5 2.5 0 0 1-2 2.5 2.5 2.5 0 0 1 2 2.5V18a2 2 0 0 0 2 2h1" />
+    <path d="M16 4h1a2 2 0 0 1 2 2v3.5a2.5 2.5 0 0 0 2 2.5 2.5 2.5 0 0 0-2 2.5V18a2 2 0 0 1-2 2h-1" />
+  </svg>
+);
+
 export const IconExternal = ({ size = 14, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <path d="M14 4.5h5.5V10" />

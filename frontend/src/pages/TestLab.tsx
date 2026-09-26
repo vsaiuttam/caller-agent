@@ -65,7 +65,9 @@ export default function TestLab() {
         title="Test lab"
         description="Rehearse a campaign before anyone real is called. Same prompt, same models, same extractor — only who answers changes."
       />
-      <nav aria-label="Test mode" className="mb-6 flex gap-1 overflow-x-auto border-b border-line scrollbar-none">
+      {/* Three equal columns on a phone (icon over label) so no tab is ever
+          cut off; a normal tab row from sm up. */}
+      <nav aria-label="Test mode" className="mb-6 grid grid-cols-3 border-b border-line sm:flex sm:gap-1">
         {TABS.map((tab) => (
           <NavLink
             key={tab.to}
@@ -73,7 +75,8 @@ export default function TestLab() {
             end={tab.end}
             className={({ isActive }) =>
               cx(
-                "-mb-px inline-flex h-10 shrink-0 items-center gap-2 border-b-2 px-3 text-sm font-medium transition-colors duration-150",
+                "-mb-px inline-flex min-w-0 flex-col items-center justify-center gap-1 border-b-2 px-1 py-2 text-center text-xs font-medium leading-tight transition-colors duration-150",
+                "sm:h-10 sm:shrink-0 sm:flex-row sm:gap-2 sm:px-3 sm:py-0 sm:text-sm",
                 isActive ? "border-brand text-ink" : "border-transparent text-ink-muted hover:border-line-strong hover:text-ink",
               )
             }

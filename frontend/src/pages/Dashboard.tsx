@@ -341,6 +341,9 @@ interface Step {
   cta: string;
 }
 
+/** Integrations → Services: where the environment-configured pieces are explained. */
+const SERVICES = "/settings?tab=services";
+
 /** The first-run checklist, driven by /api/health and what exists already. */
 function Onboarding() {
   const { health } = useHealth();
@@ -358,7 +361,7 @@ function Onboarding() {
         title: "Connect a model provider",
         hint: health.provider_label ? `Using ${health.provider_label}` : "Gemini, Anthropic or OpenAI key",
         done: !!health.checks.model_provider,
-        to: "/settings",
+        to: SERVICES,
         cta: "Set up",
       },
       {
@@ -366,7 +369,7 @@ function Onboarding() {
         title: "Connect telephony",
         hint: mode === "twilio" || mode === "telnyx" ? `${mode[0].toUpperCase()}${mode.slice(1)} is set` : "Twilio or Telnyx",
         done: !!health.checks.telephony && (mode === "twilio" || mode === "telnyx"),
-        to: "/settings",
+        to: SERVICES,
         cta: "Set up",
       },
       {
@@ -377,6 +380,21 @@ function Onboarding() {
         to: "/templates",
         cta: "Browse templates",
       },
+      // Only on backends that report connected apps.
+      ...(health.mcp_servers === undefined
+        ? []
+        : [
+            {
+              id: "apps",
+              title: "Connect an app (MCP)",
+              hint: health.mcp_servers
+                ? `${health.mcp_servers} connected`
+                : "Let the agent check calendars and update your CRM",
+              done: health.mcp_servers > 0,
+              to: "/settings?connect=1",
+              cta: "Connect",
+            },
+          ]),
       {
         id: "test",
         title: "Place a test call",
@@ -390,7 +408,7 @@ function Onboarding() {
         title: "Turn on follow-ups",
         hint: "SMS or WhatsApp after every call",
         done: !!health.checks.sms || !!health.checks.whatsapp,
-        to: "/settings",
+        to: SERVICES,
         cta: "Set up",
       },
       {
@@ -398,7 +416,7 @@ function Onboarding() {
         title: "Lock the console",
         hint: "Set ADMIN_PASSWORD so only your team can dial",
         done: health.auth_enabled ?? auth.phase === "signed-in",
-        to: "/settings",
+        to: SERVICES,
         cta: "How",
       },
     ];

@@ -29,9 +29,10 @@ import {
   IconShield,
   IconWhisper,
 } from "../icons";
+import { toolActivity, toolNameFromId } from "../mcp/toolText";
 import OutcomeCard from "../OutcomeCard";
 import { ScorecardResult } from "../Scorecard";
-import { LiveTranscript, TranscriptActions, type DisplayTurn } from "../Transcript";
+import { LiveTranscript, TranscriptActions, withTools, type DisplayTurn } from "../Transcript";
 import {
   Badge,
   Button,
@@ -89,10 +90,13 @@ export function CallConsole({
 
   const turns = useMemo<DisplayTurn[]>(
     () =>
-      [...stream.turns, ...stream.whispers].sort(
-        (a, b) => (a.at ? Date.parse(a.at) : 0) - (b.at ? Date.parse(b.at) : 0),
+      withTools(
+        [...stream.turns, ...stream.whispers].sort(
+          (a, b) => (a.at ? Date.parse(a.at) : 0) - (b.at ? Date.parse(b.at) : 0),
+        ),
+        stream.tools,
       ),
-    [stream.turns, stream.whispers],
+    [stream.turns, stream.whispers, stream.tools],
   );
 
   const hangup = async () => {
@@ -124,7 +128,11 @@ export function CallConsole({
           onClose={onClose}
         />
         <div className="border-t border-line px-5 py-4">
-          <StatusStepper phase={stream.phase} failedFrom={stream.failedFrom} />
+          <StatusStepper
+            phase={stream.phase}
+            failedFrom={stream.failedFrom}
+            working={stream.phase === "connected" && stream.liveState === "working"}
+          />
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line bg-subtle/40 px-5 py-2">
@@ -217,6 +225,10 @@ function statusLine(stream: CallStream, name: string): string {
     case "failed":
       return stream.error ? `The call failed — ${stream.error}` : "The call failed";
     default:
+      if (stream.liveState === "working") {
+        const doing = stream.workingTools.map((id) => toolActivity(toolNameFromId(id)).toLowerCase());
+        return doing.length ? `Using a tool — ${doing.join(", ")}` : "Using a tool";
+      }
       return stream.liveState === "speaking"
         ? "Agent is speaking"
         : stream.liveState === "thinking"
@@ -264,7 +276,9 @@ function ConsoleHeader({
   return (
     <div className="flex flex-wrap items-center gap-4 px-5 py-4">
       <AgentAvatar state={avatarStateFor(stream.phase, stream.liveState)} size="md" />
-      <div className="min-w-0 flex-1">
+      {/* The basis makes the timer and End call wrap to their own row on a
+          phone instead of squeezing the name and status to nothing. */}
+      <div className="min-w-0 flex-1 basis-48">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="truncate text-lg font-semibold tracking-tight text-ink">{name}</h2>
           {mode === "test" || stream.isTest ? (
@@ -292,8 +306,8 @@ function ConsoleHeader({
         </p>
       </div>
 
-      <div className="flex items-center gap-3">
-        <div className="text-right">
+      <div className="flex items-center gap-3 max-sm:w-full max-sm:justify-between">
+        <div className="text-right max-sm:text-left">
           <p className="text-2xs font-medium text-ink-muted">{stream.connectedAt ? "Talk time" : "Elapsed"}</p>
           <p className="tnum text-xl font-semibold tabular-nums text-ink" aria-label={`${formatDuration(elapsed)} elapsed`}>
             {formatDuration(elapsed)}
@@ -319,7 +333,16 @@ function ConsoleHeader({
   );
 }
 
-function StatusStepper({ phase, failedFrom }: { phase: CallPhase; failedFrom: CallPhase | null }) {
+function StatusStepper({
+  phase,
+  failedFrom,
+  working,
+}: {
+  phase: CallPhase;
+  failedFrom: CallPhase | null;
+  /** The agent paused to run a tool: the live step says so. */
+  working: boolean;
+}) {
   const reached = phase === "failed" ? STEPS.findIndex((s) => s.phase === failedFrom) : STEPS.findIndex((s) => s.phase === phase);
   return (
     <ol className="flex items-center" aria-label="Call progress">
@@ -359,7 +382,7 @@ function StatusStepper({ phase, failedFrom }: { phase: CallPhase; failedFrom: Ca
                   !current && !failedHere && "hidden sm:inline",
                 )}
               >
-                {failedHere ? "Failed" : step.label}
+                {failedHere ? "Failed" : current && working && step.phase === "connected" ? "Using a tool" : step.label}
               </span>
             </span>
             {!last && (

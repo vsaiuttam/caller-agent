@@ -10,6 +10,7 @@ import { TestBadge, cx } from "../ui";
 
 export function liveAvatarState(state: string): AgentState {
   if (state === "speaking" || state === "listening" || state === "thinking") return state;
+  if (state === "working") return "thinking";
   if (state === "ended") return "ended";
   return "ringing";
 }
@@ -22,6 +23,8 @@ export function liveStateLabel(state: string): string {
       return "Listening";
     case "thinking":
       return "Thinking";
+    case "working":
+      return "Using a tool";
     case "ended":
       return "Wrapping up";
     default:
