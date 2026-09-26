@@ -999,9 +999,11 @@ def test_password_hashes_never_appear_in_any_response() -> None:
     async def scenario(http, _sessions):
         seen: list[httpx.Response] = []
         owner = await _register(http, name=OWNER_NAME, email=OWNER_EMAIL, password=OWNER_PASSWORD)
+        assert owner.status_code == 201, _show(owner)
         seen.append(owner)
         token = owner.json()["token"]
         member = await _register(http, name="Ravi", email="ravi@example.com", password=MEMBER_PASSWORD)
+        assert member.status_code == 201, _show(member)
         seen.append(member)
         seen.append(await _login(http, OWNER_EMAIL, OWNER_PASSWORD))
         seen.append(await _login(http, OWNER_EMAIL, "not the right password"))
