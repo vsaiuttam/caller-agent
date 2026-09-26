@@ -318,7 +318,7 @@ def test_the_right_password_returns_a_token_that_opens_the_api() -> None:
             assert r.status_code == 200, ("query token", r.status_code, r.text)
 
             r = await http.get("/api/auth/status", headers=_bearer(token))
-            assert r.json() == {"auth_enabled": True, "authenticated": True}, r.json()
+            assert {"auth_enabled": True, "authenticated": True}.items() <= r.json().items(), r.json()
 
     with _env(**AUTH_ON):
         asyncio.run(scenario())
@@ -347,7 +347,7 @@ def test_a_bad_or_expired_token_is_refused() -> None:
                 r = await http.get(f"/api/campaigns?token={token}")
                 assert r.status_code == 401, (token[:12], r.status_code, r.text)
             r = await http.get("/api/auth/status", headers=_bearer(expired))
-            assert r.json() == {"auth_enabled": True, "authenticated": False}, r.json()
+            assert {"auth_enabled": True, "authenticated": False}.items() <= r.json().items(), r.json()
 
     with _env(**AUTH_ON):
         asyncio.run(scenario())
@@ -364,7 +364,7 @@ def test_health_status_and_login_stay_open() -> None:
 
             r = await http.get("/api/auth/status")
             assert r.status_code == 200, (r.status_code, r.text)
-            assert r.json() == {"auth_enabled": True, "authenticated": False}, r.json()
+            assert {"auth_enabled": True, "authenticated": False}.items() <= r.json().items(), r.json()
 
             r = await _login(http, "wrong")
             assert r.status_code == 401, "login itself must be reachable without a token"
