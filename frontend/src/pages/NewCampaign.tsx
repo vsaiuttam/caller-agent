@@ -179,7 +179,7 @@ export default function NewCampaign() {
       } else {
         toast.success(`“${campaign.name}” created`, "Add contacts, then press start.");
       }
-      navigate(`/campaigns/${campaign.id}`);
+      navigate(`/app/campaigns/${campaign.id}`);
     } catch (err) {
       const message = (err as Error).message;
       setError(message);
@@ -199,7 +199,7 @@ export default function NewCampaign() {
   return (
     <Page width="wide">
       <PageHeader
-        back={{ to: "/campaigns", label: "Campaigns" }}
+        back={{ to: "/app/campaigns", label: "Campaigns" }}
         icon={<IconCampaign size={18} />}
         title="New campaign"
         description={

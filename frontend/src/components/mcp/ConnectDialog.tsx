@@ -485,7 +485,7 @@ function Connected({ server }: { server: McpServer }) {
       {count > 0 && <ToolSummaryList tools={server.tools} className="max-h-64 overflow-y-auto" />}
       <p className="text-xs text-ink-muted">
         Next, choose which tools each campaign may use —{" "}
-        <Link to="/campaigns" className="inline-flex items-center gap-1 font-medium text-brand hover:underline">
+        <Link to="/app/campaigns" className="inline-flex items-center gap-1 font-medium text-brand hover:underline">
           open a campaign <IconArrowRight size={12} />
         </Link>
       </p>

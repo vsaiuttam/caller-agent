@@ -6,7 +6,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
-import { useAuth } from "../../auth";
+import { useAuth, useSignOut } from "../../auth";
 import { BRAND } from "../../brand";
 import { useHealth, useLiveCalls, useStats, useStreamStatus } from "../../data";
 import { useLocalStorage } from "../../hooks";
@@ -122,7 +122,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
         >
           <div className={cx("flex h-14 shrink-0 items-center", collapsed ? "justify-center" : "px-4")}>
-            <Link to="/dashboard" className="rounded-md" aria-label={`${BRAND.name} — overview`}>
+            <Link to="/app" className="rounded-md" aria-label={`${BRAND.name} overview`}>
               {collapsed ? (
                 <LogoMark size={26} />
               ) : (
@@ -230,6 +230,7 @@ function SidebarNav({ collapsed }: { collapsed: boolean }) {
               const link = (
                 <NavLink
                   to={item.to}
+                  end={item.end}
                   aria-label={collapsed ? item.label : undefined}
                   className={({ isActive }) =>
                     cx(
@@ -305,12 +306,13 @@ function TopBar({
   const location = useLocation();
   const { theme, toggle } = useTheme();
   const auth = useAuth();
+  const signOut = useSignOut();
   const crumbs = crumbsFor(location.pathname, crumb);
 
   return (
     <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-line bg-plane/85 px-3 backdrop-blur-md sm:px-5">
       <IconButton label="Open navigation" icon={<IconMenu size={18} />} className="md:hidden" tooltip={false} onClick={onMenu} />
-      <Link to="/dashboard" className="rounded-md md:hidden" aria-label={`${BRAND.name} — overview`}>
+      <Link to="/app" className="rounded-md md:hidden" aria-label={`${BRAND.name} overview`}>
         <LogoMark size={24} />
       </Link>
 
@@ -359,7 +361,7 @@ function TopBar({
       />
 
       {auth.phase === "signed-in" ? (
-        <UserMenu onShortcuts={onShortcuts} onSignOut={auth.signOut} />
+        <UserMenu onShortcuts={onShortcuts} onSignOut={signOut} />
       ) : (
         <IconButton label="Keyboard shortcuts" icon={<IconHelp size={17} />} className="hidden sm:inline-flex" onClick={onShortcuts} />
       )}
@@ -464,7 +466,7 @@ function HealthPill() {
           </p>
         </div>
         <Link
-          to="/settings?tab=services"
+          to="/app/settings?tab=services"
           onClick={() => setOpen(false)}
           className="flex items-center justify-between rounded-lg px-2.5 py-2 text-xs font-medium text-ink transition-colors hover:bg-subtle"
         >
@@ -523,7 +525,7 @@ function AuthBanner() {
     <div className="flex items-center gap-3 border-b border-warning/25 bg-warning/8 px-4 py-2 text-xs text-ink-secondary sm:px-6 lg:px-8">
       <IconLock size={14} className="shrink-0 text-warning" />
       <p className="min-w-0 flex-1">
-        <span className="font-medium text-ink">Anyone with this link can place calls</span> — set{" "}
+        <span className="font-medium text-ink">Anyone with this link can place calls.</span> Set{" "}
         <code className="font-mono rounded bg-subtle px-1 py-0.5 text-2xs">ADMIN_PASSWORD</code> to lock it.
       </p>
       <button

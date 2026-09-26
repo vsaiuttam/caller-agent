@@ -199,7 +199,7 @@ export function CallConsole({
       {terminal && (
         <div className="flex justify-end">
           <Link
-            to={`/calls?call=${callId}`}
+            to={`/app/calls?call=${callId}`}
             className="inline-flex items-center gap-1.5 rounded-md text-xs font-medium text-brand hover:underline"
           >
             Open in the call log <IconArrowRight size={13} />

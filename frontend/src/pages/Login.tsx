@@ -7,6 +7,8 @@
 
 import { useState, type FormEvent } from "react";
 import { m } from "framer-motion";
+import { Navigate, useSearchParams } from "react-router-dom";
+import { safeNext } from "../routes";
 import { ApiError } from "../api";
 import { useAuth } from "../auth";
 import { BRAND } from "../brand";
@@ -18,13 +20,17 @@ import { rise } from "../motion";
 import { useDocumentTitle } from "../hooks";
 
 export default function Login() {
-  const { signIn } = useAuth();
+  const { phase, signIn } = useAuth();
+  const [params] = useSearchParams();
+  const next = safeNext(params.get("next"));
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mood, setMood] = useState<AgentState>("idle");
   useDocumentTitle("Sign in");
+
+  if (phase === "signed-in" || phase === "open") return <Navigate to={next} replace />;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();

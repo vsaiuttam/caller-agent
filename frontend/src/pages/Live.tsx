@@ -90,10 +90,10 @@ export default function Live() {
             hint="Calls appear here the moment they're dialled — from running campaigns or from the Test lab. This page updates by itself."
             action={
               <>
-                <ButtonLink to="/test-lab/phone" icon={<IconPhone size={14} />}>
+                <ButtonLink to="/app/test-lab/phone" icon={<IconPhone size={14} />}>
                   Place a test call
                 </ButtonLink>
-                <ButtonLink to="/campaigns" variant="secondary" icon={<IconCampaign size={14} />}>
+                <ButtonLink to="/app/campaigns" variant="secondary" icon={<IconCampaign size={14} />}>
                   Go to campaigns
                 </ButtonLink>
               </>

@@ -49,10 +49,10 @@ export default function Campaigns() {
         description="Each campaign says what the agent should accomplish, who it calls, and when it may dial. Nothing dials until you press start."
         actions={
           <>
-            <ButtonLink to="/templates" variant="secondary" icon={<IconSparkle size={14} />}>
+            <ButtonLink to="/app/templates" variant="secondary" icon={<IconSparkle size={14} />}>
               Templates
             </ButtonLink>
-            <ButtonLink to="/campaigns/new" icon={<IconPlus size={14} />}>
+            <ButtonLink to="/app/campaigns/new" icon={<IconPlus size={14} />}>
               New campaign
             </ButtonLink>
           </>
@@ -105,10 +105,10 @@ export default function Campaigns() {
             hint="Start from a template — appointment reminders, lead qualification, candidate screening — or write your own brief. Then load contacts and press start."
             action={
               <>
-                <ButtonLink to="/templates" icon={<IconSparkle size={14} />}>
+                <ButtonLink to="/app/templates" icon={<IconSparkle size={14} />}>
                   Browse templates
                 </ButtonLink>
-                <ButtonLink to="/campaigns/new" variant="secondary">
+                <ButtonLink to="/app/campaigns/new" variant="secondary">
                   Start from scratch
                 </ButtonLink>
               </>
@@ -135,7 +135,7 @@ export default function Campaigns() {
 function CampaignCard({ campaign: c }: { campaign: Campaign }) {
   const progress = c.total_contacts ? (c.completed / c.total_contacts) * 100 : 0;
   return (
-    <Link to={`/campaigns/${c.id}`} className="block h-full rounded-xl">
+    <Link to={`/app/campaigns/${c.id}`} className="block h-full rounded-xl">
       <Card interactive className="flex h-full flex-col px-5 py-4">
         <div className="flex items-start justify-between gap-3">
           <h2 className="min-w-0 truncate text-base font-semibold tracking-tight text-ink">{c.name}</h2>
