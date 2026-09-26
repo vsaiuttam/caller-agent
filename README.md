@@ -186,6 +186,34 @@ account. Set `ADMIN_PASSWORD` and the console asks for it, and every API route
 needs the token it issues. Twilio's webhooks stay open, because Twilio can't
 log in. Unset, everything stays open, and the console shows a banner saying so.
 
+### 11. Connect your apps (MCP)
+
+Samvaad is an MCP client. Under **Integrations → Connected apps**, add the MCP
+server of any app you use: your CRM, calendar, helpdesk, database, or a
+Zapier or Composio account that fronts hundreds of apps. Samvaad checks the
+connection and lists the app's tools, and **Try it** runs any tool once so you
+can see what it returns. The built-in **Demo CRM** takes one click and needs no
+account, so you can try it all first.
+
+Each campaign then chooses which tools its agent may use:
+
+- **During the call**: the agent looks things up and acts while it talks
+  ("let me check tomorrow's slots…"). It says a short line first, so the
+  caller never sits in silence. Tool calls show up live in the console.
+- **After the call**: the outcome is written back to your systems, following
+  a plain-language instruction you give the campaign. Calls held for human
+  review are skipped.
+
+Every tool call is saved on the call record. A tool that fails or times out
+never breaks the call: the agent apologises and moves on. Server URLs and
+keys are never shown again once saved, and are encrypted when `SECRETS_KEY`
+(or `AUTH_SECRET`) is set. Samvaad refuses to connect to private network
+addresses unless `MCP_ALLOW_PRIVATE_HOSTS=true`. Tools work with Anthropic,
+OpenAI and Gemini as the model provider.
+
+Not yet supported: apps that need an OAuth sign-in rather than a key or URL,
+and MCP servers that run as local programs (stdio).
+
 ## Layout
 
 ```

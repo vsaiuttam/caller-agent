@@ -76,6 +76,9 @@ services:
         sync: false
       - key: AUTH_SECRET
         sync: false
+      # Encrypts connected apps' (MCP servers') URLs and headers at rest
+      - key: SECRETS_KEY
+        sync: false
 
       # CORS — your Vercel frontend URL + local dev
       - key: CORS_ORIGINS

@@ -35,6 +35,12 @@ starlette>=0.36
 # Production ASGI server
 gunicorn>=22.0
 
+# Connected apps: Samvaad is an MCP client (src/voiceagent/mcp/). Pinned to a
+# minor version because the v2 SDK is still moving between minors.
+mcp>=2.2,<2.3
+# Seals connected apps' URLs and headers at rest (Fernet).
+cryptography>=42
+
 # Google Calendar. Optional; mocked when credentials are absent.
 google-api-python-client>=2.130
 google-auth>=2.29
