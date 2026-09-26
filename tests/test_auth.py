@@ -36,8 +36,8 @@ from src.voiceagent.api import app as app_module  # noqa: E402
 logging.getLogger().setLevel(logging.WARNING)
 
 PASSWORD = "correct horse battery staple"
-AUTH_ON = dict(ADMIN_PASSWORD=PASSWORD, AUTH_SECRET=None, AUTH_TOKEN_TTL_HOURS=None)
-AUTH_OFF = dict(ADMIN_PASSWORD=None, AUTH_SECRET=None, AUTH_TOKEN_TTL_HOURS=None)
+AUTH_ON = dict(ADMIN_PASSWORD=PASSWORD, AUTH_SECRET=None, AUTH_TOKEN_TTL_HOURS=None, REQUIRE_LOGIN=None)
+AUTH_OFF = dict(ADMIN_PASSWORD=None, AUTH_SECRET=None, AUTH_TOKEN_TTL_HOURS=None, REQUIRE_LOGIN=None)
 LOCKED = {"detail": "Authentication required"}
 
 

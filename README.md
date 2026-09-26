@@ -184,6 +184,10 @@ voicemail message) come in English, Hindi, Urdu and Hinglish.
 A deployed console is a public URL that can place calls on your Twilio
 account, so lock it before sharing it.
 
+- **Require a sign-in from the start.** Set `REQUIRE_LOGIN=true` (the Render
+  blueprint does) and the console is locked from the first visit: until an
+  owner exists, the sign-in page offers only "Create the owner account".
+  Locally it's off, so development stays one click away.
 - **Create the owner account.** The first person to register at `/register`
   becomes the owner, and from then on every API route needs a signed-in user.
   If `ADMIN_PASSWORD` is set, creating the owner also asks for it, so a stranger

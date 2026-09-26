@@ -4,6 +4,7 @@
  *   checking     a skeleton while /api/auth/status answers
  *   signed in    straight on to `next` (or the overview)
  *   open         auth is off: "Enter the console", and how to lock it
+ *   first run    locked, no accounts, no admin password: create the owner
  *   unreachable  Retry, or continue to the console anyway
  *   locked       email + password (accounts), with the shared admin password
  *                as a secondary way in; only the admin password on backends
@@ -52,6 +53,8 @@ export default function Login() {
         <Unreachable next={next} />
       ) : auth.phase === "open" ? (
         <OpenConsole next={next} />
+      ) : auth.registration?.mode === "owner" && !auth.registration.setup_code_required ? (
+        <FirstRun next={next} />
       ) : (
         <SignInForm next={next} notice={auth.lockReason} setMood={setMood} />
       )}
@@ -91,6 +94,45 @@ function OpenConsole({ next }: { next: string }) {
         ) : (
           " and restart it."
         )}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * A locked server nobody has registered on yet, with no admin password:
+ * there's no account to sign in with, so the only way forward is creating
+ * the owner. Showing a password form here would be a form that can't work.
+ */
+function FirstRun({ next }: { next: string }) {
+  const navigate = useNavigate();
+  return (
+    <div>
+      <AuthHeading
+        eyebrow={
+          <>
+            <IconLock size={14} /> Protected workspace
+          </>
+        }
+        title={`Set up ${BRAND.name}`}
+      >
+        This console is locked and has no accounts yet. Create the owner account to open it. From then on, everyone signs
+        in, and teammates join by invite.
+      </AuthHeading>
+      <Button
+        size="lg"
+        className="mt-8 w-full"
+        iconRight={<IconArrowRight size={15} />}
+        onClick={() => navigate(registerHref(next))}
+      >
+        Create the owner account
+      </Button>
+      <p className="mt-6 text-sm leading-relaxed text-ink-secondary">
+        The first account becomes the owner, who manages the team. Do this now: until the owner exists, anyone who opens
+        this page could claim it.
+      </p>
+      <p className="mt-8 border-t border-line pt-5 text-xs leading-relaxed text-ink-muted">
+        To require a setup code for this step, set <code className="font-mono">ADMIN_PASSWORD</code> on the server.
       </p>
     </div>
   );

@@ -1,9 +1,10 @@
 """Opt-in access control: user accounts, a break-glass admin password, and
 signed expiring tokens.
 
-Off until someone registers or ADMIN_PASSWORD is set, and until then
-everything behaves exactly as it did before — a local console is not made
-harder to use to protect a public one. Once on, every /api/* route except
+Off until someone registers, ADMIN_PASSWORD is set, or REQUIRE_LOGIN is on,
+and until then everything behaves exactly as it did before — a local console
+is not made harder to use to protect a public one. Deploys set REQUIRE_LOGIN
+so they are locked from the first visit. Once on, every /api/* route except
 health and the auth routes needs a token, and so do the live WebSockets.
 Twilio's webhooks are never locked: Twilio cannot log in, and a locked
 webhook drops every call in flight.
@@ -21,6 +22,7 @@ in the database; changing the one in use signs everyone out. Disabling or
 deleting a user revokes their tokens at once (see `authenticate`). Settings
 are read when used, not at import.
 
+    REQUIRE_LOGIN          — true: locked even before anyone has registered
     ADMIN_PASSWORD         — break-glass sign-in; also turns access control on
     AUTH_SECRET            — signing key; optional
     AUTH_TOKEN_TTL_HOURS   — token lifetime, default 12
@@ -85,7 +87,17 @@ _users_exist = False
 
 
 def auth_enabled() -> bool:
-    return admin_password_set() or _users_exist
+    return login_required() or admin_password_set() or _users_exist
+
+
+def login_required() -> bool:
+    """REQUIRE_LOGIN: lock the console before anyone has registered.
+
+    Without it a fresh deploy is open until the owner signs up — fine on a
+    laptop, not on a public URL, where the console is one click from anyone.
+    With it, a visitor can do nothing but create the owner account.
+    """
+    return os.getenv("REQUIRE_LOGIN", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def admin_password_set() -> bool:
