@@ -137,8 +137,8 @@ function Hero() {
             {BRAND.tagline}
           </m.h1>
           <m.p {...enter(0.1)} className="mt-6 max-w-[34rem] text-lg leading-relaxed text-ink-secondary">
-            Plan a calling campaign, rehearse it against tough callers, then watch every conversation live and step
-            in when it matters.
+            Plan a calling campaign, rehearse it against tough callers, then watch every call live and step in when it
+            matters.
           </m.p>
           <m.div {...enter(0.15)} className="mt-8 flex flex-wrap items-center gap-3">
             <ButtonLink to={LOGIN} size="lg" iconRight={<IconArrowRight size={15} />}>
@@ -253,7 +253,7 @@ function Features() {
             </Cell>
           </Reveal>
 
-          <Reveal className="lg:col-span-2">
+          <Reveal className="lg:col-span-3">
             <Cell
               icon={<IconPlug size={18} />}
               title="Connected apps, over MCP"
@@ -283,32 +283,11 @@ function Features() {
             </Cell>
           </Reveal>
 
-          <Reveal className="lg:col-span-2" delay={0.05}>
-            <Cell
-              icon={<IconSend size={18} />}
-              title="Follow-ups that know when to stop"
-              className="bg-surface"
-              visual={
-                <div>
-                  <p className="rounded-2xl rounded-bl-md bg-subtle px-3.5 py-3 text-sm leading-relaxed text-ink">
-                    Thanks for your time, Ananya. You're booked for Friday at 11:00.
-                  </p>
-                  <div className="mt-2 flex">
-                    <FollowupBadge channel="whatsapp" status="delivered" />
-                  </div>
-                </div>
-              }
-            >
-              A thank-you by SMS or WhatsApp with the booking, or a missed-call note. Never after an opt-out or a wrong
-              number.
-            </Cell>
-          </Reveal>
-
-          <Reveal className="lg:col-span-2" delay={0.1}>
+          <Reveal className="lg:col-span-3" delay={0.05}>
             <Cell
               icon={<IconReview size={18} />}
               title="Scored against your criteria"
-              className="bg-surface"
+              className="bg-subtle"
               visual={
                 <div>
                   <ul className="space-y-2 text-sm" aria-label="Example scorecard">
@@ -339,16 +318,37 @@ function Features() {
             </Cell>
           </Reveal>
 
-          <Reveal className="md:col-span-2 lg:col-span-6">
-            <article className="rounded-2xl border border-line bg-brand/[0.05] p-6 sm:p-7">
-              <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-12">
-                <div className="lg:w-72 lg:shrink-0">
+          <Reveal className="lg:col-span-2">
+            <Cell
+              icon={<IconSend size={18} />}
+              title="Follow-ups that know when to stop"
+              className="bg-surface"
+              visual={
+                <div>
+                  <p className="rounded-2xl rounded-bl-md bg-subtle px-3.5 py-3 text-sm leading-relaxed text-ink">
+                    Thanks for your time, Ananya. You're booked for Friday at 11:00.
+                  </p>
+                  <div className="mt-2 flex">
+                    <FollowupBadge channel="whatsapp" status="delivered" />
+                  </div>
+                </div>
+              }
+            >
+              A thank-you by SMS or WhatsApp with the booking, or a missed-call note. Never after an opt-out or a wrong
+              number.
+            </Cell>
+          </Reveal>
+
+          <Reveal className="md:col-span-2 lg:col-span-4" delay={0.05}>
+            <article className="h-full rounded-2xl border border-line bg-brand/[0.05] p-6 sm:p-7">
+              <div className="flex flex-col gap-6">
+                <div className="max-w-md">
                   <h3 className="text-lg font-semibold tracking-tight text-ink">Guardrails built in</h3>
                   <p className="mt-2 text-sm leading-relaxed text-ink-secondary">
                     The limits that keep a campaign polite and on budget are part of every campaign, not an add-on.
                   </p>
                 </div>
-                <ul className="grid flex-1 gap-x-8 gap-y-5 sm:grid-cols-2">
+                <ul className="grid gap-x-8 gap-y-5 sm:grid-cols-2">
                   {[
                     { icon: <IconClock size={16} />, text: "Calls only inside each contact's calling hours, in their time zone." },
                     { icon: <IconBlock size={16} />, text: "Your do-not-call list is checked before every dial." },
@@ -463,7 +463,7 @@ const GREETINGS = [
     dir: "rtl",
     native: "اردو",
     name: "Urdu",
-    text: "السلام علیکم عائشہ صاحبہ، میں Kaveri Dental سے AI اسسٹنٹ بول رہی ہوں، آپ کی اپائنٹمنٹ کے بارے میں۔ کیا آپ ایک منٹ بات کر سکتی ہیں؟",
+    text: "السلام علیکم عمران صاحب، میں Kaveri Dental سے AI اسسٹنٹ بول رہی ہوں، آپ کی اپائنٹمنٹ کے بارے میں۔ کیا آپ ایک منٹ بات کر سکتے ہیں؟",
   },
   {
     code: "hi-Latn",
@@ -537,7 +537,7 @@ const PROMISES = [
   {
     icon: <IconLock size={18} />,
     title: "Locked when you say so",
-    text: "Set ADMIN_PASSWORD and every page and API route needs a sign-in. Until then, the console warns that it's open.",
+    text: "Create the owner account or set ADMIN_PASSWORD, and every page and API route needs a sign-in. Until then, the console warns that it's open.",
   },
 ];
 

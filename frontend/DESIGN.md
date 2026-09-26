@@ -173,7 +173,11 @@ Where the skills disagreed, this is the call we made.
     cyans read as neon on near-black. Desaturated to 53-77% saturation while
     staying above 7:1 (redesign "oversaturated accents", ui-ux-pro-max
     `color-dark-mode`).
-14. **Footer without a link farm.** Three short groups plus the brand column; no
+14. **Console copy keeps its voice.** The em-dash ban and the eyebrow rules
+    apply to the marketing and sign-in surfaces. The console is dense product
+    UI (design-taste §13 puts it out of scope) and its copy is preserved
+    (redesign-existing-projects: preserve copy voice).
+15. **Footer without a link farm.** Three short groups plus the brand column; no
     Terms or Privacy links because those pages do not exist
     (redesign-existing-projects "footer link farm", brief: link nothing fake).
 
@@ -322,20 +326,36 @@ hero shows the whole sample call at once with no playback.
 ### Landing `/`
 
 Sticky header (64px, anchors from 1024px) → hero (split: copy left, sample
-call right) → features (bento, six cells, mixed spans, varied backgrounds) →
+call right) → features (bento, six cells in rows of 4+2, 3+3, 2+4, varied
+backgrounds, so no row is three equal cards) →
 how it works (a four-verb track: Design, Rehearse, Call, Review) → languages
 (four greetings in four scripts, message-shaped) → trust (split panel: three
 promises the code keeps) → closing band (the agent, one CTA) → footer. Seven
 sections, six different layout families.
 
-### Login `/login`
+### Login `/login` and register `/register`
 
 Same header (no CTA), a two-panel card (the reacting agent and the promise on
 the left from 1024px; the form on the right), then the marketing footer.
-States: checking (skeleton), locked (password form, wrong-password error,
-429 lockout with a countdown, loading), open (Enter the console, plus a note
-that `ADMIN_PASSWORD` locks it), unreachable (Retry, or continue anyway),
-signed in (straight to `next`).
+Register shares the layout and the field parts, so errors, show/hide and the
+lockout behave identically.
+
+- Login states: checking (skeleton), locked (email + password with "Forgot?",
+  or the shared admin password behind a secondary toggle; inline errors, 429
+  lockout with a countdown, loading), open (Enter the console, plus how to lock
+  it), unreachable (Retry, or continue anyway), signed in (straight to `next`).
+  A backend without accounts offers only the admin password.
+- Register modes, from `/api/auth/status`: owner (first account, turns sign-in
+  on, setup code when required), invite (code prefilled from `?invite=`), open,
+  closed (a "ask your owner" state, no form). Password rules are shown live and
+  errors are mapped to the field they belong to.
+
+### Team (`/app/settings?tab=team`)
+
+Owner and admin only. People table (role select, disable switch, remove with
+confirm) with the server's guards mirrored so a refused action is never
+offered; invites with the code shown once as a copyable link, and revoke. The
+account menu shows the signed-in name, email and role.
 
 ### Console `/app/*`
 
@@ -353,12 +373,14 @@ every page: version and build, health, keyboard shortcuts, docs, repository.
 
 ## Routes
 
-`/` landing and `/login` are public. The console lives under `/app`. Every v1
+`/` landing, `/login` and `/register` are public. The console lives under `/app`. Every v1
 path (`/dashboard`, `/campaigns/...`, `/calls`, `/review`, `/live`,
 `/test-lab/...`, `/simulator`, `/templates`, `/models`, `/settings`,
 `/suppressions`) redirects to its `/app` twin, query string and hash
 included. With auth on, an unauthenticated visit to `/app/*` goes to
-`/login?next=<the path you asked for>`; `next` only accepts `/app` paths.
+`/login?next=<the path you asked for>`; `next` only accepts same-origin `/app`
+paths. Signing out goes to plain `/login`; an expired session goes to
+`/login?next=…` with a "session ended" note.
 
 ## What we don't do
 
