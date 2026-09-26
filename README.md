@@ -244,6 +244,14 @@ src/voiceagent/
   postcall/
     extract.py         Transcript → CallOutcome
     actions.py         Deterministic dispatch with a review gate
+    mcp_actions.py     After-call tool use on the campaign's connected apps
+  mcp/
+    client.py          Connect to an MCP server, discover its tools
+    toolbox.py         One call's tools: lazy sessions, timeouts, never raises
+    guard.py           Refuses private / non-https server URLs
+    secrets.py         Seals server URLs and headers at rest
+    demo_server.py     Built-in Demo CRM, for trying tools with no account
+    ids.py             Tool ids that fit every provider's naming rules
   integrations/
     clients.py         Google Calendar, records API, DB suppression
     mocks.py           Scripted caller + logging stubs
