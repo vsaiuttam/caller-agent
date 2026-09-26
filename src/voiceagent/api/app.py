@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import statistics
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -52,6 +53,19 @@ from ..catalog import (
 from ..catalog import active_defaults, resolve
 from ..followup import followup_columns, send_followups, sms_configured, whatsapp_configured
 from ..llm import ConversationLLM
+from ..mcp.client import (
+    AUTO,
+    BUILTIN,
+    McpUnavailable,
+    discover_transport,
+    host_of,
+    is_builtin,
+)
+from ..mcp.client import discover as discover_tools
+from ..mcp.guard import UnsafeUrl, check_url
+from ..mcp.ids import server_prefix, tool_id, unique_slug
+from ..mcp.secrets import REENTER_MESSAGE, SecretsUnavailable, seal, sealing_enabled, unseal
+from ..mcp.toolbox import CallToolbox, ToolLog, call_tools
 from ..models import CallContext, CallOutcome, Disposition
 from ..models import Contact as ContactModel
 from ..models import ScoreCriterion
@@ -66,6 +80,7 @@ from ..orchestrator.events import (
     bus,
 )
 from ..postcall.extract import extract_outcome
+from ..postcall.mcp_actions import run_for_call
 from ..providers import (
     active as active_provider,
 )
@@ -85,6 +100,7 @@ from ..storage import (
     CampaignStatus,
     Contact,
     ContactStatus,
+    McpServer,
     Setting,
     Suppression,
     get_session,
@@ -114,6 +130,13 @@ from .schemas import (
     HourBucket,
     LiveCallRequest,
     LoginRequest,
+    McpCatalogTool,
+    McpServerCreate,
+    McpServerOut,
+    McpServerUpdate,
+    McpToolOut,
+    McpToolTest,
+    McpToolTestResult,
     ModelDefaults,
     ReviewDecision,
     SimulationRequest,
@@ -327,9 +350,13 @@ async def health(db: AsyncSession = Depends(get_session)) -> dict:
         "webhook_signing": bool(os.getenv("WEBHOOK_SIGNING_SECRET")),
     }
 
+    mcp_servers = 0
     try:
         await db.execute(select(func.count()).select_from(Campaign))
         checks["database"] = True
+        mcp_servers = await db.scalar(
+            select(func.count()).select_from(McpServer).where(McpServer.enabled.is_(True))
+        ) or 0
     except Exception:  # noqa: BLE001
         logger.exception("Health check: database unreachable")
         checks["database"] = False
@@ -351,6 +378,12 @@ async def health(db: AsyncSession = Depends(get_session)) -> dict:
         "telephony_mode": os.getenv("TELEPHONY", "mock"),
         # Said on every screen when false: anyone with the link can dial.
         "auth_enabled": auth.auth_enabled(),
+        # Connected apps: how many are switched on, whether this provider's
+        # models can use them at all, and whether their credentials are
+        # encrypted at rest (false until SECRETS_KEY or AUTH_SECRET is set).
+        "mcp_servers": mcp_servers,
+        "provider_supports_tools": bool(provider and provider.supports_tools),
+        "secrets_sealed": sealing_enabled(),
         # Said plainly because the distinction bites: these check that a
         # credential is *present*, not that it works. Placeholder keys are the
         # one exception — `sk-ant-...` is recognised as unset rather than
@@ -684,6 +717,9 @@ async def _campaign_out(db: AsyncSession, campaign: Campaign) -> CampaignOut:
         sms_followup=getattr(campaign, "sms_followup", False) or False,
         whatsapp_followup=getattr(campaign, "whatsapp_followup", False) or False,
         webhook_url=campaign.webhook_url,
+        mcp_tools=campaign.mcp_tools or [],
+        mcp_post_call_tools=campaign.mcp_post_call_tools or [],
+        mcp_post_call_instructions=campaign.mcp_post_call_instructions or "",
         status=campaign.status.value,
         created_at=campaign.created_at,
         total_contacts=sum(counts.values()),
@@ -719,6 +755,7 @@ async def create_campaign(body: CampaignCreate, db: AsyncSession = Depends(get_s
         fields["conversation_model"], CONVERSATION, fields["conversation_effort"]
     )
     _validate_assignment(fields["extraction_model"], EXTRACTION, fields["extraction_effort"])
+    await _check_tool_ids(db, fields["mcp_tools"], fields["mcp_post_call_tools"])
 
     campaign = Campaign(id=str(uuid.uuid4()), **fields)
     db.add(campaign)
@@ -771,6 +808,12 @@ async def update_campaign(
             EXTRACTION,
             changes.get("extraction_effort", campaign.extraction_effort),
         )
+
+    # Sent as null, the tool fields mean "none", like on rows made before them.
+    for field, empty in (("mcp_tools", []), ("mcp_post_call_tools", []), ("mcp_post_call_instructions", "")):
+        if field in changes and changes[field] is None:
+            changes[field] = empty
+    await _check_tool_ids(db, changes.get("mcp_tools"), changes.get("mcp_post_call_tools"))
 
     for field, value in changes.items():
         setattr(campaign, field, value)
@@ -1331,6 +1374,7 @@ async def get_call(call_id: str, db: AsyncSession = Depends(get_session)):
         whatsapp_sid=getattr(call, "whatsapp_sid", None),
         whatsapp_status=getattr(call, "whatsapp_status", None),
         followup_errors=getattr(call, "followup_errors", None),
+        tool_calls=call.tool_calls or [],
     )
 
 
@@ -1665,6 +1709,11 @@ async def _resolve_call_setup(db: AsyncSession, body: CallSetupRequest) -> _Call
     )
 
 
+def _campaign_tools(setup: _CallSetup) -> list[str]:
+    """The in-call tool ids of the campaign a rehearsal or test call runs on."""
+    return (setup.campaign.mcp_tools or []) if setup.campaign else []
+
+
 def _bad_key_message() -> str:
     provider = active_provider()
     if provider is None:
@@ -1722,21 +1771,31 @@ async def simulate(body: SimulationRequest, db: AsyncSession = Depends(get_sessi
 
     setup = await _resolve_call_setup(db, body)
 
+    # A rehearsal uses the campaign's tools for real, like a call would —
+    # that is what makes it a rehearsal of the call rather than of the prompt.
+    tools = ToolLog()
+
+    async def on_tool(event: dict) -> None:
+        tools.add(event)
+
     client = make_client()
     try:
-        result = await simulate_call(
-            client,
-            contact=setup.contact,
-            context=setup.context,
-            greeting=setup.greeting,
-            persona_id=body.persona,
-            language_name=setup.language_name,
-            conversation_model=setup.conversation_model,
-            conversation_effort=setup.conversation_effort,
-            extraction_model=setup.extraction_model,
-            extraction_effort=setup.extraction_effort,
-            max_exchanges=body.max_exchanges,
-        )
+        async with call_tools(storage.SessionLocal, _campaign_tools(setup), on_event=on_tool) as toolbox:
+            result = await simulate_call(
+                client,
+                contact=setup.contact,
+                context=setup.context,
+                greeting=setup.greeting,
+                persona_id=body.persona,
+                language_name=setup.language_name,
+                conversation_model=setup.conversation_model,
+                conversation_effort=setup.conversation_effort,
+                extraction_model=setup.extraction_model,
+                extraction_effort=setup.extraction_effort,
+                max_exchanges=body.max_exchanges,
+                toolbox=toolbox,
+            )
+        result.tool_calls = tools.entries
     except auth_error_types() as exc:
         # Distinguished from a generic failure because the fix is completely
         # different: health reports whether a key is *present*, and a present
@@ -1817,6 +1876,7 @@ async def _save_simulation(
         connected_at=started_at or now,
         ended_at=ended_at or now,
         transcript=[t.model_dump(mode="json") for t in result.transcript],
+        tool_calls=result.tool_calls or None,
         disposition=result.outcome.disposition.value,
         sentiment=result.outcome.sentiment.value,
         summary=result.outcome.summary,
@@ -1998,49 +2058,54 @@ async def _run_test_call(
     try:
         telephony = _test_call_telephony()
         prepare_telephony(telephony, room_name, language=setup.language, greeting=setup.greeting)
-        listener, speaker, control, call_sid = await telephony.dial(
-            phone_e164=body.phone_number, room_name=room_name
-        )
-        connected_at = datetime.now(timezone.utc)
-        await _update_call_row(
-            call_id,
-            status=CallStatus.CONNECTED,
-            connected_at=connected_at,
-            provider_call_sid=call_sid,
-        )
-        await feed.publish(CALL_CONNECTED)
+        # Open while the phone rings, closed the moment the call is over.
+        async with call_tools(
+            storage.SessionLocal, _campaign_tools(setup), on_event=feed.on_tool
+        ) as toolbox:
+            listener, speaker, control, call_sid = await telephony.dial(
+                phone_e164=body.phone_number, room_name=room_name
+            )
+            connected_at = datetime.now(timezone.utc)
+            await _update_call_row(
+                call_id,
+                status=CallStatus.CONNECTED,
+                connected_at=connected_at,
+                provider_call_sid=call_sid,
+            )
+            await feed.publish(CALL_CONNECTED)
 
-        client = make_client()
-        session = CallSession(
-            llm=ConversationLLM(
-                client,
-                contact=setup.contact,
-                context=setup.context,
-                model=setup.conversation_model,
-                effort=setup.conversation_effort,
-                usage=usage,
-            ),
-            listener=listener,
-            speaker=speaker,
-            control=control,
-            greeting=setup.greeting,
-            max_duration_seconds=600,
-            phrases=phrases_for(setup.language),
-            on_event=feed.on_event,
-        )
-        live_registry.register(
-            call_id,
-            session=session,
-            room_name=room_name,
-            campaign_id=campaign_id,
-            contact_name=setup.contact.full_name,
-            is_test=True,
-        )
-        try:
-            session_started = True  # from here on, run() hangs up whatever happens
-            transcript = await session.run()
-        finally:
-            live_registry.unregister(call_id)
+            client = make_client()
+            session = CallSession(
+                llm=ConversationLLM(
+                    client,
+                    contact=setup.contact,
+                    context=setup.context,
+                    model=setup.conversation_model,
+                    effort=setup.conversation_effort,
+                    usage=usage,
+                    toolbox=toolbox,
+                ),
+                listener=listener,
+                speaker=speaker,
+                control=control,
+                greeting=setup.greeting,
+                max_duration_seconds=600,
+                phrases=phrases_for(setup.language),
+                on_event=feed.on_event,
+            )
+            live_registry.register(
+                call_id,
+                session=session,
+                room_name=room_name,
+                campaign_id=campaign_id,
+                contact_name=setup.contact.full_name,
+                is_test=True,
+            )
+            try:
+                session_started = True  # from here on, run() hangs up whatever happens
+                transcript = await session.run()
+            finally:
+                live_registry.unregister(call_id)
         await feed.drain()
 
         if session.error is not None:
@@ -2096,6 +2161,19 @@ async def _complete_test_call(
     )
     qualification = qualify_outcome(setup.context, outcome) if setup.context.scorecard else None
 
+    # Written back into the user's apps like a campaign call's, about the
+    # number actually called rather than the rehearsal placeholder.
+    after_call, mcp_dispatch = await run_for_call(
+        client,
+        storage.SessionLocal,
+        model=setup.extraction_model,
+        effort=setup.extraction_effort,
+        campaign=setup.campaign,
+        contact=setup.contact.model_copy(update={"phone_e164": body.phone_number}),
+        outcome=outcome,
+        usage=usage,
+    )
+
     # Follow-ups to the number just called.
     send_sms, send_whatsapp = _followup_choice(body, setup.campaign)
     followups = {}
@@ -2110,11 +2188,14 @@ async def _complete_test_call(
             whatsapp=send_whatsapp,
         )
 
+    tool_calls = [*feed.tool_calls, *after_call]
     ended_at = datetime.now(timezone.utc)
     values = dict(
         status=CallStatus.COMPLETED,
         ended_at=ended_at,
         transcript=[t.model_dump(mode="json") for t in transcript],
+        tool_calls=tool_calls or None,
+        dispatch_result=mcp_dispatch or None,
         disposition=outcome.disposition.value,
         sentiment=outcome.sentiment.value,
         summary=outcome.summary,
@@ -2166,6 +2247,7 @@ async def _complete_test_call(
         "recording_url": values.get("recording_url"),
         "recording_sid": values.get("recording_sid"),
         "followups": {channel: r.as_dict() for channel, r in followups.items()},
+        "tool_calls": tool_calls,
     }
 
     await feed.publish(
@@ -2407,6 +2489,233 @@ async def add_suppression(
     return SuppressionOut(
         phone_masked=mask(entry.phone_e164), reason=entry.reason, created_at=entry.created_at
     )
+
+
+# --------------------------------------------------------------------------
+# Connected apps (MCP servers)
+# --------------------------------------------------------------------------
+#
+# A server's URL and headers are sealed on the way in and never come back
+# out: responses carry its host and its header *names*, enough to tell which
+# app and which credentials without being able to reuse either.
+
+
+def _header_names(server: McpServer) -> list[str] | None:
+    """The server's header names, or None when its secrets can't be opened."""
+    try:
+        return list(unseal(server.secrets or "").get("headers") or {})
+    except SecretsUnavailable:
+        return None
+
+
+def _server_out(server: McpServer) -> McpServerOut:
+    header_names = _header_names(server)
+    readable = header_names is not None
+    return McpServerOut(
+        id=server.id,
+        name=server.name,
+        slug=server.slug,
+        transport=server.transport,
+        host=server.host or "",
+        header_names=header_names or [],
+        enabled=bool(server.enabled),
+        # Said now, not at the next refresh: a changed key breaks the server
+        # the moment it changes.
+        status=server.status if readable else "error",
+        last_error=server.last_error if readable else REENTER_MESSAGE,
+        checked_at=server.checked_at,
+        tools=[
+            McpToolOut(
+                id=tool_id(server.slug, tool["name"]),
+                name=tool["name"],
+                description=tool.get("description") or "",
+                input_schema=tool.get("input_schema") or {},
+            )
+            for tool in server.tools or []
+        ],
+    )
+
+
+async def _checked_url(url: str) -> str:
+    """`url`, or a 400 saying why it can't be connected to."""
+    url = url.strip()
+    try:
+        # In a thread: it resolves the host, and DNS must not stall live calls.
+        await asyncio.to_thread(check_url, url)
+    except UnsafeUrl as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return url
+
+
+async def _discover(server: McpServer, *, detect_transport: bool) -> None:
+    """Re-read a server's tools and record how that went. Never raises.
+
+    A failure keeps the tools already known, so campaigns that use them
+    still save while the app is briefly down; calls skip it until it is ok.
+    """
+    try:
+        tools = await (discover_transport(server) if detect_transport else discover_tools(server))
+    except McpUnavailable as exc:
+        server.status, server.last_error = "error", str(exc)
+    else:
+        server.status, server.last_error, server.tools = "ok", None, tools
+    server.checked_at = datetime.now(timezone.utc)
+
+
+async def _server_or_404(db: AsyncSession, server_id: str) -> McpServer:
+    server = await db.get(McpServer, server_id)
+    if server is None:
+        raise HTTPException(404, "No such server.")
+    return server
+
+
+@app.get("/api/mcp/servers", response_model=list[McpServerOut])
+async def list_mcp_servers(db: AsyncSession = Depends(get_session)):
+    servers = (await db.execute(select(McpServer).order_by(McpServer.created_at))).scalars().all()
+    return [_server_out(server) for server in servers]
+
+
+@app.post("/api/mcp/servers", response_model=McpServerOut, status_code=201)
+async def create_mcp_server(body: McpServerCreate, db: AsyncSession = Depends(get_session)):
+    """Connect an app, and discover its tools straight away.
+
+    A server whose discovery fails is still saved, with the reason, so the
+    URL or key can be fixed rather than typed in again. An unsafe URL is
+    refused outright.
+    """
+    url = await _checked_url(body.url)
+    taken = set((await db.execute(select(McpServer.slug))).scalars().all())
+    server = McpServer(
+        id=str(uuid.uuid4()),
+        name=body.name,
+        slug=unique_slug(body.name, taken),
+        transport=BUILTIN if is_builtin(url) else body.transport,
+        host=host_of(url),
+        secrets=seal({"url": url, "headers": body.headers}),
+        enabled=True,
+        status="unchecked",
+        tools=[],
+    )
+    await _discover(server, detect_transport=server.transport == AUTO)
+    db.add(server)
+    await db.commit()
+    return _server_out(server)
+
+
+@app.patch("/api/mcp/servers/{server_id}", response_model=McpServerOut)
+async def update_mcp_server(
+    server_id: str, body: McpServerUpdate, db: AsyncSession = Depends(get_session)
+):
+    """Rename, pause, or re-point a server. New URL or headers are re-discovered.
+
+    The slug stays: campaigns hold tool ids made from it.
+    """
+    server = await _server_or_404(db, server_id)
+    url = await _checked_url(body.url) if body.url is not None else None
+
+    if url is not None or body.headers is not None:
+        try:
+            current = unseal(server.secrets or "")
+        except SecretsUnavailable:
+            if url is None:
+                raise HTTPException(400, REENTER_MESSAGE) from None
+            current = {}
+        url = url or current["url"]
+        headers = body.headers if body.headers is not None else current.get("headers") or {}
+        server.secrets = seal({"url": url, "headers": headers})
+        server.host = host_of(url)
+        if body.url is not None:
+            server.transport = BUILTIN if is_builtin(url) else AUTO
+        await _discover(server, detect_transport=server.transport == AUTO)
+
+    if body.name is not None:
+        server.name = body.name
+    if body.enabled is not None:
+        server.enabled = body.enabled
+    await db.commit()
+    return _server_out(server)
+
+
+@app.delete("/api/mcp/servers/{server_id}", status_code=204)
+async def delete_mcp_server(server_id: str, db: AsyncSession = Depends(get_session)) -> Response:
+    """Disconnect an app, and take its tools off every campaign that chose them."""
+    server = await _server_or_404(db, server_id)
+    prefix = server_prefix(server.slug)
+    for campaign in (await db.execute(select(Campaign))).scalars().all():
+        for field in ("mcp_tools", "mcp_post_call_tools"):
+            chosen = getattr(campaign, field) or []
+            kept = [tid for tid in chosen if not tid.startswith(prefix)]
+            if kept != chosen:
+                setattr(campaign, field, kept)
+    await db.delete(server)
+    await db.commit()
+    return Response(status_code=204)
+
+
+@app.post("/api/mcp/servers/{server_id}/refresh", response_model=McpServerOut)
+async def refresh_mcp_server(server_id: str, db: AsyncSession = Depends(get_session)):
+    server = await _server_or_404(db, server_id)
+    await _discover(server, detect_transport=False)
+    await db.commit()
+    return _server_out(server)
+
+
+@app.post("/api/mcp/servers/{server_id}/tools/{name}/test", response_model=McpToolTestResult)
+async def test_mcp_tool(
+    server_id: str, name: str, body: McpToolTest, db: AsyncSession = Depends(get_session)
+):
+    """Run one tool once, as a call would, for the console's "Try it" panel."""
+    server = await _server_or_404(db, server_id)
+    if not any(tool.get("name") == name for tool in server.tools or []):
+        raise HTTPException(404, f"{server.name} has no tool called {name}.")
+
+    toolbox = CallToolbox.for_server(server, phase="test")
+    started = time.perf_counter()
+    try:
+        result = await toolbox.call(tool_id(server.slug, name), body.arguments)
+    finally:
+        await toolbox.aclose()
+    return McpToolTestResult(
+        ok=result.ok, text=result.text, duration_ms=int((time.perf_counter() - started) * 1000)
+    )
+
+
+@app.get("/api/mcp/tools", response_model=list[McpCatalogTool])
+async def list_mcp_tools(db: AsyncSession = Depends(get_session)):
+    """Every tool a call could use right now: enabled, healthy servers only."""
+    servers = (
+        await db.execute(
+            select(McpServer)
+            .where(McpServer.enabled.is_(True), McpServer.status == "ok")
+            .order_by(McpServer.created_at)
+        )
+    ).scalars().all()
+    return [
+        McpCatalogTool(server_id=server.id, server_name=server.name, **tool.model_dump())
+        for server in servers
+        if _header_names(server) is not None  # a call couldn't open it
+        for tool in _server_out(server).tools
+    ]
+
+
+async def _check_tool_ids(db: AsyncSession, *lists: list[str] | None) -> None:
+    """400 unless every id names a tool some connected server has.
+
+    Checked against every server, healthy or not: one briefly failing must
+    not stop a campaign that uses it from being saved.
+    """
+    wanted = {tid for ids in lists for tid in ids or []}
+    if not wanted:
+        return
+    servers = (await db.execute(select(McpServer))).scalars().all()
+    known = {tool_id(s.slug, t["name"]) for s in servers for t in s.tools or [] if t.get("name")}
+    unknown = sorted(wanted - known)
+    if unknown:
+        raise HTTPException(
+            400,
+            f"Unknown tools: {', '.join(unknown)}. Pick tools from a connected app "
+            "under Integrations, or refresh the app if it has changed.",
+        )
 
 
 # --------------------------------------------------------------------------

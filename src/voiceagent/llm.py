@@ -22,12 +22,26 @@ Ending the call: the model decides when a call is over and says so by writing
 most goodbyes that aren't English, so the model's own signal is what ends the
 call — and the marker is filtered out of the stream before anything is
 spoken, recorded, or synthesized.
+
+Tools: with a `Toolbox` (the campaign's MCP apps) and a provider that can
+call tools, the model may stop mid-turn to use them. Everything it said
+first is handed over, then a `ToolPause` — before any tool runs, so the
+speaker can put "let me check" on the line while it does. The results go
+back to the model in its provider's own shape and its answer streams on as
+the rest of the same turn. Tool exchanges stay in the model's history, so a
+later turn still knows what a tool returned; the transcript holds speech
+only.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 import re
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from .catalog import (
     CONVERSATION,
@@ -40,6 +54,11 @@ from .catalog import (
 from .models import CallContext, Contact, Turn
 from .prompts import build_guidance_block, build_system_blocks, build_system_text
 from .providers import ANTHROPIC_API, active
+
+if TYPE_CHECKING:
+    from .mcp.toolbox import Toolbox, ToolResult, ToolSpec
+
+logger = logging.getLogger(__name__)
 
 # Sonnet 5 at low effort: near-Opus conversational quality, and the effort
 # lever is what buys us the latency. Note we keep adaptive thinking ON —
@@ -56,6 +75,11 @@ EFFORT = DEFAULT_CONVERSATION_EFFORT
 # against a runaway monologue tying up the line, not a target.
 MAX_TOKENS = 300
 
+# Tool rounds the model may take in one turn before it has to answer. Each
+# is a tool call plus another model request while the person waits; a model
+# still reaching for tools after three is looping, not finding things out.
+MAX_TOOL_ROUNDS = 3
+
 # Flush a chunk to TTS at a sentence end, or at a clause break once we have
 # enough words to sound natural rather than clipped.
 _SENTENCE_END = re.compile(r"[.!?]['\")\]]*\s")
@@ -65,6 +89,17 @@ _MIN_CLAUSE_CHARS = 45
 # Written by the model after its farewell to end the call. VOICE_PERSONA in
 # prompts.py spells the same string out literally; the two must match.
 END_CALL_MARKER = "[END_CALL]"
+
+
+@dataclass(frozen=True)
+class ToolPause:
+    """The model stopped to use tools. `tools` are the ids about to run.
+
+    Yielded by `generate()` after every word the model wrote before reaching
+    for them, and before any of them runs.
+    """
+
+    tools: tuple[str, ...]
 
 
 class EndMarkerFilter:
@@ -111,6 +146,33 @@ def _partial_marker_length(text: str) -> int:
     return 0
 
 
+@dataclass
+class ToolCall:
+    """One tool call the model asked for. `problem` means it will not run."""
+
+    id: str
+    tool: str
+    arguments: dict[str, Any]
+    problem: str | None = None
+
+
+@dataclass
+class _Request:
+    """One model request within a turn, and the tool calls it ended with."""
+
+    tools_allowed: bool
+    # The model's own message asking for the calls, to go back in history.
+    assistant: dict[str, Any] | None = None
+    calls: list[ToolCall] = field(default_factory=list)
+
+
+@dataclass
+class _ToolExchange:
+    """A tool round in the model's history, in its provider's native messages."""
+
+    messages: list[dict[str, Any]]
+
+
 class ConversationLLM:
     """One instance per live call."""
 
@@ -119,21 +181,31 @@ class ConversationLLM:
         client,
         contact: Contact,
         context: CallContext,
-        tools: list[dict] | None = None,
         *,
         model: str | None = None,
         effort: str | None = None,
         usage: TokenUsage | None = None,
+        toolbox: Toolbox | None = None,
     ) -> None:
         self._client = client
-        self._system = build_system_blocks(contact, context)
-        self._system_text = build_system_text(contact, context)
-        self._tools = tools or []
-        self._turns: list[Turn] = []
         self._model = resolve(model, CONVERSATION)
         self._effort = resolve_effort(effort, CONVERSATION)
         spec = active()
         self._api = spec.api if spec else ANTHROPIC_API
+        # Tools are offered only where the provider can use them; otherwise
+        # the call runs exactly as it would with no toolbox at all.
+        supports_tools = spec.supports_tools if spec else True
+        self._toolbox = toolbox if supports_tools else None
+        self._specs: list[ToolSpec] = self._toolbox.specs() if self._toolbox else []
+        tools = bool(self._specs)
+        self._system = build_system_blocks(contact, context, tools=tools)
+        self._system_text = build_system_text(contact, context, tools=tools)
+        # Speech turns and tool exchanges, in the order they happened.
+        self._history: list[Turn | _ToolExchange] = []
+        # What this turn said before its last tool round. Those words are in
+        # the tool exchange already, so they are left out of the turn's text
+        # in history rather than said twice. See record().
+        self._said_before_tools = ""
         # Shared with the pipeline so the call's ledger accumulates across
         # both the conversation and the extraction that follows it.
         self.usage = usage if usage is not None else TokenUsage()
@@ -155,10 +227,23 @@ class ConversationLLM:
         off, not what it had generated. Otherwise the model believes it
         delivered information the person never heard, and won't repeat it.
         """
-        self._turns.append(turn)
+        said_before, self._said_before_tools = self._said_before_tools, ""
+        if turn.role == "assistant" and said_before:
+            # Only the words after the tools; the ones before went back with
+            # the tool call. Cut off before the tools, and nothing is left.
+            rest = turn.text[len(said_before):] if turn.text.startswith(said_before) else ""
+            turn = turn.model_copy(update={"text": rest.strip()})
+        if turn.text:
+            self._history.append(turn)
 
     def _messages(self) -> list[dict]:
-        return [{"role": t.role, "content": t.text} for t in self._turns]
+        messages: list[dict] = []
+        for entry in self._history:
+            if isinstance(entry, _ToolExchange):
+                messages.extend(entry.messages)
+            else:
+                messages.append({"role": entry.role, "content": entry.text})
+        return messages
 
     def add_guidance(self, text: str) -> None:
         """Steer the rest of the call with a supervisor's note.
@@ -185,39 +270,83 @@ class ConversationLLM:
 
     # -- generation --------------------------------------------------------
 
-    async def generate(self) -> AsyncIterator[str]:
-        """Stream the next agent turn as speakable chunks.
+    async def generate(self) -> AsyncIterator[str | ToolPause]:
+        """Stream the next agent turn as speakable chunks, pausing for tools.
 
-        Sets `end_requested` when the model ended the turn with the end-call
-        marker. The marker itself is never yielded.
+        Yields text chunks, and one `ToolPause` per tool round. Sets
+        `end_requested` when the model ended the turn with the end-call
+        marker; the marker itself is never yielded.
         """
         self.end_requested = False
+        self._said_before_tools = ""
         marker = EndMarkerFilter()
         buffer = ""
+        said: list[str] = []
 
-        deltas = (
-            self._stream_anthropic()
-            if self._api == ANTHROPIC_API
-            else self._stream_openai()
-        )
+        for round_number in range(MAX_TOOL_ROUNDS + 1):
+            request = _Request(tools_allowed=bool(self._specs) and round_number < MAX_TOOL_ROUNDS)
+            deltas = (
+                self._stream_anthropic(request)
+                if self._api == ANTHROPIC_API
+                else self._stream_openai(request)
+            )
 
-        async for delta in deltas:
-            buffer += marker.feed(delta)
-            if marker.found:
-                self.end_requested = True
+            async for delta in deltas:
+                buffer += marker.feed(delta)
+                if marker.found:
+                    self.end_requested = True
 
-            while True:
-                split_at = _find_flush_point(buffer)
-                if split_at is None:
-                    break
-                chunk, buffer = buffer[:split_at], buffer[split_at:]
-                chunk = chunk.strip()
-                if chunk:
-                    yield chunk
+                while True:
+                    split_at = _find_flush_point(buffer)
+                    if split_at is None:
+                        break
+                    chunk, buffer = buffer[:split_at], buffer[split_at:]
+                    chunk = chunk.strip()
+                    if chunk:
+                        said.append(chunk)
+                        yield chunk
+
+            if not request.calls:
+                break
+
+            # Everything said so far goes out before the tools run: "let me
+            # check" is only worth saying while the checking happens.
+            tail, buffer = (buffer + marker.flush()).strip(), ""
+            if tail:
+                said.append(tail)
+                yield tail
+            runnable = tuple(call.tool for call in request.calls if call.problem is None)
+            if runnable:
+                yield ToolPause(tools=runnable)
+
+            results = await self._run_tools(request.calls)
+            self._history.append(_ToolExchange(self._exchange_messages(request, results)))
+            self._said_before_tools = " ".join(said)
 
         tail = (buffer + marker.flush()).strip()
         if tail:
             yield tail
+
+    async def _run_tools(self, calls: list[ToolCall]) -> list[ToolResult]:
+        """Run a round's calls together; each comes back as a result, never an exception."""
+        from .mcp.toolbox import ToolResult
+
+        async def run(call: ToolCall) -> ToolResult:
+            if call.problem is not None:
+                return ToolResult(ok=False, text=call.problem)
+            try:
+                return await self._toolbox.call(call.tool, call.arguments)
+            except Exception:  # noqa: BLE001 - Toolbox promises not to raise; hold it to that
+                logger.exception("Tool %s raised; the model is told it failed", call.tool)
+                return ToolResult(ok=False, text="The tool failed unexpectedly.")
+
+        return list(await asyncio.gather(*(run(call) for call in calls)))
+
+    def _exchange_messages(self, request: _Request, results: list[ToolResult]) -> list[dict]:
+        """The model's tool request and the results, as its provider expects them back."""
+        if self._api == ANTHROPIC_API:
+            return [request.assistant, anthropic_tool_results(request.calls, results)]
+        return [request.assistant, *chat_tool_results(request.calls, results)]
 
     # -- provider paths ----------------------------------------------------
     #
@@ -226,8 +355,12 @@ class ConversationLLM:
     # generator mid-iteration — so interrupted turns are undercounted. The
     # bill is a floor, not an exact figure, and that is the right way round:
     # better to understate our own estimate than overstate it.
+    #
+    # Once a turn has used its tool rounds the tools stay in the request but
+    # the model may not call them: both APIs refuse a history holding tool
+    # calls when the request defines no tools.
 
-    async def _stream_anthropic(self) -> AsyncIterator[str]:
+    async def _stream_anthropic(self, request: _Request) -> AsyncIterator[str]:
         kwargs: dict = dict(
             model=self._model,
             max_tokens=MAX_TOKENS,
@@ -237,8 +370,12 @@ class ConversationLLM:
             messages=self._messages(),
         )
         # Only pass tools when non-empty — the API rejects an empty list.
-        if self._tools:
-            kwargs["tools"] = self._tools
+        if self._specs:
+            kwargs["tools"] = anthropic_tools(self._specs)
+            if not request.tools_allowed:
+                kwargs["tool_choice"] = {"type": "none"}
+
+        final = None
         async with self._client.messages.stream(**kwargs) as stream:
             async for delta in stream.text_stream:
                 yield delta
@@ -249,7 +386,17 @@ class ConversationLLM:
             except Exception:  # noqa: BLE001 - accounting must never break a call
                 pass
 
-    async def _stream_openai(self) -> AsyncIterator[str]:
+        if request.tools_allowed and getattr(final, "stop_reason", None) == "tool_use":
+            # Passed back exactly as it came, thinking blocks and all: with
+            # thinking on, the API rejects a tool result whose request lost them.
+            request.assistant = {"role": "assistant", "content": final.content}
+            request.calls = [
+                anthropic_tool_call(block)
+                for block in final.content
+                if getattr(block, "type", None) == "tool_use"
+            ]
+
+    async def _stream_openai(self, request: _Request) -> AsyncIterator[str]:
         """The `chat/completions` shape: Gemini, OpenAI, Sarvam, NVIDIA.
 
         The two cached system blocks collapse into one system message. That
@@ -258,8 +405,11 @@ class ConversationLLM:
         prefix-stable anyway — the persona still leads, the volatile
         conversation still trails. Supervisor guidance is appended last for
         the same reason.
+
+        Tool calls stream in fragments keyed by index — the id and name
+        first, the arguments in pieces after — and are put together here.
         """
-        stream = await self._client.chat.completions.create(
+        kwargs: dict = dict(
             model=self._model,
             max_tokens=MAX_TOKENS,
             reasoning_effort=self._effort,
@@ -272,12 +422,153 @@ class ConversationLLM:
             # every call on this path would silently record as free.
             stream_options={"include_usage": True},
         )
+        if self._specs:
+            kwargs["tools"] = chat_tools(self._specs)
+            if not request.tools_allowed:
+                kwargs["tool_choice"] = "none"
 
+        stream = await self._client.chat.completions.create(**kwargs)
+        text: list[str] = []
+        fragments: dict[int, dict[str, Any]] = {}
         async for event in stream:
-            if event.choices and event.choices[0].delta.content:
-                yield event.choices[0].delta.content
+            if event.choices:
+                delta = event.choices[0].delta
+                if delta.content:
+                    text.append(delta.content)
+                    yield delta.content
+                for fragment in getattr(delta, "tool_calls", None) or []:
+                    _gather_fragment(fragments, fragment)
             if getattr(event, "usage", None):
                 self.usage.add_response_usage(self._model, event.usage)
+
+        if request.tools_allowed and fragments:
+            calls = [fragments[index] for index in sorted(fragments)]
+            request.assistant = chat_assistant_message("".join(text), calls)
+            request.calls = [parse_chat_call(call) for call in calls]
+
+
+# --------------------------------------------------------------------------
+# Tool calls in each provider's shape. Shared with the post-call actions
+# (postcall/mcp_actions.py), which run the same loop without streaming.
+# --------------------------------------------------------------------------
+
+
+def anthropic_tools(specs: list[ToolSpec]) -> list[dict[str, Any]]:
+    return [
+        {"name": s.id, "description": s.description, "input_schema": s.input_schema} for s in specs
+    ]
+
+
+def chat_tools(specs: list[ToolSpec]) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {"name": s.id, "description": s.description, "parameters": s.input_schema},
+        }
+        for s in specs
+    ]
+
+
+def anthropic_tool_results(calls: list[ToolCall], results: list[ToolResult]) -> dict[str, Any]:
+    """The user message answering an assistant message's tool_use blocks."""
+    return {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": call.id,
+                "content": result.text or "(no output)",
+                "is_error": not result.ok,
+            }
+            for call, result in zip(calls, results)
+        ],
+    }
+
+
+def chat_tool_results(calls: list[ToolCall], results: list[ToolResult]) -> list[dict[str, Any]]:
+    """One `tool` message per call, answering an assistant message's tool_calls."""
+    return [
+        {
+            "role": "tool",
+            "tool_call_id": call.id,
+            "content": result.text if result.ok else f"Error: {result.text}",
+        }
+        for call, result in zip(calls, results)
+    ]
+
+
+def anthropic_tool_call(block) -> ToolCall:
+    arguments = getattr(block, "input", None)
+    if isinstance(arguments, dict):
+        return ToolCall(id=block.id, tool=block.name, arguments=arguments)
+    return ToolCall(
+        id=block.id, tool=block.name, arguments={}, problem="The arguments were not an object; not run."
+    )
+
+
+def _gather_fragment(fragments: dict[int, dict[str, Any]], fragment) -> None:
+    call = fragments.setdefault(
+        getattr(fragment, "index", None) or 0, {"id": "", "name": "", "arguments": "", "extra": None}
+    )
+    if getattr(fragment, "id", None):
+        call["id"] = fragment.id
+    function = getattr(fragment, "function", None)
+    if function is not None:
+        if getattr(function, "name", None):
+            call["name"] = function.name
+        if getattr(function, "arguments", None):
+            call["arguments"] += function.arguments
+    # Gemini signs its function calls ("thought signatures") and refuses the
+    # next request if the signature does not come back with the call.
+    extra = getattr(fragment, "extra_content", None)
+    if extra:
+        call["extra"] = extra
+
+
+def chat_call(tool_call) -> dict[str, Any]:
+    """A non-streamed `message.tool_calls` entry, as `_gather_fragment` assembles one."""
+    function = getattr(tool_call, "function", None)
+    return {
+        "id": getattr(tool_call, "id", "") or "",
+        "name": getattr(function, "name", "") or "",
+        "arguments": getattr(function, "arguments", "") or "",
+        "extra": getattr(tool_call, "extra_content", None),
+    }
+
+
+def chat_assistant_message(text: str, calls: list[dict[str, Any]]) -> dict[str, Any]:
+    """The assistant message asking for `calls`, to go back into the history."""
+    return {
+        "role": "assistant",
+        "content": text or None,
+        "tool_calls": [_chat_tool_call(call) for call in calls],
+    }
+
+
+def _chat_tool_call(call: dict[str, Any]) -> dict[str, Any]:
+    message = {
+        "id": call["id"],
+        "type": "function",
+        "function": {"name": call["name"], "arguments": call["arguments"]},
+    }
+    if call["extra"]:
+        message["extra_content"] = call["extra"]
+    return message
+
+
+def parse_chat_call(call: dict[str, Any]) -> ToolCall:
+    try:
+        arguments = json.loads(call["arguments"] or "{}")
+    except ValueError:
+        arguments = None
+    if not isinstance(arguments, dict):
+        return ToolCall(
+            id=call["id"],
+            tool=call["name"],
+            arguments={},
+            problem="The arguments for this call were not valid JSON, so it was not run.",
+        )
+    return ToolCall(id=call["id"], tool=call["name"], arguments=arguments)
 
 
 def _find_flush_point(buffer: str) -> int | None:

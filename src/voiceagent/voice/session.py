@@ -17,6 +17,12 @@ after its farewell (see `llm.EndMarkerFilter`); a phrase heuristic backs it
 up; and every line the session says on its own — silence check-ins, the
 timeout goodbye — comes from the call's `CallPhrases`, so a Hindi call never
 suddenly apologises in English.
+
+Tools: when the model stops mid-turn to use one (`llm.ToolPause`), the
+console is told the agent is working, and a speaker that buffers whole turns
+(Twilio) plays what was said so far — or a "let me check" — while the tool
+runs, rather than leaving the caller in silence. What is said before and
+after the tool is still one turn.
 """
 
 from __future__ import annotations
@@ -29,7 +35,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Protocol
 
-from ..llm import ConversationLLM
+from ..llm import ConversationLLM, ToolPause
 from ..models import Turn
 from .phrases import CallPhrases, phrases_for
 
@@ -94,7 +100,9 @@ class CallSession:
       ("state", {"state": s})  s = "speaking" (agent turn handed to the
                                speaker), "listening" (handed over; waiting for
                                the person), "thinking" (the person's utterance
-                               arrived), "ended" (always last)
+                               arrived), "working" (a tool is about to run;
+                               the payload also has "tools", their ids),
+                               "ended" (always last)
 
     It is awaited inline so events arrive in order, and anything it raises is
     logged and swallowed: a broken observer must never break a call. Keep it
@@ -250,19 +258,30 @@ class CallSession:
         interrupted = False
         # Webhook transports (Twilio) buffer the turn and play it on flush();
         # streaming ones start playing the first chunk as it arrives. Latency
-        # is measured to whichever of those puts audio on the line.
+        # is measured to whichever of those puts audio on the line — which,
+        # on a turn that uses a tool, may be the interim played meanwhile.
         buffered = hasattr(self._speaker, "flush")
         started = time.perf_counter()
         latency_ms: int | None = None
+        # Whether "speaking" has been said since the turn started or since
+        # the last tool pause, which reported "working".
+        announced = False
 
         generation = self._llm.generate()
         barge_in = asyncio.create_task(self._listener.wait_for_speech_start())
 
         try:
             async for chunk in generation:
-                if latency_ms is None and not buffered:
-                    latency_ms = _elapsed_ms(started)
+                if isinstance(chunk, ToolPause):
+                    if await self._pause_for_tools(chunk) and latency_ms is None:
+                        latency_ms = _elapsed_ms(started)
+                    announced = False
+                    continue
+                if not buffered and not announced:
+                    if latency_ms is None:
+                        latency_ms = _elapsed_ms(started)
                     await self._set_state("speaking")
+                    announced = True
                 speaking = asyncio.create_task(self._speaker.say(chunk))
                 done, _ = await asyncio.wait(
                     {speaking, barge_in}, return_when=asyncio.FIRST_COMPLETED
@@ -293,7 +312,8 @@ class CallSession:
             if text:
                 await self._set_state("speaking")
             await self._speaker.flush()
-            latency_ms = _elapsed_ms(started)
+            if latency_ms is None:
+                latency_ms = _elapsed_ms(started)
 
         if text:
             await self._record("assistant", text, latency_ms=latency_ms)
@@ -311,6 +331,20 @@ class CallSession:
             # Asked to end but said nothing: never hang up on silence.
             await self._speak_and_record(self._phrases.goodbye_default)
         return ending
+
+    async def _pause_for_tools(self, pause: ToolPause) -> bool:
+        """Cover a tool the model is about to run. True if audio went out for it.
+
+        A streaming speaker has already played everything said so far, so
+        only a buffering one has anything to do: play that now, as an
+        interim, instead of holding it until the tool is done.
+        """
+        await self._emit("state", {"state": "working", "tools": list(pause.tools)})
+        flush_interim = getattr(self._speaker, "flush_interim", None)
+        if flush_interim is None:
+            return False
+        await flush_interim()
+        return True
 
     async def _speak_and_record(self, text: str) -> None:
         await self._set_state("speaking")

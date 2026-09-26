@@ -27,7 +27,8 @@ class LiveCall:
     contact_name: str
     is_test: bool
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    # Last state the session reported: speaking | listening | thinking | ended.
+    # Last state the session reported: speaking | listening | thinking |
+    # working | ended.
     state: str = "connected"
 
     @property

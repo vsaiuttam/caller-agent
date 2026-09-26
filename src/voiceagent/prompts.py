@@ -126,12 +126,30 @@ def _render_scorecard(context: CallContext) -> str:
     )
 
 
-def build_call_context_block(contact: Contact, context: CallContext) -> str:
+# Added to the per-call block when the call has tools. Not to the persona:
+# most campaigns have none, and the persona must stay byte-identical across
+# all of them for its cache to be shared.
+TOOLS_GUIDANCE = """\
+
+
+Tools:
+  You have tools that look things up and take actions in this business's own \
+systems. Use one whenever the answer depends on what those systems say.
+  - Before using a tool, say a brief natural line first, like "let me check \
+that" — never go silent.
+  - Tell them what the tool found in plain speech. Never read out IDs, codes, \
+or raw data.
+  - If a tool fails, apologise briefly and offer to follow up another way.
+  - Never invent a result. If a tool didn't tell you, you don't know it."""
+
+
+def build_call_context_block(contact: Contact, context: CallContext, *, tools: bool = False) -> str:
     extra = ""
     if context.extra_instructions.strip():
         extra = f"\n\nAdditional guidance for this campaign:\n{context.extra_instructions.strip()}"
 
     scorecard = _render_scorecard(context)
+    tool_guidance = TOOLS_GUIDANCE if tools else ""
 
     return f"""\
 Language:
@@ -154,16 +172,17 @@ Boundaries for this call:
 
 Ask for the items above conversationally, as they fit the flow. Do not read \
 them out as a checklist or work through them in order — if the conversation \
-covers one naturally, take it and move on.{scorecard}{extra}\
+covers one naturally, take it and move on.{scorecard}{extra}{tool_guidance}\
 """
 
 
-def build_system_blocks(contact: Contact, context: CallContext) -> list[dict]:
+def build_system_blocks(contact: Contact, context: CallContext, *, tools: bool = False) -> list[dict]:
     """Return the `system` array with cache breakpoints on both blocks.
 
     Two breakpoints rather than one: the first gives every call in the
     campaign a shared read of the persona; the second gives every turn after
-    the first a read of this call's context.
+    the first a read of this call's context. `tools` adds guidance on using
+    them to the second.
 
     Anthropic-shaped. Providers on the `chat/completions` path take
     `build_system_text` instead.
@@ -176,13 +195,13 @@ def build_system_blocks(contact: Contact, context: CallContext) -> list[dict]:
         },
         {
             "type": "text",
-            "text": build_call_context_block(contact, context),
+            "text": build_call_context_block(contact, context, tools=tools),
             "cache_control": {"type": "ephemeral"},
         },
     ]
 
 
-def build_system_text(contact: Contact, context: CallContext) -> str:
+def build_system_text(contact: Contact, context: CallContext, *, tools: bool = False) -> str:
     """The same prompt as one string, for providers without explicit breakpoints.
 
     The ordering above is still load-bearing here even though nothing marks
@@ -191,7 +210,7 @@ def build_system_text(contact: Contact, context: CallContext) -> str:
     earns the discount. Only the ability to *place* the breakpoint is lost,
     not the reason for the layout.
     """
-    return f"{VOICE_PERSONA}\n\n{build_call_context_block(contact, context)}"
+    return f"{VOICE_PERSONA}\n\n{build_call_context_block(contact, context, tools=tools)}"
 
 
 # --------------------------------------------------------------------------

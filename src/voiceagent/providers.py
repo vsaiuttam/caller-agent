@@ -40,6 +40,11 @@ class ProviderSpec:
     base_url: str | None = None
     console: str = ""
     note: str = ""
+    # Whether its models can call tools (the user's MCP apps) mid-call.
+    # Off where the endpoint either rejects `tools` or accepts and ignores
+    # them — the second is worse, a model saying "let me check" and never
+    # checking.
+    supports_tools: bool = False
 
 
 # Order is the auto-detection order when MODEL_PROVIDER is unset. Anthropic
@@ -55,6 +60,7 @@ PROVIDERS: list[ProviderSpec] = [
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         console="https://aistudio.google.com",
         note="97 languages on the Live API, Hindi and Urdu included.",
+        supports_tools=True,
     ),
     ProviderSpec(
         id="anthropic",
@@ -63,6 +69,7 @@ PROVIDERS: list[ProviderSpec] = [
         key_env="ANTHROPIC_API_KEY",
         console="https://console.anthropic.com",
         note="Prompt caching with two breakpoints; the original path here.",
+        supports_tools=True,
     ),
     ProviderSpec(
         id="openai",
@@ -71,6 +78,7 @@ PROVIDERS: list[ProviderSpec] = [
         key_env="OPENAI_API_KEY",
         console="https://platform.openai.com",
         note="Realtime speech-to-speech and SIP telephony from the same key.",
+        supports_tools=True,
     ),
     ProviderSpec(
         id="sarvam",
