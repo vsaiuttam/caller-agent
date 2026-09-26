@@ -38,6 +38,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import storage
@@ -100,9 +101,11 @@ from ..storage import (
     CampaignStatus,
     Contact,
     ContactStatus,
+    Invite,
     McpServer,
     Setting,
     Suppression,
+    User,
     get_session,
     init_db,
 )
@@ -128,6 +131,8 @@ from .schemas import (
     EstimateRequest,
     FollowupResend,
     HourBucket,
+    InviteCreate,
+    InviteOut,
     LiveCallRequest,
     LoginRequest,
     McpCatalogTool,
@@ -138,10 +143,13 @@ from .schemas import (
     McpToolTest,
     McpToolTestResult,
     ModelDefaults,
+    RegisterRequest,
     ReviewDecision,
     SimulationRequest,
     SuppressionCreate,
     SuppressionOut,
+    TeamUserOut,
+    TeamUserUpdate,
     TestCallRequest,
     WhisperRequest,
 )
@@ -160,6 +168,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup/shutdown lifecycle for the API server."""
     await init_db()
     logger.info("Database initialized")
+    # Before serving: whether anyone has registered decides whether the
+    # console is locked, and tokens must verify from the first request.
+    await auth.load_accounts()
     yield
     from ..storage import engine
     await engine.dispose()
@@ -168,7 +179,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Samvaad API", version="1.0.0", lifespan=lifespan)
 
-# Opt-in; a no-op unless ADMIN_PASSWORD is set. See auth.py.
+# Opt-in; a no-op until someone registers or ADMIN_PASSWORD is set. See auth.py.
 app.add_middleware(auth.AuthMiddleware)
 
 # Added after the auth gate, so it runs before it: a 401 still carries the
@@ -351,12 +362,14 @@ async def health(db: AsyncSession = Depends(get_session)) -> dict:
     }
 
     mcp_servers = 0
+    users = 0
     try:
         await db.execute(select(func.count()).select_from(Campaign))
         checks["database"] = True
         mcp_servers = await db.scalar(
             select(func.count()).select_from(McpServer).where(McpServer.enabled.is_(True))
         ) or 0
+        users = await db.scalar(select(func.count()).select_from(User)) or 0
     except Exception:  # noqa: BLE001
         logger.exception("Health check: database unreachable")
         checks["database"] = False
@@ -378,6 +391,12 @@ async def health(db: AsyncSession = Depends(get_session)) -> dict:
         "telephony_mode": os.getenv("TELEPHONY", "mock"),
         # Said on every screen when false: anyone with the link can dial.
         "auth_enabled": auth.auth_enabled(),
+        # "owner" until someone registers: the next person to register
+        # becomes the owner.
+        "accounts": {
+            "users": users,
+            "registration_mode": auth.registration_mode() if users else "owner",
+        },
         # Connected apps: how many are switched on, whether this provider's
         # models can use them at all, and whether their credentials are
         # encrypted at rest (false until SECRETS_KEY or AUTH_SECRET is set).
@@ -394,43 +413,435 @@ async def health(db: AsyncSession = Depends(get_session)) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Access control (opt-in; see auth.py)
+# Access control and accounts (opt-in; see auth.py)
 # --------------------------------------------------------------------------
 
 
 _login_throttle = auth.LoginThrottle()
+# Separate counters, so fumbling one form costs nothing on the other. On
+# register, a failure is a wrong setup code, an unusable invite code, or an
+# email that is taken — the answers worth guessing at.
+_register_throttle = auth.LoginThrottle()
+
+# One answer for an unknown email and a wrong password alike.
+LOGIN_FAILED = "Wrong email or password."
+
+
+def _client(request: Request) -> str:
+    return auth.client_address(request.headers, request.client.host if request.client else None)
+
+
+def _public_user(user: User) -> dict:
+    return {"id": user.id, "email": user.email, "name": user.name, "role": user.role}
+
+
+async def _any_users(db: AsyncSession) -> bool:
+    """Whether anyone has registered, per the in-process flag, else per the
+    database — which also catches the flag up when another worker process
+    registered the first user."""
+    if auth.users_exist():
+        return True
+    try:
+        found = await db.scalar(select(User.id).limit(1)) is not None
+    except Exception:  # noqa: BLE001
+        logger.exception("Accounts: could not read the users table")
+        return False
+    if found:
+        auth.set_users_exist(True)
+    return found
 
 
 @app.post("/api/auth/login")
-async def login(body: LoginRequest, request: Request) -> dict:
-    """Trade the admin password for a token."""
+async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends(get_session)) -> dict:
+    """Trade an email and password — or the admin password — for a token."""
     if not auth.auth_enabled():
-        raise HTTPException(400, "Access control is off — set ADMIN_PASSWORD to turn it on.")
+        raise HTTPException(
+            400, "Access control is off — register the owner account, or set ADMIN_PASSWORD, to turn it on."
+        )
 
-    client = auth.client_address(request.headers, request.client.host if request.client else None)
+    client = _client(request)
     if _login_throttle.blocked(client):
         raise HTTPException(429, "Too many wrong passwords. Try again in a few minutes.")
-    if not auth.check_password(body.password):
+
+    email = auth.normalize_email(body.email or "")
+    if not email:
+        if not auth.check_password(body.password):
+            _login_throttle.failed(client)
+            raise HTTPException(401, "That password is not right.")
+        _login_throttle.succeeded(client)
+        token, expires_at = auth.issue_token()
+        return {"token": token, "expires_at": expires_at.isoformat(), "user": auth.BREAK_GLASS_USER}
+
+    user = await db.scalar(select(User).where(User.email == email))
+    stored = user.password_hash if user is not None else None
+    # Checked even when there is no such user, so both failures cost the same
+    # time. In a thread: scrypt would otherwise stall live call audio.
+    matches = await asyncio.to_thread(
+        lambda: auth.check_password_hash(body.password, stored or auth.stand_in_hash())
+    )
+    if user is None or not matches:
         _login_throttle.failed(client)
-        raise HTTPException(401, "That password is not right.")
+        raise HTTPException(401, LOGIN_FAILED)
+    # Only said to someone who knew the password, so it reveals nothing.
+    if user.disabled:
+        raise HTTPException(403, "This account is disabled")
 
     _login_throttle.succeeded(client)
-    token, expires_at = auth.issue_token()
-    return {"token": token, "expires_at": expires_at.isoformat()}
+    user.last_login_at = datetime.now(timezone.utc)
+    await db.commit()
+    token, expires_at = auth.issue_token(subject=user.id, role=user.role)
+    return {"token": token, "expires_at": expires_at.isoformat(), "user": _public_user(user)}
+
+
+@app.post("/api/auth/register", status_code=201)
+async def register(
+    body: RegisterRequest, request: Request, db: AsyncSession = Depends(get_session)
+) -> dict:
+    """Create an account and sign it in.
+
+    The first account is the owner, and creating it is what locks the
+    console; with ADMIN_PASSWORD set it must present that as `setup_code`,
+    so a stranger who finds a public deploy first can't claim it. After
+    that, REGISTRATION_MODE decides: an invite code, anyone, or nobody.
+    """
+    client = _client(request)
+    if _register_throttle.blocked(client):
+        raise HTTPException(429, "Too many attempts. Try again in a few minutes.")
+
+    # The database, not the in-process flag: this decides who becomes owner.
+    bootstrap = await db.scalar(select(User.id).limit(1)) is None
+    mode = "owner" if bootstrap else auth.registration_mode()
+    if mode == "closed":
+        raise HTTPException(403, "Registration is closed. Ask your workspace owner for access.")
+
+    email = auth.normalize_email(body.email)
+    name = body.name.strip() or email.split("@")[0]
+    problem = auth.email_problem(email) or auth.password_problem(body.password, email)
+    if problem is None and len(name) > auth.MAX_NAME_LENGTH:
+        problem = f"Use at most {auth.MAX_NAME_LENGTH} characters for your name."
+    if problem:
+        raise HTTPException(400, problem)
+
+    now = datetime.now(timezone.utc)
+    invite: Invite | None = None
+    if mode == "owner":
+        role = "owner"
+        if auth.admin_password_set() and not auth.check_password(body.setup_code or ""):
+            _register_throttle.failed(client)
+            raise HTTPException(
+                403,
+                "That setup code is not right." if body.setup_code
+                else "Enter the setup code (this deploy's ADMIN_PASSWORD) to create the owner account.",
+            )
+    else:
+        code = (body.invite_code or "").strip()
+        if not code and mode == "invite":
+            raise HTTPException(403, "An invite code is required to join this workspace.")
+        role = "member"
+        if code:
+            # Honoured in open mode too: it is how someone joins as an admin.
+            invite = await db.scalar(select(Invite).where(Invite.code_hash == auth.invite_code_hash(code)))
+            refusal = _invite_refusal(invite, email, now)
+            if refusal:
+                _register_throttle.failed(client)
+                raise HTTPException(403, refusal)
+            role = invite.role
+
+    # After the code checks, so without a valid invite nobody can use this
+    # to find out which emails have accounts.
+    if await db.scalar(select(User.id).where(User.email == email)) is not None:
+        _register_throttle.failed(client)
+        raise HTTPException(409, "An account with this email already exists. Sign in instead.")
+
+    user = User(
+        id=str(uuid.uuid4()),
+        email=email,
+        name=name,
+        password_hash=await asyncio.to_thread(auth.hash_password, body.password),
+        role=role,
+        disabled=False,
+        created_at=now,
+    )
+    try:
+        db.add(user)
+        if invite is not None:
+            # Claimed conditionally, in the same transaction as the new user:
+            # two people racing one code can't both get in.
+            claimed = await db.execute(
+                update(Invite)
+                .where(Invite.id == invite.id, Invite.used_at.is_(None), Invite.revoked.is_(False))
+                .values(used_at=now, used_by=user.id)
+            )
+            if claimed.rowcount != 1:
+                await db.rollback()
+                raise HTTPException(403, "This invite has already been used. Ask for a new one.")
+        await db.commit()
+    except IntegrityError:
+        # Lost a race: the same email registered a moment ago, or (on a
+        # fresh deploy) someone else became the owner first — the database
+        # allows exactly one.
+        await db.rollback()
+        raise HTTPException(
+            409,
+            "The owner account was created a moment ago. Sign in, or ask the owner for an invite."
+            if bootstrap else "An account with this email already exists. Sign in instead.",
+        ) from None
+
+    if not auth.users_exist():
+        auth.set_users_exist(True)
+    token, expires_at = auth.issue_token(subject=user.id, role=user.role)
+    return {"token": token, "expires_at": expires_at.isoformat(), "user": _public_user(user)}
+
+
+def _invite_refusal(invite: Invite | None, email: str, now: datetime) -> str | None:
+    """Why this invite can't admit `email`, in words, or None if it can."""
+    if invite is None:
+        return "That invite code isn't valid. Check the link, or ask for a new invite."
+    if invite.revoked:
+        return "This invite has been revoked. Ask for a new one."
+    if invite.used_at is not None:
+        return "This invite has already been used. Ask for a new one."
+    if _utc(invite.expires_at) <= now:
+        return "This invite has expired. Ask for a new one."
+    if invite.email and invite.email != email:
+        return "This invite is for a different email address."
+    return None
 
 
 @app.get("/api/auth/status")
-async def auth_status(request: Request) -> dict:
-    """Whether the console must log in first, and whether this request has.
+async def auth_status(request: Request, db: AsyncSession = Depends(get_session)) -> dict:
+    """Whether the console must sign in first, whether this request has and
+    as whom, and how someone new can register.
 
     `authenticated` means "may use the API": always true while access control
     is off.
     """
+    has_users = await _any_users(db)
     enabled = auth.auth_enabled()
+    claims = await auth.authenticate(auth.request_token(request.scope)) if enabled else None
+
+    user = None
+    if claims is not None:
+        user = await _principal(db, claims)
+        if user is None:  # disabled or removed since the token was checked
+            claims = None
     return {
         "auth_enabled": enabled,
-        "authenticated": not enabled or auth.verify_token(auth.request_token(request.scope) or ""),
+        "authenticated": not enabled or claims is not None,
+        "user": user,
+        "registration": {
+            "mode": auth.registration_mode() if has_users else "owner",
+            "setup_code_required": not has_users and auth.admin_password_set(),
+        },
     }
+
+
+async def _principal(db: AsyncSession, claims: dict) -> dict | None:
+    """Who a verified token speaks for, as `{id, email, name, role}`: the
+    break-glass owner, or the user as they are now (their role may have
+    changed since the token was issued)."""
+    if claims["sub"] == auth.LEGACY_SUBJECT:
+        return dict(auth.BREAK_GLASS_USER)
+    user = await db.get(User, claims["sub"])
+    if user is None or user.disabled:
+        return None
+    return _public_user(user)
+
+
+# --------------------------------------------------------------------------
+# Team: users and invites (owner and admins only)
+# --------------------------------------------------------------------------
+
+# How far back the invite list reaches. Every pending invite is inside it,
+# since none lasts longer than 30 days.
+INVITE_HISTORY_DAYS = 30
+
+
+async def _team_manager(request: Request, db: AsyncSession = Depends(get_session)) -> dict:
+    """The owner or admin making this request, as `{id, email, name, role}`.
+
+    The role comes from the database, not the token, so a demotion applies
+    to sessions already open. The admin password counts as the owner.
+    """
+    if not auth.auth_enabled():
+        # The gate is off, so nobody is signed in — and with no accounts
+        # there is no team to manage yet.
+        raise HTTPException(403, "Create the owner account first.")
+    claims = await auth.authenticate(auth.request_token(request.scope))
+    actor = await _principal(db, claims) if claims else None
+    if actor is None:
+        raise HTTPException(401, "Authentication required", headers={"WWW-Authenticate": "Bearer"})
+    if actor["role"] not in ("owner", "admin"):
+        raise HTTPException(403, "Only the owner or an admin can manage the team.")
+    return actor
+
+
+async def _manageable(db: AsyncSession, actor: dict, user_id: str) -> User:
+    """The teammate `actor` may change or remove, or the HTTP error saying why not."""
+    target = await db.get(User, user_id)
+    if target is None:
+        raise HTTPException(404, "No such user.")
+    if target.role == "owner":
+        raise HTTPException(403, "The owner account can't be changed or removed.")
+    if actor["role"] == "admin" and target.role == "admin" and target.id != actor["id"]:
+        raise HTTPException(403, "Admins can't change other admins. Ask the owner.")
+    return target
+
+
+def _team_user(user: User) -> TeamUserOut:
+    return TeamUserOut(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        role=user.role,
+        disabled=bool(user.disabled),
+        created_at=_utc(user.created_at),
+        last_login_at=_utc(user.last_login_at) if user.last_login_at else None,
+    )
+
+
+@app.get("/api/team/users", response_model=list[TeamUserOut])
+async def list_team(
+    actor: dict = Depends(_team_manager), db: AsyncSession = Depends(get_session)
+) -> list[TeamUserOut]:
+    users = (await db.scalars(select(User).order_by(User.created_at))).all()
+    return [_team_user(user) for user in users]
+
+
+@app.patch("/api/team/users/{user_id}", response_model=TeamUserOut)
+async def update_teammate(
+    user_id: str,
+    body: TeamUserUpdate,
+    actor: dict = Depends(_team_manager),
+    db: AsyncSession = Depends(get_session),
+) -> TeamUserOut:
+    """Change a teammate's role, or disable / re-enable them."""
+    target = await _manageable(db, actor, user_id)
+    if body.disabled and target.id == actor["id"]:
+        raise HTTPException(403, "You can't disable your own account.")
+    # Implied by "only the owner can invite admins": otherwise an admin
+    # could invite a member and promote them, and the rule would mean nothing.
+    if body.role == "admin" and target.role != "admin" and actor["role"] != "owner":
+        raise HTTPException(403, "Only the owner can make someone an admin.")
+
+    if body.role is not None:
+        target.role = body.role
+    if body.disabled is not None:
+        target.disabled = body.disabled
+    if target.disabled:
+        # Before the commit, so a failed write errs toward locked out.
+        auth.revoke_subject(target.id)
+    await db.commit()
+    if not target.disabled:
+        auth.restore_subject(target.id)
+    return _team_user(target)
+
+
+@app.delete("/api/team/users/{user_id}", status_code=204)
+async def remove_teammate(
+    user_id: str,
+    actor: dict = Depends(_team_manager),
+    db: AsyncSession = Depends(get_session),
+) -> Response:
+    target = await _manageable(db, actor, user_id)
+    if target.id == actor["id"]:
+        raise HTTPException(403, "You can't remove your own account.")
+    auth.revoke_subject(target.id)
+    await db.delete(target)
+    await db.commit()
+    return Response(status_code=204)
+
+
+@app.post("/api/team/invites", status_code=201)
+async def create_invite(
+    body: InviteCreate,
+    actor: dict = Depends(_team_manager),
+    db: AsyncSession = Depends(get_session),
+) -> dict:
+    """Make a single-use invite. The response is the only place the code
+    ever appears: only its hash is stored."""
+    if body.role == "admin" and actor["role"] != "owner":
+        raise HTTPException(403, "Only the owner can invite admins.")
+    email = auth.normalize_email(body.email or "") or None
+    if email is not None:
+        problem = auth.email_problem(email)
+        if problem:
+            raise HTTPException(400, problem)
+
+    code = auth.new_invite_code()
+    now = datetime.now(timezone.utc)
+    invite = Invite(
+        id=str(uuid.uuid4()),
+        code_hash=auth.invite_code_hash(code),
+        email=email,
+        role=body.role,
+        created_by=actor["id"],
+        created_at=now,
+        expires_at=now + timedelta(days=body.expires_in_days),
+        revoked=False,
+    )
+    db.add(invite)
+    await db.commit()
+    return {
+        "id": invite.id,
+        "code": code,
+        "email": invite.email,
+        "role": invite.role,
+        "expires_at": invite.expires_at.isoformat(),
+    }
+
+
+def _invite_status(invite: Invite, now: datetime) -> str:
+    if invite.used_at is not None:
+        return "used"
+    if invite.revoked:
+        return "revoked"
+    if _utc(invite.expires_at) <= now:
+        return "expired"
+    return "pending"
+
+
+@app.get("/api/team/invites", response_model=list[InviteOut])
+async def list_invites(
+    actor: dict = Depends(_team_manager), db: AsyncSession = Depends(get_session)
+) -> list[InviteOut]:
+    """Pending invites and the last 30 days of the rest, newest first. No codes."""
+    now = datetime.now(timezone.utc)
+    invites = (
+        await db.scalars(
+            select(Invite)
+            .where(Invite.created_at >= now - timedelta(days=INVITE_HISTORY_DAYS))
+            .order_by(Invite.created_at.desc())
+            .limit(200)
+        )
+    ).all()
+    return [
+        InviteOut(
+            id=invite.id,
+            email=invite.email,
+            role=invite.role,
+            created_at=_utc(invite.created_at),
+            expires_at=_utc(invite.expires_at),
+            used_at=_utc(invite.used_at) if invite.used_at else None,
+            revoked=bool(invite.revoked),
+            status=_invite_status(invite, now),
+        )
+        for invite in invites
+    ]
+
+
+@app.delete("/api/team/invites/{invite_id}", status_code=204)
+async def revoke_invite(
+    invite_id: str,
+    actor: dict = Depends(_team_manager),
+    db: AsyncSession = Depends(get_session),
+) -> Response:
+    invite = await db.get(Invite, invite_id)
+    if invite is None:
+        raise HTTPException(404, "No such invite.")
+    invite.revoked = True
+    await db.commit()
+    return Response(status_code=204)
 
 
 async def _socket_allowed(ws: WebSocket) -> bool:
@@ -439,7 +850,7 @@ async def _socket_allowed(ws: WebSocket) -> bool:
     Accepted first and then closed: a browser only sees the close code of a
     socket that opened, and a refused handshake reaches it as a bare 1006.
     """
-    if not auth.auth_enabled() or auth.verify_token(ws.query_params.get("token", "")):
+    if not auth.auth_enabled() or await auth.authenticate(ws.query_params.get("token", "")):
         return True
     await ws.accept()
     await ws.close(code=4401)

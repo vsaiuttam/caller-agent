@@ -339,7 +339,60 @@ class FollowupResend(BaseModel):
 
 
 class LoginRequest(BaseModel):
+    """`{email, password}` for a user, or `{password}` for the admin password."""
+
     password: str = Field(max_length=1000)
+    email: str | None = Field(default=None, max_length=1000)
+
+
+class RegisterRequest(BaseModel):
+    """Everything optional at this layer and capped only against abuse: the
+    real rules (auth.email_problem, auth.password_problem) answer 400 with a
+    sentence the register page can show, where a schema would answer 422."""
+
+    name: str = Field(default="", max_length=1000)
+    email: str = Field(default="", max_length=1000)
+    password: str = Field(default="", max_length=1000)
+    invite_code: str | None = Field(default=None, max_length=1000)
+    setup_code: str | None = Field(default=None, max_length=1000)
+
+
+class TeamUserOut(BaseModel):
+    """A teammate as the team page sees them. No password hash, ever: this
+    is the only shape a user row leaves the server in."""
+
+    id: str
+    email: str
+    name: str
+    role: str
+    disabled: bool
+    created_at: datetime
+    last_login_at: datetime | None = None
+
+
+class TeamUserUpdate(BaseModel):
+    # Never "owner": there is exactly one, fixed at registration.
+    role: Literal["admin", "member"] | None = None
+    disabled: bool | None = None
+
+
+class InviteCreate(BaseModel):
+    email: str | None = Field(default=None, max_length=1000)
+    role: Literal["member", "admin"] = "member"
+    expires_in_days: int = Field(default=7, ge=1, le=30)
+
+
+class InviteOut(BaseModel):
+    """An invite in the list. Never its code: that is shown once, on creation."""
+
+    id: str
+    email: str | None
+    role: str
+    created_at: datetime
+    expires_at: datetime
+    used_at: datetime | None
+    revoked: bool
+    status: Literal["pending", "used", "expired", "revoked"]
 
 
 class WhisperRequest(BaseModel):

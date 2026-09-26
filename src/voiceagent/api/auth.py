@@ -1,20 +1,30 @@
-"""Opt-in access control: one admin password, signed expiring tokens.
+"""Opt-in access control: user accounts, a break-glass admin password, and
+signed expiring tokens.
 
-Off unless ADMIN_PASSWORD is set, and then everything behaves exactly as it
-did before — a local console is not made harder to use to protect a public
-one. Set it, and every /api/* route except health and the auth routes needs
-a token, and so do the live WebSockets. Twilio's webhooks are never locked:
-Twilio cannot log in, and a locked webhook drops every call in flight.
+Off until someone registers or ADMIN_PASSWORD is set, and until then
+everything behaves exactly as it did before — a local console is not made
+harder to use to protect a public one. Once on, every /api/* route except
+health and the auth routes needs a token, and so do the live WebSockets.
+Twilio's webhooks are never locked: Twilio cannot log in, and a locked
+webhook drops every call in flight.
 
-A token is `base64url(json {"exp": unix_seconds}) "." base64url(HMAC-SHA256)`
+The first person to register becomes the owner, which is what switches
+access control on. ADMIN_PASSWORD stays as a break-glass sign-in (and, while
+nobody has registered, as the setup code that stops a stranger claiming a
+public deploy). Its tokens act as the owner.
+
+A token is `base64url(json {"exp", "sub", "role"}) "." base64url(HMAC-SHA256)`
 — stateless, so there is no session table, and a restart logs nobody out.
-It is signed with AUTH_SECRET, or failing that a key derived from the
-password, so changing either one signs everyone out. Settings are read when
-used, not at import.
+`sub` is a user id, or "admin" for the admin password. It is signed with
+AUTH_SECRET, else a key derived from the password, else a random key kept
+in the database; changing the one in use signs everyone out. Disabling or
+deleting a user revokes their tokens at once (see `authenticate`). Settings
+are read when used, not at import.
 
-    ADMIN_PASSWORD         — turns access control on
-    AUTH_SECRET            — signing key; optional, derived from the password
+    ADMIN_PASSWORD         — break-glass sign-in; also turns access control on
+    AUTH_SECRET            — signing key; optional
     AUTH_TOKEN_TTL_HOURS   — token lifetime, default 12
+    REGISTRATION_MODE      — after the owner exists: invite (default) | open | closed
 """
 
 from __future__ import annotations
@@ -23,28 +33,82 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
+import re
+import secrets
 import time
 from collections import deque
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs
 
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .. import storage
+
+logger = logging.getLogger(__name__)
+
 DEFAULT_TTL_HOURS = 12.0
 
-# Reachable without a token: monitoring, and what the login page itself needs.
-OPEN_PATHS = frozenset({"/api/health", "/api/auth/login", "/api/auth/status"})
+# Reachable without a token: monitoring, and what the login and register
+# pages themselves need.
+OPEN_PATHS = frozenset(
+    {"/api/health", "/api/auth/login", "/api/auth/status", "/api/auth/register"}
+)
 
 # More than this many failed logins from one client in the window is a 429.
 MAX_FAILED_LOGINS = 5
 FAILED_LOGIN_WINDOW_SECONDS = 300.0
 
+# The subject of an admin-password token. Never a user id (those are UUIDs).
+LEGACY_SUBJECT = "admin"
+ROLES = ("owner", "admin", "member")
+
+# scrypt at the cost OWASP suggests: 16 MiB and ~50 ms per hash, which makes
+# an offline guess expensive without making a login feel slow.
+SCRYPT_N, SCRYPT_R, SCRYPT_P = 2**14, 8, 1
+SCRYPT_SALT_BYTES = 16
+SCRYPT_KEY_BYTES = 64
+# scrypt needs 128·n·r bytes; OpenSSL's default ceiling is 32 MiB, so state
+# ours rather than sit just under someone else's.
+_SCRYPT_MAXMEM = 64 * 1024 * 1024
+
+
+# Whether anyone has registered. In-process so auth_enabled() stays a cheap
+# synchronous check on every request: loaded at startup, set by the first
+# registration, and never cleared in practice (the owner can't be removed).
+_users_exist = False
+
 
 def auth_enabled() -> bool:
+    return admin_password_set() or _users_exist
+
+
+def admin_password_set() -> bool:
     return bool(os.getenv("ADMIN_PASSWORD", ""))
+
+
+def users_exist() -> bool:
+    return _users_exist
+
+
+def set_users_exist(value: bool) -> None:
+    """Record whether any user exists. Called at startup and on registration;
+    tests call it to reset.
+
+    Also forgets which subjects were seen active, and with no users at all
+    there is nobody left to revoke: both are caches over the users table,
+    which stays the authority.
+    """
+    global _users_exist
+    _users_exist = bool(value)
+    _active.clear()
+    if not value:
+        _revoked.clear()
 
 
 def check_password(password: str) -> bool:
@@ -53,33 +117,323 @@ def check_password(password: str) -> bool:
     return bool(expected) and hmac.compare_digest(password.encode(), expected.encode())
 
 
-def issue_token(now: datetime | None = None) -> tuple[str, datetime]:
-    """A signed token and the moment it expires."""
-    secret = _secret()
-    if secret is None:
-        raise RuntimeError("Access control is off: set ADMIN_PASSWORD to issue tokens.")
+# --------------------------------------------------------------------------
+# Password hashing
+# --------------------------------------------------------------------------
+
+
+def hash_password(password: str) -> str:
+    """`scrypt$<n>$<r>$<p>$<salt>$<key>`, base64, with a fresh random salt.
+
+    CPU-bound for ~50 ms: callers on the event loop run it in a thread, since
+    the same loop is carrying live call audio.
+    """
+    salt = secrets.token_bytes(SCRYPT_SALT_BYTES)
+    key = hashlib.scrypt(
+        password.encode(), salt=salt, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P,
+        dklen=SCRYPT_KEY_BYTES, maxmem=_SCRYPT_MAXMEM,
+    )
+    return "$".join(
+        ["scrypt", str(SCRYPT_N), str(SCRYPT_R), str(SCRYPT_P),
+         base64.b64encode(salt).decode(), base64.b64encode(key).decode()]
+    )
+
+
+def check_password_hash(password: str, stored: str) -> bool:
+    """Whether `password` is the one `stored` was made from. False for any
+    malformed hash rather than an exception: a bad row must not become a 500
+    on the login page."""
+    if not isinstance(password, str) or not isinstance(stored, str):
+        return False
+    try:
+        scheme, n, r, p, salt_b64, key_b64 = stored.split("$")
+        n, r, p = int(n), int(r), int(p)
+        salt = base64.b64decode(salt_b64, validate=True)
+        expected = base64.b64decode(key_b64, validate=True)
+    except ValueError:  # includes binascii.Error
+        return False
+    # Parameters come from the row, so bound them: a tampered row must not be
+    # able to ask for gigabytes of memory.
+    if scheme != "scrypt" or not salt or not expected or not (
+        2 <= n <= 2**20 and n & (n - 1) == 0 and 1 <= r <= 32 and 1 <= p <= 16
+    ):
+        return False
+    try:
+        actual = hashlib.scrypt(
+            password.encode(), salt=salt, n=n, r=r, p=p,
+            dklen=len(expected), maxmem=_SCRYPT_MAXMEM,
+        )
+    except ValueError:
+        return False
+    return hmac.compare_digest(actual, expected)
+
+
+_stand_in_hash: str | None = None
+
+
+def stand_in_hash() -> str:
+    """A real hash of nothing anyone knows, to check against when an email has
+    no account — so a wrong email costs the same scrypt as a wrong password,
+    and response time can't be used to find out who has an account."""
+    global _stand_in_hash
+    if _stand_in_hash is None:
+        _stand_in_hash = hash_password(secrets.token_urlsafe(32))
+    return _stand_in_hash
+
+
+# --------------------------------------------------------------------------
+# Account rules
+# --------------------------------------------------------------------------
+
+REGISTRATION_MODES = ("invite", "open", "closed")
+MIN_PASSWORD_LENGTH = 10
+MAX_PASSWORD_LENGTH = 128
+MAX_EMAIL_LENGTH = 254  # RFC 5321's limit on a forward path
+MAX_NAME_LENGTH = 100
+
+# Deliberately loose — something@something.tld, no spaces. The only real test
+# of an address is mail reaching it, and there is no mail service here; this
+# catches typos, not fraud.
+_EMAIL_SHAPE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
+# How an admin-password session appears wherever a user is expected.
+BREAK_GLASS_USER = {"id": LEGACY_SUBJECT, "email": "", "name": "Admin", "role": "owner"}
+
+
+def registration_mode() -> str:
+    """Who may register once the owner exists: REGISTRATION_MODE, read now.
+
+    Anything unrecognised reads as `invite`, so a typo in the setting can
+    neither open the workspace to everyone nor lock out invited people.
+    """
+    mode = os.getenv("REGISTRATION_MODE", "").strip().lower()
+    return mode if mode in REGISTRATION_MODES else "invite"
+
+
+def normalize_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def email_problem(email: str) -> str | None:
+    """What is wrong with an (already normalised) email, in words, or None."""
+    if not email:
+        return "Enter your email address."
+    if len(email) > MAX_EMAIL_LENGTH:
+        return f"That email address is too long (at most {MAX_EMAIL_LENGTH} characters)."
+    if not _EMAIL_SHAPE.fullmatch(email):
+        return "That doesn't look like an email address."
+    return None
+
+
+def password_problem(password: str, email: str) -> str | None:
+    """Which password rule is broken, in words, or None."""
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return f"Use at least {MIN_PASSWORD_LENGTH} characters for your password."
+    if len(password) > MAX_PASSWORD_LENGTH:
+        return f"Use at most {MAX_PASSWORD_LENGTH} characters for your password."
+    if password.isdigit():
+        return "Your password can't be all digits."
+    if normalize_email(password) == email:
+        return "Your password can't be your email address."
+    return None
+
+
+def new_invite_code() -> str:
+    # 192 bits: not guessable in any number of tries the throttle allows.
+    return secrets.token_urlsafe(24)
+
+
+def invite_code_hash(code: str) -> str:
+    """What is stored for an invite code. A plain hash, not scrypt: the code
+    is random and long, so there is nothing for a slow hash to protect, and
+    a fast one can be looked up by equality."""
+    return hashlib.sha256(code.strip().encode()).hexdigest()
+
+
+# --------------------------------------------------------------------------
+# Tokens
+# --------------------------------------------------------------------------
+
+# Replaced at startup by the one stored in the database (load_accounts), and
+# only used when neither AUTH_SECRET nor ADMIN_PASSWORD is set. Random until
+# then, so a process that never loads one still signs with something unguessable.
+_workspace_key: bytes = secrets.token_bytes(32)
+
+
+def issue_token(
+    now: datetime | None = None,
+    *,
+    subject: str = LEGACY_SUBJECT,
+    role: str = "owner",
+) -> tuple[str, datetime]:
+    """A signed token for `subject` (a user id, or "admin") and its expiry."""
+    if role not in ROLES:
+        raise ValueError(f"Unknown role: {role!r}")
     now = now or datetime.now(timezone.utc)
     exp = int((now + timedelta(hours=_ttl_hours())).timestamp())
-    payload = _b64encode(json.dumps({"exp": exp}, separators=(",", ":")).encode())
-    return f"{payload}.{_sign(payload, secret)}", datetime.fromtimestamp(exp, timezone.utc)
+    claims = {"exp": exp, "sub": subject, "role": role}
+    payload = _b64encode(json.dumps(claims, separators=(",", ":")).encode())
+    return f"{payload}.{_sign(payload, _secret())}", datetime.fromtimestamp(exp, timezone.utc)
+
+
+def token_claims(token: str, now: datetime | None = None) -> dict | None:
+    """`{"sub", "role", "exp"}` for an unexpired token signed with the current
+    secret, else None.
+
+    Says nothing about whether the subject may still sign in — a disabled
+    user's token is still well-formed. `authenticate` answers that.
+    """
+    if not isinstance(token, str) or token.count(".") != 1:
+        return None
+    payload, signature = token.split(".")
+    if not hmac.compare_digest(signature.encode(), _sign(payload, _secret()).encode()):
+        return None
+    try:
+        claims = json.loads(_b64decode(payload))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(claims, dict):
+        return None
+    exp = claims.get("exp")
+    if not isinstance(exp, (int, float)) or isinstance(exp, bool):
+        return None
+    now = now or datetime.now(timezone.utc)
+    if now.timestamp() >= exp:
+        return None
+    # Tokens issued before accounts existed carry only `exp`; the admin
+    # password was the only way to get one, so that is what they were.
+    subject = claims.get("sub", LEGACY_SUBJECT)
+    role = claims.get("role", "owner")
+    if not isinstance(subject, str) or not subject or role not in ROLES:
+        return None
+    return {"sub": subject, "role": role, "exp": exp}
 
 
 def verify_token(token: str, now: datetime | None = None) -> bool:
-    """True only for an unexpired token signed with the current secret."""
-    secret = _secret()
-    if secret is None or not token or token.count(".") != 1:
-        return False
-    payload, signature = token.split(".")
-    if not hmac.compare_digest(signature.encode(), _sign(payload, secret).encode()):
-        return False
+    """True only for an unexpired token signed with the current secret, whose
+    subject has not been revoked in this process."""
+    claims = token_claims(token, now)
+    return claims is not None and claims["sub"] not in _revoked
+
+
+# --------------------------------------------------------------------------
+# Revocation
+# --------------------------------------------------------------------------
+
+# A signed token stays well-formed until it expires, so a disabled or
+# deleted user has to be refused by who they are, not by their token.
+#
+# `_revoked` is what this process has been told (by the team endpoints): it
+# makes a revocation immediate. `_active` remembers subjects the database
+# recently confirmed, so a user's requests don't each cost a query; after a
+# restart it is empty, and a token whose user is gone or disabled fails its
+# first lookup. The expiry bounds how long another worker process, which
+# never heard of the revocation, can go on trusting its cache.
+_revoked: set[str] = set()
+_active: dict[str, float] = {}
+ACTIVE_CACHE_SECONDS = 60.0
+
+
+def revoke_subject(user_id: str) -> None:
+    """Refuse this user's tokens from now on (they were disabled or deleted)."""
+    _revoked.add(user_id)
+    _active.pop(user_id, None)
+
+
+def restore_subject(user_id: str) -> None:
+    """Undo `revoke_subject` (they were re-enabled)."""
+    _revoked.discard(user_id)
+
+
+async def authenticate(token: str | None, now: datetime | None = None) -> dict | None:
+    """The claims of a token that may use the API right now, else None.
+
+    Admin-password tokens never touch the database. A user's token is checked
+    against the users table on first sight, then trusted from memory for a
+    minute unless revoked.
+    """
+    claims = token_claims(token or "", now)
+    if claims is None:
+        return None
+    subject = claims["sub"]
+    if subject == LEGACY_SUBJECT:
+        return claims
+    if subject in _revoked:
+        return None
+    seen = _active.get(subject)
+    if seen is not None and time.monotonic() - seen < ACTIVE_CACHE_SECONDS:
+        return claims
+    if not await _user_is_active(subject):
+        return None
+    # Re-checked after the await: a revocation that landed while the query
+    # was in flight must not be overwritten by a stale "active".
+    if subject in _revoked:
+        return None
+    _active[subject] = time.monotonic()
+    return claims
+
+
+async def _user_is_active(user_id: str) -> bool:
     try:
-        exp = json.loads(_b64decode(payload))["exp"]
-    except (ValueError, KeyError, TypeError):
+        # Through storage.SessionLocal at call time, not an import of it, so
+        # whatever database the app is using right now is the one asked.
+        async with storage.SessionLocal() as session:
+            disabled = await session.scalar(
+                select(storage.User.disabled).where(storage.User.id == user_id)
+            )
+    except Exception:  # noqa: BLE001
+        # Fail closed: an unreachable database can't vouch for anyone.
+        logger.exception("Auth: could not look up user %s", user_id)
         return False
-    if not isinstance(exp, (int, float)) or isinstance(exp, bool):
-        return False
-    now = now or datetime.now(timezone.utc)
-    return now.timestamp() < exp
+    return disabled is not None and not disabled
+
+
+# --------------------------------------------------------------------------
+# Startup
+# --------------------------------------------------------------------------
+
+_SIGNING_KEY_SETTING = "auth_signing_key"
+
+
+async def load_accounts() -> None:
+    """At startup: whether anyone has registered, and the workspace signing key.
+
+    The key is created on first start and stored, so that tokens signed with
+    it (when neither AUTH_SECRET nor ADMIN_PASSWORD is set) survive a
+    restart. Stored in the settings table under a key no endpoint lists.
+    """
+    global _workspace_key
+    async with storage.SessionLocal() as session:
+        count = await session.scalar(select(func.count()).select_from(storage.User)) or 0
+        set_users_exist(count > 0)
+
+        row = await session.get(storage.Setting, _SIGNING_KEY_SETTING)
+        stored = _decode_key(row.value if row else None)
+        if stored is not None:
+            _workspace_key = stored
+            return
+        value = {"key": base64.b64encode(_workspace_key).decode()}
+        if row is None:
+            session.add(storage.Setting(key=_SIGNING_KEY_SETTING, value=value))
+        else:
+            row.value = value
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Another worker stored its key first; use that one.
+            await session.rollback()
+            row = await session.get(storage.Setting, _SIGNING_KEY_SETTING)
+            stored = _decode_key(row.value if row else None)
+            if stored is not None:
+                _workspace_key = stored
+
+
+def _decode_key(value) -> bytes | None:
+    try:
+        key = base64.b64decode(value["key"], validate=True)
+    except (TypeError, KeyError, ValueError):
+        return None
+    return key if len(key) >= 32 else None
 
 
 def bearer_token(authorization: str | None) -> str | None:
@@ -87,16 +441,18 @@ def bearer_token(authorization: str | None) -> str | None:
     return token.strip() if scheme.lower() == "bearer" and token.strip() else None
 
 
-def _secret() -> bytes | None:
+def _secret() -> bytes:
     explicit = os.getenv("AUTH_SECRET", "")
     if explicit:
         return explicit.encode()
     password = os.getenv("ADMIN_PASSWORD", "")
-    if not password:
-        return None
-    # Derived rather than the password itself, so the signing key and the
-    # thing people type are never the same bytes.
-    return hashlib.sha256(b"samvaad-auth-token:" + password.encode()).digest()
+    if password:
+        # Derived rather than the password itself, so the signing key and
+        # the thing people type are never the same bytes.
+        return hashlib.sha256(b"samvaad-auth-token:" + password.encode()).digest()
+    # Accounts with neither variable set: a random key, kept in the database
+    # so a restart logs nobody out (see load_accounts).
+    return _workspace_key
 
 
 def _ttl_hours() -> float:
@@ -128,8 +484,9 @@ def _b64decode(text: str) -> bytes:
 class LoginThrottle:
     """Counts failed logins per client, in memory, over a sliding window.
 
-    In-process like the event bus: enough to make guessing a password from
-    one address slow, which is the threat a single shared password faces.
+    In-process like the event bus: enough to make guessing a password, a
+    setup code or an invite code from one address slow. Login and register
+    each keep their own.
     """
 
     def __init__(
@@ -194,7 +551,7 @@ class AuthMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http" and self._locked(scope):
+        if scope["type"] == "http" and await self._locked(scope):
             response = JSONResponse(
                 {"detail": "Authentication required"},
                 status_code=401,
@@ -205,7 +562,7 @@ class AuthMiddleware:
         await self.app(scope, receive, send)
 
     @staticmethod
-    def _locked(scope: Scope) -> bool:
+    async def _locked(scope: Scope) -> bool:
         path = scope.get("path", "")
         if (
             not path.startswith("/api/")
@@ -214,7 +571,7 @@ class AuthMiddleware:
             or not auth_enabled()
         ):
             return False
-        return not verify_token(request_token(scope) or "")
+        return await authenticate(request_token(scope)) is None
 
 
 def request_token(scope: Scope) -> str | None:
