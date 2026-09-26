@@ -105,7 +105,7 @@ export function PageHeader({
       {back && (
         <Link
           to={back.to}
-          className="mb-3 inline-flex items-center gap-1.5 rounded-md text-xs font-medium text-ink-muted transition-colors hover:text-ink"
+          className="-my-1 mb-2 inline-flex items-center gap-1.5 rounded-md py-1 text-xs font-medium text-ink-muted transition-colors hover:text-ink"
         >
           <IconArrowLeft size={13} /> {back.label}
         </Link>
@@ -499,15 +499,15 @@ export function Switch({
         disabled={disabled}
         onClick={() => onChange(!checked)}
         className={cx(
-          "relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors duration-200",
+          "relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors duration-200",
           // Off-state edge at 3:1 so the control is findable without colour.
           checked ? "border-brand bg-brand" : "border-line-control bg-subtle-strong",
         )}
       >
         <span
           className={cx(
-            "inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-[var(--ease-out)]",
-            checked ? "translate-x-[17px]" : "translate-x-[1px]",
+            "inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ease-[var(--ease-out)]",
+            checked ? "translate-x-[21px]" : "translate-x-[1px]",
           )}
         />
       </button>

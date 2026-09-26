@@ -414,10 +414,13 @@ function Onboarding() {
       {
         id: "auth",
         title: "Lock the console",
-        hint: "Set ADMIN_PASSWORD so only your team can dial",
+        // With accounts, creating the owner account is the one-click way to lock it.
+        hint: health.accounts
+          ? "Create the owner account so only your team can dial"
+          : "Set ADMIN_PASSWORD so only your team can dial",
         done: health.auth_enabled ?? auth.phase === "signed-in",
-        to: SERVICES,
-        cta: "How",
+        to: health.accounts && health.accounts.users === 0 ? "/register" : SERVICES,
+        cta: health.accounts && health.accounts.users === 0 ? "Create" : "How",
       },
     ];
   }, [health, campaigns.data, campaigns.loading, tests.data, tests.loading, auth.phase]);

@@ -33,6 +33,8 @@ import {
 } from "../icons";
 import { Badge, Drawer, IconButton, Kbd, Popover, Tooltip, cx } from "../ui";
 import { NAV_GROUPS, NAV_ITEMS, crumbsFor, type NavItem } from "./nav";
+import { AppFooter } from "./AppFooter";
+import { STATUS_DOT, systemStatus } from "./status";
 
 // ---------------------------------------------------------------------------
 // Breadcrumb override — detail pages name their last crumb (a campaign's name)
@@ -176,9 +178,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             onSearch={() => setPaletteOpen(true)}
             onShortcuts={() => setShortcutsOpen(true)}
           />
-          <main id="main" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden outline-none">
+          <main id="main" tabIndex={-1} className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden outline-none">
             <AuthBanner />
-            {children}
+            <div className="flex-1">{children}</div>
+            <AppFooter onShortcuts={() => setShortcutsOpen(true)} />
           </main>
         </div>
       </div>
@@ -235,7 +238,8 @@ function SidebarNav({ collapsed }: { collapsed: boolean }) {
                   aria-label={collapsed ? item.label : undefined}
                   className={({ isActive }) =>
                     cx(
-                      "group relative flex h-8 items-center gap-2.5 rounded-md text-sm transition-colors duration-150",
+                      // 40px rows in the phone drawer (touch), 32px in the desktop sidebar.
+                      "group relative flex h-10 items-center gap-2.5 rounded-md text-sm transition-colors duration-150 md:h-8",
                       collapsed ? "w-10 justify-center" : "px-2.5",
                       isActive
                         ? "bg-subtle font-medium text-ink"
@@ -393,24 +397,8 @@ function HealthPill() {
   const stream = useStreamStatus();
   const [open, setOpen] = useState(false);
 
-  const status: { tone: "good" | "warning" | "critical" | "muted"; label: string; detail: string } = !health
-    ? error
-      ? { tone: "critical", label: "API unreachable", detail: error }
-      : { tone: "muted", label: "Checking…", detail: "Asking the server what's connected." }
-    : !health.ok
-      ? { tone: "critical", label: "Degraded", detail: "The database isn't answering." }
-      : !health.can_run_simulations
-        ? { tone: "warning", label: "No model", detail: "No model provider key is set, so nothing can talk." }
-        : !health.can_place_calls
-          ? { tone: "warning", label: "Demo mode", detail: "Telephony is mocked — rehearsals work, real calls don't." }
-          : { tone: "good", label: "Operational", detail: "Model provider and telephony are connected." };
-
-  const dot = {
-    good: "bg-good",
-    warning: "bg-warning",
-    critical: "bg-critical",
-    muted: "bg-ink-muted/50",
-  }[status.tone];
+  const status = systemStatus(health, error);
+  const dot = STATUS_DOT[status.tone];
 
   return (
     <div className="relative">
@@ -556,7 +544,7 @@ function AuthBanner() {
         type="button"
         onClick={() => setDismissed(true)}
         aria-label="Dismiss"
-        className="rounded-md p-1 text-ink-muted transition-colors hover:bg-subtle hover:text-ink"
+        className="flex h-8 w-8 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-subtle hover:text-ink"
       >
         <IconClose size={14} />
       </button>
