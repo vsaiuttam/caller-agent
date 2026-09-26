@@ -233,6 +233,28 @@ OpenAI and Gemini as the model provider.
 Not yet supported: apps that need an OAuth sign-in rather than a key or URL,
 and MCP servers that run as local programs (stdio).
 
+### 12. Database (Supabase)
+
+Production runs on Supabase Postgres. Set `DATABASE_URL` to the project's
+**Session pooler** connection string (Supabase → **Connect** → Session pooler,
+port 5432), pasted as-is. Don't use the direct `db.<ref>.supabase.co` host: it
+is IPv6-only, and Render can't reach it. The app adds the async driver and
+TLS itself. If you use the transaction pooler (port 6543), it also turns off
+the prepared-statement reuse that pooler breaks.
+
+On startup the app creates any missing tables and columns and switches on row
+level security for every table. Supabase serves the `public` schema over its
+REST API to anyone holding the anon key, and RLS with no policies shuts that
+door. The app itself connects as the tables' owner, so RLS doesn't restrict it.
+
+```bash
+python db_tool.py check "<supabase url>"              # create/verify tables, row counts, RLS
+python db_tool.py copy "<old url>" "<supabase url>"   # move existing data across
+```
+
+`copy` writes everything in one transaction, parents before children, and
+refuses a target that already has rows unless you pass `--replace`.
+
 ## Layout
 
 ```

@@ -43,14 +43,61 @@ from .catalog import (
     DEFAULT_EXTRACTION_MODEL,
 )
 
-_raw_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./voiceagent.db")
-# Render provides postgresql:// but SQLAlchemy async needs postgresql+asyncpg://
-if _raw_url.startswith("postgresql://"):
-    DATABASE_URL = _raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-elif _raw_url.startswith("postgres://"):
-    DATABASE_URL = _raw_url.replace("postgres://", "postgresql+asyncpg://", 1)
-else:
-    DATABASE_URL = _raw_url
+def engine_config(raw_url: str) -> tuple[str, dict[str, Any]]:
+    """Turn a DATABASE_URL as a host hands it out into (url, engine kwargs).
+
+    Render and Supabase both give `postgres://` / `postgresql://` with libpq
+    query flags (`sslmode`, `pgbouncer`) that asyncpg rejects as unknown
+    connect arguments, so those are translated rather than passed through.
+
+    Supabase specifics:
+      - Its hosts only accept TLS, so SSL is required there even when the URL
+        doesn't say so.
+      - The transaction pooler (port 6543, or `pgbouncer=true`) hands each
+        transaction to whichever server connection is free, so a statement
+        prepared on one is missing on the next. asyncpg's statement cache has
+        to be off and every prepared statement needs a unique name.
+      - Its pooler caps clients per project (15 on the free plan), so the
+        pool is kept small. DB_POOL_SIZE / DB_MAX_OVERFLOW override it.
+    """
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    from uuid import uuid4
+
+    for prefix in ("postgresql://", "postgres://"):
+        if raw_url.startswith(prefix):
+            raw_url = "postgresql+asyncpg://" + raw_url[len(prefix):]
+            break
+    if not raw_url.startswith("postgresql+asyncpg://"):
+        return raw_url, {"pool_pre_ping": True}
+
+    parts = urlsplit(raw_url)
+    query = dict(parse_qsl(parts.query))
+    sslmode = query.pop("sslmode", None) or query.pop("ssl", None)
+    pgbouncer = query.pop("pgbouncer", "").lower() in {"1", "true", "yes"}
+    url = urlunsplit(parts._replace(query=urlencode(query)))
+
+    host = (parts.hostname or "").lower()
+    supabase = host.endswith((".supabase.co", ".supabase.com"))
+    connect_args: dict[str, Any] = {}
+    if sslmode in {"require", "verify-ca", "verify-full"} or (supabase and sslmode != "disable"):
+        connect_args["ssl"] = "require"
+    if pgbouncer or (supabase and parts.port == 6543):
+        connect_args["statement_cache_size"] = 0
+        connect_args["prepared_statement_name_func"] = lambda: f"__asyncpg_{uuid4()}__"
+
+    return url, {
+        "pool_pre_ping": True,
+        # Poolers and managed Postgres drop idle connections; recycle first.
+        "pool_recycle": 300,
+        "pool_size": int(os.getenv("DB_POOL_SIZE", "5")),
+        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "5")),
+        "connect_args": connect_args,
+    }
+
+
+DATABASE_URL, _ENGINE_KWARGS = engine_config(
+    os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./voiceagent.db")
+)
 
 
 def utcnow() -> datetime:
@@ -446,7 +493,7 @@ class Setting(Base):
 # Engine / session
 # --------------------------------------------------------------------------
 
-engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+engine = create_async_engine(DATABASE_URL, echo=False, **_ENGINE_KWARGS)
 SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -454,6 +501,32 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_add_missing_columns)
+        await conn.run_sync(_enable_row_level_security)
+
+
+def _enable_row_level_security(conn) -> None:
+    """Switch on RLS for every app table on Postgres, with no policies.
+
+    Supabase publishes the `public` schema through its REST API to anyone
+    holding the project's anon key, which ships in browser code by design.
+    Without RLS that would expose password hashes, invite tokens and
+    transcripts. RLS with no policies denies those API roles everything,
+    while the app is unaffected: it connects as the tables' owner, and
+    owners bypass RLS. On plain Postgres this changes nothing for the app.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+    names = [t.name for t in Base.metadata.sorted_tables]
+    rows = conn.execute(
+        text(
+            "SELECT relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = current_schema() AND c.relkind = 'r' "
+            "AND NOT c.relrowsecurity AND c.relname = ANY(:names)"
+        ),
+        {"names": names},
+    )
+    for (name,) in rows.all():
+        conn.execute(text(f'ALTER TABLE "{name}" ENABLE ROW LEVEL SECURITY'))
 
 
 def _add_missing_columns(conn) -> None:

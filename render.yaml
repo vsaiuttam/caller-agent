@@ -23,13 +23,14 @@ services:
     startCommand: uvicorn src.voiceagent.api.app:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
-      # Database — auto-filled by Render from the database above
+      # Database — Supabase Postgres, set in the dashboard. Use the Session
+      # pooler string (Supabase → Connect → Session pooler, port 5432): Render
+      # has no IPv6, and Supabase's direct db.<ref>.supabase.co host is
+      # IPv6-only. The app adds the async driver and TLS itself.
+      # voiceagent-db above is the old Render database, kept only until its
+      # data has been copied across (python db_tool.py copy …).
       - key: DATABASE_URL
-        fromDatabase:
-          name: voiceagent-db
-          property: connectionString
-        # Render gives postgresql://, SQLAlchemy async needs postgresql+asyncpg://
-        # We handle this in code with a prefix replacement.
+        sync: false
 
       # Model provider — set at least one
       - key: GEMINI_API_KEY
