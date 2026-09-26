@@ -361,6 +361,69 @@ class McpServer(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class User(Base):
+    """Someone who signs in to the console with their own email and password.
+
+    See api/auth.py. The legacy ADMIN_PASSWORD sign-in has no row here: it is
+    a break-glass key, not a person.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # Lowercased and trimmed before it is stored, so uniqueness is
+    # case-insensitive without depending on a database collation.
+    email: Mapped[str] = mapped_column(String(254), unique=True)
+    name: Mapped[str] = mapped_column(String(100), default="")
+    # `scrypt$<n>$<r>$<p>$<salt>$<key>` (auth.hash_password). Never serialised.
+    password_hash: Mapped[str] = mapped_column(String(255))
+    # owner | admin | member.
+    role: Mapped[str] = mapped_column(String(16), default="member")
+    # Disabling keeps the row (and who did what) but locks the person out.
+    disabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        # Exactly one owner, held by the database rather than by a check in
+        # the handler: two people registering on a fresh deploy at the same
+        # moment must not both become owner. Partial indexes exist on both
+        # databases this runs on; anywhere else the index is skipped rather
+        # than created without its WHERE, which would allow one user per role.
+        Index(
+            "uq_users_single_owner",
+            "role",
+            unique=True,
+            sqlite_where=text("role = 'owner'"),
+            postgresql_where=text("role = 'owner'"),
+        ).ddl_if(dialect=("sqlite", "postgresql")),
+    )
+
+
+class Invite(Base):
+    """A single-use code that lets one more person register.
+
+    Only the SHA-256 of the code is kept: the code is shown once, to whoever
+    created the invite, and a leaked database hands out no working codes.
+    """
+
+    __tablename__ = "invites"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    # When set, only this (lowercased) email may use the invite.
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    # member | admin — the role the new account gets.
+    role: Mapped[str] = mapped_column(String(16), default="member")
+    # A user id, or "admin" for the break-glass password.
+    created_by: Mapped[str] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    used_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class Setting(Base):
     """Workspace-wide key/value settings.
 
