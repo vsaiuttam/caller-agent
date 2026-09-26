@@ -210,6 +210,22 @@ class Campaign(Base):
     extraction_effort: Mapped[str] = mapped_column(
         String(8), default=DEFAULT_EXTRACTION_EFFORT
     )
+    # Which workspace provider each role runs on: an `llm_providers` id or
+    # `env:<preset>`. Null means the workspace default; a provider deleted
+    # or disabled later falls back to it too (providers.provider_for).
+    conversation_provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    extraction_provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # A Sarvam bulbul speaker id (voice/voices.py). Null is the default voice.
+    voice: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+    # --- Pre-call heads-up -------------------------------------------------
+    # A short text sent before the call ("we'll ring you in 10 minutes"), so
+    # an unknown number is expected rather than ignored. See runner.py.
+    precall_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    precall_channel: Mapped[str | None] = mapped_column(String(16), nullable=True, default="sms")
+    precall_message: Mapped[str] = mapped_column(Text, default="")
+    precall_lead_minutes: Mapped[int] = mapped_column(Integer, default=10)
 
     # --- Spend control ---------------------------------------------------
     # A hard ceiling in USD on model spend. The runner pauses the campaign on
@@ -260,6 +276,12 @@ class Contact(Base):
     next_attempt_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # The last pre-call heads-up: when, and Twilio's status for it (or
+    # "failed"). One per 12 hours at most, however many retries follow.
+    precall_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    precall_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -406,6 +428,37 @@ class McpServer(Base):
     tools: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True, default=list)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LlmProvider(Base):
+    """A model provider the workspace has connected: a preset plus a key.
+
+    The key is sealed (mcp/secrets.py) and never returned; only its last four
+    characters are shown again. `base_url` stays readable — it is an address,
+    not a credential, and the console shows it to say which server it is.
+    """
+
+    __tablename__ = "llm_providers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # A preset id from providers.PRESETS, or `openai_compatible`.
+    kind: Mapped[str] = mapped_column(String(32))
+    label: Mapped[str] = mapped_column(String(80), default="")
+    base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    secret: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Models the catalog doesn't know: [{id, name, input_per_mtok,
+    # output_per_mtok}], prices nullable — unknown is allowed, $0 is not.
+    custom_models: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON, nullable=True, default=list
+    )
+    # ok | untested | error, from the last test.
+    status: Mapped[str] = mapped_column(String(16), default="untested")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class User(Base):

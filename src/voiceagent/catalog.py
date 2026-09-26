@@ -29,7 +29,7 @@ from dataclasses import asdict, dataclass, field
 
 from .providers import active_id
 
-PRICING_AS_OF = "2026-09-04"
+PRICING_AS_OF = "2026-09-27"
 
 # Prompt-cache multipliers against the base input rate. A 5-minute cache write
 # costs 1.25x input; a read costs 0.1x. The whole point of the two-breakpoint
@@ -45,8 +45,10 @@ class ModelSpec:
     name: str
     family: str
     context_tokens: int
-    input_per_mtok: float
-    output_per_mtok: float
+    # None where no published price could be confirmed. An unknown price is
+    # reported as unknown, never as $0 — see `TokenUsage.cost_usd`.
+    input_per_mtok: float | None
+    output_per_mtok: float | None
     # "fastest" | "fast" | "balanced" | "deliberate" — relative time-to-first
     # -token, which is what the in-call path actually cares about.
     speed: str
@@ -60,14 +62,25 @@ class ModelSpec:
     watch_out: str = ""
     note: str = ""
     recommended_for: tuple[str, ...] = ()
+    # Accepts `reasoning_effort` on the chat/completions shape. Sent to a
+    # model that doesn't, it is a 400 — see providers.chat_params.
+    reasoning: bool = False
 
     @property
-    def cache_write_per_mtok(self) -> float:
+    def cache_write_per_mtok(self) -> float | None:
+        if self.input_per_mtok is None:
+            return None
         return round(self.input_per_mtok * CACHE_WRITE_MULTIPLIER, 4)
 
     @property
-    def cache_read_per_mtok(self) -> float:
+    def cache_read_per_mtok(self) -> float | None:
+        if self.input_per_mtok is None:
+            return None
         return round(self.input_per_mtok * CACHE_READ_MULTIPLIER, 4)
+
+    @property
+    def priced(self) -> bool:
+        return self.input_per_mtok is not None and self.output_per_mtok is not None
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -111,8 +124,8 @@ MODELS: list[ModelSpec] = [
         name="Claude Sonnet 5",
         family="Sonnet",
         context_tokens=1_000_000,
-        input_per_mtok=3.00,
-        output_per_mtok=15.00,
+        input_per_mtok=2.00,
+        output_per_mtok=10.00,
         speed="fast",
         roles=(CONVERSATION, EXTRACTION),
         tagline="The default for live conversation. Near-Opus quality at low effort.",
@@ -125,7 +138,7 @@ MODELS: list[ModelSpec] = [
             "At high effort it thinks longer than a phone call tolerates. Keep "
             "it on low or medium for the in-call role."
         ),
-        note="Introductory pricing runs through 2026-08-31; list rate shown.",
+        note="List rate per docs/research.md §6.2 (checked 2026-09-27).",
         recommended_for=("Lead qualification", "Renewals", "Anything open-ended"),
     ),
     ModelSpec(
@@ -179,6 +192,7 @@ MODELS: list[ModelSpec] = [
         name="Gemini 3.8 Flash",
         family="Gemini",
         provider="gemini",
+        reasoning=True,
         context_tokens=1_048_576,
         input_per_mtok=0.75,
         output_per_mtok=3.75,
@@ -203,6 +217,7 @@ MODELS: list[ModelSpec] = [
         name="Gemini 3.1 Flash Lite",
         family="Gemini",
         provider="gemini",
+        reasoning=True,
         context_tokens=1_048_576,
         input_per_mtok=0.25,
         output_per_mtok=1.50,
@@ -226,6 +241,7 @@ MODELS: list[ModelSpec] = [
         name="Gemini 3.5 Flash Lite",
         family="Gemini",
         provider="gemini",
+        reasoning=True,
         context_tokens=1_048_576,
         input_per_mtok=0.30,
         output_per_mtok=2.50,
@@ -241,6 +257,7 @@ MODELS: list[ModelSpec] = [
         name="Gemini 3.6 Flash",
         family="Gemini",
         provider="gemini",
+        reasoning=True,
         context_tokens=1_048_576,
         input_per_mtok=0.75,
         output_per_mtok=3.75,
@@ -264,6 +281,7 @@ MODELS: list[ModelSpec] = [
         name="Gemini 3.5 Flash",
         family="Gemini",
         provider="gemini",
+        reasoning=True,
         context_tokens=1_048_576,
         input_per_mtok=1.50,
         output_per_mtok=9.00,
@@ -282,6 +300,7 @@ MODELS: list[ModelSpec] = [
         name="Gemini 3.1 Pro",
         family="Gemini",
         provider="gemini",
+        reasoning=True,
         context_tokens=1_048_576,
         input_per_mtok=2.00,
         output_per_mtok=12.00,
@@ -297,6 +316,237 @@ MODELS: list[ModelSpec] = [
             "the first call. Enable billing before assigning it to a campaign."
         ),
         recommended_for=("Post-call extraction once billing is on",),
+    ),
+    ModelSpec(
+        id="gemini-2.5-flash-lite",
+        name="Gemini 2.5 Flash Lite",
+        family="Gemini",
+        provider="gemini",
+        reasoning=True,
+        context_tokens=1_048_576,
+        input_per_mtok=0.10,
+        output_per_mtok=0.40,
+        speed="fastest",
+        roles=(CONVERSATION,),
+        tagline="The cheapest Gemini on the line. A generation older, and it shows on long calls.",
+        recommended_for=("Reminders at volume",),
+    ),
+    ModelSpec(
+        id="gemini-2.5-flash",
+        name="Gemini 2.5 Flash",
+        family="Gemini",
+        provider="gemini",
+        reasoning=True,
+        context_tokens=1_048_576,
+        input_per_mtok=0.30,
+        output_per_mtok=2.50,
+        speed="fast",
+        roles=(CONVERSATION, EXTRACTION),
+        tagline="The stable previous Flash, useful when the 3.x models are short of quota.",
+        recommended_for=("A fallback extractor",),
+    ),
+    # ---- Everything below: presets added in v3 ---------------------------
+    # Prices from docs/research.md §6.2, list rates checked 2026-09-25..27.
+    # Where no rate could be confirmed the price is None, and the estimator
+    # says "price not set" instead of pretending the model is free.
+    ModelSpec(
+        id="claude-opus-5-5",
+        name="Claude Opus 5.5",
+        family="Opus",
+        context_tokens=1_000_000,
+        input_per_mtok=4.00,
+        output_per_mtok=20.00,
+        speed="balanced",
+        roles=(CONVERSATION, EXTRACTION),
+        tagline="Newer and cheaper than Opus 5. The careful extractor on Anthropic.",
+        recommended_for=("Post-call extraction", "High-stakes calls"),
+    ),
+    ModelSpec(
+        id="gpt-5-nano",
+        name="GPT-5 nano",
+        family="GPT-5",
+        provider="openai",
+        reasoning=True,
+        context_tokens=400_000,
+        input_per_mtok=0.05,
+        output_per_mtok=0.40,
+        speed="fastest",
+        roles=(CONVERSATION,),
+        tagline="The cheapest OpenAI model. Fine for scripted reminders, thin on judgement.",
+        recommended_for=("Reminders", "Confirmations"),
+    ),
+    ModelSpec(
+        id="gpt-5-mini",
+        name="GPT-5 mini",
+        family="GPT-5",
+        provider="openai",
+        reasoning=True,
+        context_tokens=400_000,
+        input_per_mtok=0.25,
+        output_per_mtok=2.00,
+        speed="fast",
+        roles=(CONVERSATION, EXTRACTION),
+        tagline="The OpenAI default for extraction: structured output that holds its shape.",
+        recommended_for=("Post-call extraction", "Lead qualification"),
+    ),
+    ModelSpec(
+        id="gpt-4.1-mini",
+        name="GPT-4.1 mini",
+        family="GPT-4.1",
+        provider="openai",
+        context_tokens=1_047_576,
+        input_per_mtok=0.40,
+        output_per_mtok=1.60,
+        speed="fastest",
+        roles=(CONVERSATION, EXTRACTION),
+        tagline="The OpenAI default on the line: no reasoning pass, so it answers at once.",
+        recommended_for=("The in-call path",),
+    ),
+    ModelSpec(
+        id="gpt-4o-mini",
+        name="GPT-4o mini",
+        family="GPT-4o",
+        provider="openai",
+        context_tokens=128_000,
+        input_per_mtok=0.15,
+        output_per_mtok=0.60,
+        speed="fastest",
+        roles=(CONVERSATION,),
+        tagline="Old, cheap and quick. Kept for campaigns tuned on it.",
+    ),
+    ModelSpec(
+        id="gpt-4.1",
+        name="GPT-4.1",
+        family="GPT-4.1",
+        provider="openai",
+        context_tokens=1_047_576,
+        input_per_mtok=2.00,
+        output_per_mtok=8.00,
+        speed="fast",
+        roles=(CONVERSATION, EXTRACTION),
+        tagline="OpenAI's larger non-reasoning model, for open-ended calls.",
+    ),
+    ModelSpec(
+        id="llama-3.1-8b-instant",
+        name="Llama 3.1 8B Instant",
+        family="Llama",
+        provider="groq",
+        context_tokens=131_072,
+        input_per_mtok=0.05,
+        output_per_mtok=0.08,
+        speed="fastest",
+        roles=(CONVERSATION,),
+        tagline="Near-instant and nearly free. English-first; weak in Indian languages.",
+    ),
+    ModelSpec(
+        id="llama-3.3-70b-versatile",
+        name="Llama 3.3 70B Versatile",
+        family="Llama",
+        provider="groq",
+        context_tokens=131_072,
+        input_per_mtok=0.59,
+        output_per_mtok=0.79,
+        speed="fastest",
+        roles=(CONVERSATION, EXTRACTION),
+        tagline="The Groq default: a capable open model at very low latency.",
+        recommended_for=("English campaigns where speed matters most",),
+    ),
+    ModelSpec(
+        id="deepseek-chat",
+        name="DeepSeek V4.1 Flash",
+        family="DeepSeek",
+        provider="deepseek",
+        context_tokens=128_000,
+        input_per_mtok=0.30,
+        output_per_mtok=1.20,
+        speed="fast",
+        roles=(CONVERSATION, EXTRACTION),
+        tagline="Cheap and capable. Peak rate shown; off-peak is half.",
+    ),
+    ModelSpec(
+        id="mistral-small-latest",
+        name="Mistral Small 4",
+        family="Mistral",
+        provider="mistral",
+        context_tokens=128_000,
+        input_per_mtok=0.15,
+        output_per_mtok=0.60,
+        speed="fast",
+        roles=(CONVERSATION,),
+        tagline="Mistral's quick tier.",
+    ),
+    ModelSpec(
+        id="mistral-large-latest",
+        name="Mistral Large 3",
+        family="Mistral",
+        provider="mistral",
+        context_tokens=128_000,
+        input_per_mtok=0.50,
+        output_per_mtok=1.50,
+        speed="balanced",
+        roles=(CONVERSATION, EXTRACTION),
+        tagline="Mistral's flagship, and still inexpensive.",
+    ),
+    ModelSpec(
+        id="openai/gpt-5-mini",
+        name="GPT-5 mini (via OpenRouter)",
+        family="GPT-5",
+        provider="openrouter",
+        reasoning=True,
+        context_tokens=400_000,
+        input_per_mtok=0.25,
+        output_per_mtok=2.00,
+        speed="fast",
+        roles=(CONVERSATION, EXTRACTION),
+        tagline="OpenRouter passes through the underlying list price.",
+    ),
+    ModelSpec(
+        id="google/gemini-2.5-flash-lite",
+        name="Gemini 2.5 Flash Lite (via OpenRouter)",
+        family="Gemini",
+        provider="openrouter",
+        context_tokens=1_048_576,
+        input_per_mtok=0.10,
+        output_per_mtok=0.40,
+        speed="fastest",
+        roles=(CONVERSATION,),
+        tagline="OpenRouter passes through the underlying list price.",
+    ),
+    ModelSpec(
+        id="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        name="Llama 3.3 70B Turbo",
+        family="Llama",
+        provider="together",
+        context_tokens=131_072,
+        input_per_mtok=None,
+        output_per_mtok=None,
+        speed="fast",
+        roles=(CONVERSATION, EXTRACTION),
+        tagline="Popular on Together. Price not confirmed — set it on the provider.",
+    ),
+    ModelSpec(
+        id="accounts/fireworks/models/llama-v3p3-70b-instruct",
+        name="Llama 3.3 70B",
+        family="Llama",
+        provider="fireworks",
+        context_tokens=131_072,
+        input_per_mtok=None,
+        output_per_mtok=None,
+        speed="fast",
+        roles=(CONVERSATION, EXTRACTION),
+        tagline="Popular on Fireworks. Price not confirmed — set it on the provider.",
+    ),
+    ModelSpec(
+        id="grok-4",
+        name="Grok 4",
+        family="Grok",
+        provider="xai",
+        context_tokens=256_000,
+        input_per_mtok=None,
+        output_per_mtok=None,
+        speed="balanced",
+        roles=(CONVERSATION, EXTRACTION),
+        tagline="xAI's flagship. Price not confirmed — set it on the provider.",
     ),
 ]
 
@@ -369,6 +619,26 @@ PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
         "extraction_model": "gemini-3.6-flash",
         "extraction_effort": "high",
     },
+    # A non-reasoning model on the line, where a reasoning pass is dead air,
+    # and a reasoning one for extraction, where it is what you pay for.
+    "openai": {
+        "conversation_model": "gpt-4.1-mini",
+        "conversation_effort": "low",
+        "extraction_model": "gpt-5-mini",
+        "extraction_effort": "high",
+    },
+    "groq": {
+        "conversation_model": "llama-3.3-70b-versatile",
+        "conversation_effort": "low",
+        "extraction_model": "llama-3.3-70b-versatile",
+        "extraction_effort": "high",
+    },
+    "openrouter": {
+        "conversation_model": "google/gemini-2.5-flash-lite",
+        "conversation_effort": "low",
+        "extraction_model": "openai/gpt-5-mini",
+        "extraction_effort": "high",
+    },
 }
 
 
@@ -377,9 +647,39 @@ def active_defaults() -> dict[str, str]:
     return PROVIDER_DEFAULTS.get(active_id(), DEFAULTS)
 
 
-def default_model(role: str) -> str:
+def _kind(provider) -> str:
+    """The preset id of a ProviderSpec or providers.Provider (or a bare string)."""
+    if provider is None:
+        return active_id()
+    if isinstance(provider, str):
+        return provider
+    return getattr(provider, "kind", None) or provider.id
+
+
+def models_for_kind(kind: str) -> list[ModelSpec]:
+    return [m for m in MODELS if m.provider == kind]
+
+
+def default_model(role: str, provider=None) -> str:
+    """The default model for `role` on `provider` (the env provider if None).
+
+    A preset with its own defaults uses them; otherwise the first catalog
+    model offered for the role, then the provider's first custom model.
+    Empty only for a provider nobody has told us any model of — an
+    OpenAI-compatible server with no custom models — where there is nothing
+    honest to guess.
+    """
     key = "conversation_model" if role == CONVERSATION else "extraction_model"
-    return active_defaults()[key]
+    if provider is None:
+        return active_defaults()[key]
+    kind = _kind(provider)
+    if kind in PROVIDER_DEFAULTS:
+        return PROVIDER_DEFAULTS[kind][key]
+    for spec in models_for_kind(kind):
+        if role in spec.roles:
+            return spec.id
+    custom = getattr(provider, "custom_models", ()) or ()
+    return str(custom[0].get("id") or "") if custom else ""
 
 
 def models_for_active() -> list[ModelSpec]:
@@ -388,7 +688,50 @@ def models_for_active() -> list[ModelSpec]:
     return [m for m in MODELS if m.provider == provider] if provider else MODELS
 
 
-def resolve(model_id: str | None, role: str) -> str:
+def model_price(model_id: str | None, provider=None) -> tuple[float | None, float | None]:
+    """(input, output) USD per 1M tokens, from the catalog or the provider's
+    custom models. None where unknown — never 0 for "we don't know"."""
+    spec = MODELS_BY_ID.get(model_id or "")
+    if spec is not None:
+        return spec.input_per_mtok, spec.output_per_mtok
+    custom = provider.custom_model(model_id) if hasattr(provider, "custom_model") else None
+    if custom:
+        return _price(custom.get("input_per_mtok")), _price(custom.get("output_per_mtok"))
+    return None, None
+
+
+def _price(value) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve(model_id: str | None, role: str, provider=None) -> str:
+    """Return a usable model id for `role` on `provider`, else the role default.
+
+    With a provider (a campaign's own, v3): a catalog model of that provider
+    offered for the role runs as asked; a catalog model of a *different*
+    provider, or offered for the other role, falls back; and an id the
+    catalog doesn't know — a custom model, or one discovered from the
+    provider's model list — is taken at its word, since the provider is the
+    only one who can say whether it exists.
+
+    Without one, the pre-v3 rules below apply against the env provider.
+    """
+    if provider is not None:
+        kind = _kind(provider)
+        spec = MODELS_BY_ID.get(model_id or "")
+        if spec is not None:
+            if spec.provider == kind and role in spec.roles:
+                return spec.id
+        elif model_id:
+            return model_id
+        return default_model(role, provider) or (model_id or "")
+    return _resolve_env(model_id, role)
+
+
+def _resolve_env(model_id: str | None, role: str) -> str:
     """Return a usable model id for `role`, falling back to the role default.
 
     A model removed from the catalog, assigned to a role it isn't offered
@@ -418,7 +761,7 @@ def resolve_for_pricing(model_id: str | None, role: str) -> str:
     number, which is the one outcome that makes a comparison tool useless.
     """
     spec = MODELS_BY_ID.get(model_id or "")
-    if spec and role in spec.roles:
+    if spec and role in spec.roles and spec.priced:
         return spec.id
     return default_model(role)
 
@@ -443,6 +786,8 @@ class TokenUsage:
     """
 
     by_model: dict[str, dict[str, int]] = field(default_factory=dict)
+    # USD per 1M (input, output) for models outside the catalog. See set_price.
+    prices: dict[str, tuple[float, float]] = field(default_factory=dict)
 
     def add(
         self,
@@ -508,6 +853,7 @@ class TokenUsage:
         )
 
     def merge(self, other: "TokenUsage") -> None:
+        self.prices.update(other.prices)
         for model, bucket in other.by_model.items():
             self.add(
                 model,
@@ -543,15 +889,29 @@ class TokenUsage:
         total = 0.0
         for model, bucket in self.by_model.items():
             spec = MODELS_BY_ID.get(model)
-            if spec is None:
-                continue
+            if spec is not None and spec.priced:
+                rates = (spec.input_per_mtok, spec.output_per_mtok,
+                         spec.cache_read_per_mtok, spec.cache_write_per_mtok)
+            elif model in self.prices:
+                # A custom model with the price its provider row carries.
+                # Cache reads are billed at the input rate: we don't know the
+                # discount, and overstating our own bill is the right way round.
+                given_in, given_out = self.prices[model]
+                rates = (given_in, given_out, given_in, given_in)
+            else:
+                continue  # unpriced: the ledger is a floor, never a guess
             total += (
-                bucket["input"] * spec.input_per_mtok
-                + bucket["output"] * spec.output_per_mtok
-                + bucket["cache_read"] * spec.cache_read_per_mtok
-                + bucket["cache_write"] * spec.cache_write_per_mtok
+                bucket["input"] * rates[0]
+                + bucket["output"] * rates[1]
+                + bucket["cache_read"] * rates[2]
+                + bucket["cache_write"] * rates[3]
             ) / 1_000_000
         return round(total, 6)
+
+    def set_price(self, model: str, input_per_mtok: float | None, output_per_mtok: float | None) -> None:
+        """Price a model the catalog doesn't know, from its provider's custom models."""
+        if input_per_mtok is not None and output_per_mtok is not None:
+            self.prices[model] = (input_per_mtok, output_per_mtok)
 
     def to_dict(self) -> dict:
         return {
@@ -669,6 +1029,118 @@ def estimate_campaign(
         "connected_calls": connected,
         "total_cost_usd": round(total, 4),
         "cost_per_connected_call_usd": per_call["cost_per_call_usd"],
+    }
+
+
+# --------------------------------------------------------------------------
+# Whole-call estimate: the model, the voice, and the phone line
+# --------------------------------------------------------------------------
+#
+# The LLM is the smallest line on a call's bill (docs/research.md §6.2: under
+# a rupee a minute on a flash-class model). Speech and the phone line are
+# most of it, so an estimate that priced only tokens would be off by 5-10x.
+# Rates and per-minute shapes from docs/research.md §6.1 and §6.3.
+
+LLM_INPUT_TOKENS_PER_MINUTE = 12_000   # system + growing history, re-sent every turn
+LLM_OUTPUT_TOKENS_PER_MINUTE = 200     # ~4 spoken turns of 40-50 tokens
+EXTRACTION_INPUT_TOKENS = 4_000
+EXTRACTION_OUTPUT_TOKENS = 400
+TTS_CHARS_PER_MINUTE = 500             # the agent speaks about half the call
+USD_PER_INR = 1 / 96
+
+# USD per minute of conversation.
+STT_PER_MINUTE = 30 / 60 * USD_PER_INR                           # Sarvam, ₹30/hour
+TTS_PER_MINUTE = TTS_CHARS_PER_MINUTE * 30 / 10_000 * USD_PER_INR  # Bulbul v3, ₹30/10k chars
+TELEPHONY_PER_MINUTE = {
+    "IN": 0.0496,  # Twilio outbound to Indian mobiles
+    "US": 0.014,   # Twilio outbound, US
+}
+
+ESTIMATE_COMPONENTS = ("llm", "extraction", "stt", "tts", "telephony")
+
+
+def _cost(tokens_in: int, tokens_out: int, price: tuple[float | None, float | None]) -> float | None:
+    rate_in, rate_out = price
+    if rate_in is None or rate_out is None:
+        return None
+    return (tokens_in * rate_in + tokens_out * rate_out) / 1_000_000
+
+
+def estimate_breakdown(
+    *,
+    conversation_model: str,
+    extraction_model: str,
+    conversation_price: tuple[float | None, float | None],
+    extraction_price: tuple[float | None, float | None],
+    language: str = "en",
+    minutes_per_call: float = 3.0,
+    calls: int = 1000,
+    telephony_region: str = "IN",
+    include_voice: bool = True,
+) -> dict:
+    """What one call and N calls cost, component by component.
+
+    A component with no known price is null and named in `unknown`, and then
+    so are the totals: a total that silently left the LLM out would read as
+    a real number and be wrong by exactly the part nobody could see.
+    """
+    minutes = max(0.0, float(minutes_per_call))
+    region = telephony_region if telephony_region in TELEPHONY_PER_MINUTE else "IN"
+
+    llm = _cost(
+        round(LLM_INPUT_TOKENS_PER_MINUTE * minutes),
+        round(LLM_OUTPUT_TOKENS_PER_MINUTE * minutes),
+        conversation_price,
+    )
+    extraction = _cost(EXTRACTION_INPUT_TOKENS, EXTRACTION_OUTPUT_TOKENS, extraction_price)
+    per_call: dict[str, float | None] = {
+        "llm": llm,
+        "extraction": extraction,
+        "stt": STT_PER_MINUTE * minutes if include_voice else 0.0,
+        "tts": TTS_PER_MINUTE * minutes if include_voice else 0.0,
+        "telephony": TELEPHONY_PER_MINUTE[region] * minutes,
+    }
+    unknown = [name for name in ESTIMATE_COMPONENTS if per_call[name] is None]
+    # Rounded before summing, so the parts shown add up to the total shown.
+    per_call = {k: (round(v, 6) if v is not None else None) for k, v in per_call.items()}
+    total = None if unknown else round(sum(per_call[name] for name in ESTIMATE_COMPONENTS), 6)
+    per_call["total"] = total
+
+    assumptions = [
+        f"{minutes:g} minutes per connected call.",
+        f"Conversation on {conversation_model or 'no model'}: "
+        f"{LLM_INPUT_TOKENS_PER_MINUTE:,} input and {LLM_OUTPUT_TOKENS_PER_MINUTE} output "
+        "tokens a minute, uncached. Prompt caching usually bills 70-90% of the input at "
+        "the cached rate, so this is a ceiling.",
+        f"One extraction per call on {extraction_model or 'no model'}: "
+        f"{EXTRACTION_INPUT_TOKENS:,} tokens in, {EXTRACTION_OUTPUT_TOKENS} out.",
+    ]
+    if include_voice:
+        assumptions += [
+            "Speech-to-text: Sarvam, ₹30 an hour, for the whole call.",
+            f"Text-to-speech: Sarvam Bulbul v3, ₹30 per 10,000 characters, "
+            f"{TTS_CHARS_PER_MINUTE} characters a minute ({language}).",
+        ]
+    else:
+        assumptions.append("Speech-to-text and text-to-speech left out.")
+    assumptions += [
+        "Telephony: Twilio outbound to Indian mobiles, $0.0496 a minute."
+        if region == "IN"
+        else "Telephony: Twilio outbound in the US, $0.014 a minute.",
+        "₹96 to the dollar. Unanswered calls cost only their ring time and are not counted.",
+    ]
+    for name in unknown:
+        model = conversation_model if name == "llm" else extraction_model
+        assumptions.append(f"No price is set for {model or 'the model'}, so the total is unknown.")
+
+    count = max(0, int(calls))
+    return {
+        "per_call": per_call,
+        "per_minute_total": round(total / minutes, 6) if total is not None and minutes else None,
+        "for_calls": {"calls": count, "total": round(total * count, 6) if total is not None else None},
+        "assumptions": assumptions,
+        "pricing_as_of": PRICING_AS_OF,
+        "unknown": unknown,
     }
 
 
