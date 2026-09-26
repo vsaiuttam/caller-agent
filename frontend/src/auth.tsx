@@ -221,6 +221,16 @@ export function canManageTeam(user: AuthUser | null): boolean {
   return user?.role === "owner" || user?.role === "admin";
 }
 
+/**
+ * Whether this session may do owner/admin things (providers, defaults,
+ * re-extraction). With sign-in off everyone is effectively the owner. The
+ * server enforces this anyway; the UI only avoids offering what it'd refuse.
+ */
+export function useCanAdmin(): boolean {
+  const { enabled, user } = useAuth();
+  return !enabled || !user || canManageTeam(user);
+}
+
 export const ROLE_LABEL: Record<AuthUser["role"], string> = {
   owner: "Owner",
   admin: "Admin",

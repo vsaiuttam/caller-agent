@@ -63,6 +63,16 @@
   --color-ramp-4: #f9c08f;
   --color-ramp-5: #fcddc0;
 
+  /* Categorical series (identity, fixed order: cost breakdowns). Checked with
+     the dataviz validator: lightness band, chroma, CVD >= 8 adjacent, normal
+     vision >= 15. Three sit under 3:1 on white, so every chart that uses them
+     labels each segment with its name and value beside it. */
+  --color-series-1: #c2410c;
+  --color-series-2: #2a78d6;
+  --color-series-3: #1baf7a;
+  --color-series-4: #eda100;
+  --color-series-5: #e87ba4;
+
   /* Type */
   --font-sans: "Geist", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans Devanagari", sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
@@ -152,6 +162,12 @@
   --color-ramp-3: #b8531f;
   --color-ramp-4: #8a3f19;
   --color-ramp-5: #5e2d14;
+
+  --color-series-1: #d95926;
+  --color-series-2: #3987e5;
+  --color-series-3: #199e70;
+  --color-series-4: #c98500;
+  --color-series-5: #d55181;
 
   --elev-1: 0 1px 2px rgb(0 0 0 / 0.4);
   --elev-2: 0 8px 20px -6px rgb(0 0 0 / 0.55), 0 2px 4px -2px rgb(0 0 0 / 0.4);

@@ -43,7 +43,7 @@ import {
   IconTrendDown,
   IconTrendUp,
 } from "./icons";
-import { Tooltip } from "./overlay";
+import { Dialog, Tooltip } from "./overlay";
 import { toast } from "./toast";
 import { rise } from "../motion";
 
@@ -1005,6 +1005,90 @@ export function CodeBlock({
         />
       )}
     </div>
+  );
+}
+
+/** A section inside a page: title, one line of context, and its actions. */
+export function SectionHeader({
+  title,
+  description,
+  action,
+  className = "",
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  action?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cx("mb-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-2", className)}>
+      <div className="min-w-0">
+        <h2 className="text-base font-semibold tracking-tight text-ink">{title}</h2>
+        {description && <p className="mt-0.5 max-w-2xl text-xs leading-relaxed text-ink-muted">{description}</p>}
+      </div>
+      {action && <div className="flex flex-wrap items-center gap-2">{action}</div>}
+    </div>
+  );
+}
+
+/**
+ * A feature the backend doesn't serve yet (its endpoint answered 404). Says so
+ * plainly instead of failing, so the console works against an older server.
+ */
+export function NotAvailable({
+  title = "Not available on this server yet",
+  children,
+  className = "",
+}: {
+  title?: ReactNode;
+  children?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <Callout tone="info" title={title} className={className}>
+      {children ?? "This part of the console needs a newer backend. Everything else keeps working."}
+    </Callout>
+  );
+}
+
+/** Every destructive action goes through this: say what goes, then do it. */
+export function ConfirmDialog({
+  open,
+  onClose,
+  onConfirm,
+  title,
+  description,
+  confirmLabel,
+  busy = false,
+  tone = "danger",
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  title: ReactNode;
+  description?: ReactNode;
+  confirmLabel: string;
+  busy?: boolean;
+  tone?: "danger" | "primary";
+}) {
+  return (
+    <Dialog
+      open={open}
+      onClose={busy ? () => {} : onClose}
+      title={title}
+      description={description}
+      size="sm"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant={tone} onClick={onConfirm} loading={busy} data-autofocus>
+            {confirmLabel}
+          </Button>
+        </>
+      }
+    />
   );
 }
 

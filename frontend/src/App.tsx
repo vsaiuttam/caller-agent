@@ -34,7 +34,7 @@ const Simulator = lazy(() => import("./pages/Simulator"));
 const PhoneTest = lazy(() => import("./pages/PhoneTest"));
 const LiveMic = lazy(() => import("./pages/LiveMic"));
 const Templates = lazy(() => import("./pages/Templates"));
-const Models = lazy(() => import("./pages/Models"));
+const AiModels = lazy(() => import("./pages/AiModels"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Suppressions = lazy(() => import("./pages/Suppressions"));
 const NotFound = lazy(() => import("./pages/NotFound"));
@@ -64,7 +64,8 @@ export default function App() {
             </Route>
             <Route path="simulator" element={<Moved to={`${APP}/test-lab`} />} />
             <Route path="templates" element={<Templates />} />
-            <Route path="models" element={<Models />} />
+            <Route path="ai-models" element={<AiModels />} />
+            <Route path="models" element={<Moved to={`${APP}/ai-models`} />} />
             <Route path="settings" element={<Settings />} />
             <Route path="suppressions" element={<Suppressions />} />
             <Route path="*" element={<NotFound />} />

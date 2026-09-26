@@ -55,7 +55,7 @@ export const NAV_GROUPS: Array<{ heading?: string; items: NavItem[] }> = [
   {
     heading: "Configure",
     items: [
-      { to: "/app/models", label: "Models", hint: "Pick the LLMs and see the cost", key: "m", icon: (s) => <IconChip size={s} /> },
+      { to: "/app/ai-models", label: "AI models", hint: "Providers, defaults and what a call costs", key: "m", icon: (s) => <IconChip size={s} /> },
       { to: "/app/settings", label: "Settings", hint: "Connected apps, services and team", key: "i", icon: (s) => <IconSettings size={s} /> },
       { to: "/app/suppressions", label: "Do not call", hint: "Numbers never dialled", key: "d", icon: (s) => <IconBlock size={s} /> },
     ],
