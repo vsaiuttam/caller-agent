@@ -143,7 +143,7 @@ export function ConnectedApps({
           </ul>
           <p className="text-xs text-ink-muted">
             Connecting an app doesn't hand it to every call — each campaign chooses its tools on its own page.{" "}
-            <Link to="/campaigns" className="font-medium text-brand hover:underline">
+            <Link to="/app/campaigns" className="font-medium text-brand hover:underline">
               Go to campaigns
             </Link>
           </p>

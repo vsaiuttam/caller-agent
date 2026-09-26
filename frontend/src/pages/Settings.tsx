@@ -1,15 +1,17 @@
 /**
- * Integrations, in two tabs:
+ * Settings, in up to three tabs:
  *
  *   Connected apps  the user's own MCP servers — the tools the agent can use
  *                   (?connect=1 opens the connect dialog)
  *   Services        what this deployment is wired to, configured with
  *                   environment variables on the server (?tab=services)
+ *   Team            people and invites (?tab=team) — owner and admin only, and
+ *                   only on a backend with accounts
  */
 
 import { useEffect, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useAuth } from "../auth";
+import { canManageTeam, useAuth } from "../auth";
 import {
   IconBlock,
   IconCalendar,
@@ -25,15 +27,24 @@ import {
   IconRefresh,
   IconSettings,
   IconShield,
+  IconUsers,
   IconWhisper,
 } from "../components/icons";
 import type { ConnectIntent } from "../components/mcp/ConnectDialog";
 import { ConnectedApps } from "../components/mcp/ConnectedApps";
+import { Team } from "../components/team/Team";
 import { Badge, Button, Callout, Card, CardHeader, ErrorNote, Page, PageHeader, Skeleton, Stat, Tabs, cx } from "../components/ui";
 import { useHealth } from "../data";
 import { useDocumentTitle } from "../hooks";
 
-type Tab = "apps" | "services";
+type Tab = "apps" | "services" | "team";
+
+const DESCRIPTION: Record<Tab, string> = {
+  apps: "Connect your own apps over MCP, so the agent can look things up during a call and record the outcome after it.",
+  services:
+    "What this deployment is connected to. Everything is configured with environment variables on the server, then a restart.",
+  team: "Who can sign in, and invites for new people.",
+};
 
 interface Integration {
   key: string;
@@ -135,10 +146,13 @@ const GROUPS: Array<{ title: string; subtitle: string; items: Integration[] }> =
 ];
 
 export default function Settings() {
-  useDocumentTitle("Integrations");
   const { reload } = useHealth();
+  const auth = useAuth();
   const [params, setParams] = useSearchParams();
-  const tab: Tab = params.get("tab") === "services" ? "services" : "apps";
+  const teamAvailable = auth.registration !== null && canManageTeam(auth.user);
+  const requested = params.get("tab");
+  const tab: Tab = requested === "services" ? "services" : requested === "team" && teamAvailable ? "team" : "apps";
+  useDocumentTitle(tab === "team" ? "Team" : "Settings");
   const [connect, setConnect] = useState<ConnectIntent | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -170,14 +184,10 @@ export default function Settings() {
     <Page>
       <PageHeader
         icon={<IconSettings size={18} />}
-        title="Integrations"
-        description={
-          tab === "apps"
-            ? "Connect your own apps over MCP, so the agent can look things up during a call and record the outcome after it."
-            : "What this deployment is connected to. Everything is configured with environment variables on the server, then a restart."
-        }
+        title="Settings"
+        description={DESCRIPTION[tab]}
         actions={
-          tab === "apps" ? (
+          tab === "team" ? undefined : tab === "apps" ? (
             <Button icon={<IconPlus size={14} />} onClick={() => setConnect("pick")}>
               Connect an app
             </Button>
@@ -190,7 +200,7 @@ export default function Settings() {
       />
 
       <Tabs
-        label="Integrations"
+        label="Settings"
         value={tab}
         onChange={setTab}
         className="mb-5"
@@ -205,11 +215,18 @@ export default function Settings() {
             icon: <IconPlug size={15} />,
           },
           { value: "services", label: "Services", icon: <IconSettings size={15} /> },
+          ...(teamAvailable ? [{ value: "team" as const, label: "Team", icon: <IconUsers size={15} /> }] : []),
         ]}
       />
 
-      <div role="tabpanel" aria-label={tab === "apps" ? "Connected apps" : "Services"}>
-        {tab === "apps" ? <ConnectedApps connect={connect} onConnect={setConnect} /> : <Services onRetry={refresh} />}
+      <div role="tabpanel" aria-label={tab === "apps" ? "Connected apps" : tab === "team" ? "Team" : "Services"}>
+        {tab === "apps" ? (
+          <ConnectedApps connect={connect} onConnect={setConnect} />
+        ) : tab === "team" ? (
+          <Team />
+        ) : (
+          <Services onRetry={refresh} />
+        )}
       </div>
     </Page>
   );
@@ -264,12 +281,25 @@ function Services({ onRetry }: { onRetry: () => void }) {
                 <IconShield size={16} />
               </span>
               <div className="min-w-0 flex-1 text-sm">
-                <p className="font-medium text-ink">{authOn ? "Password protected" : "Open to anyone with the link"}</p>
+                <p className="font-medium text-ink">{authOn ? "Sign-in required" : "Open to anyone with the link"}</p>
                 <p className="mt-0.5 text-xs leading-relaxed text-ink-secondary">
                   {authOn
                     ? "Every API call and live stream needs a session. Sessions expire after AUTH_TOKEN_TTL_HOURS (12 by default)."
-                    : "Set ADMIN_PASSWORD on the server and restart to require a password. Optionally set AUTH_SECRET to keep sessions valid across password changes."}
+                    : health.accounts
+                      ? "Create the owner account (or set ADMIN_PASSWORD on the server) to require a sign-in."
+                      : "Set ADMIN_PASSWORD on the server and restart to require a password. Optionally set AUTH_SECRET to keep sessions valid across password changes."}
                 </p>
+                {health.accounts && (
+                  <p className="mt-1.5 text-xs text-ink-muted">
+                    {health.accounts.users === 1 ? "1 account" : `${health.accounts.users} accounts`}. New people join by{" "}
+                    {health.accounts.registration_mode === "open"
+                      ? "registering (open)"
+                      : health.accounts.registration_mode === "closed"
+                        ? "nothing: registration is closed"
+                        : "invite"}
+                    . Set REGISTRATION_MODE to change it.
+                  </p>
+                )}
               </div>
               <Badge tone={authOn ? "good" : "warning"}>{authOn ? "On" : "Off"}</Badge>
             </div>

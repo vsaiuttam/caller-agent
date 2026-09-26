@@ -26,9 +26,9 @@ export interface TestLabContext {
 export const useTestLab = () => useOutletContext<TestLabContext>();
 
 const TABS = [
-  { to: "/test-lab", label: "Simulated caller", icon: <IconSparkle size={15} />, end: true },
-  { to: "/test-lab/phone", label: "Call a phone", icon: <IconPhone size={15} />, end: false },
-  { to: "/test-lab/mic", label: "Browser mic", icon: <IconMic size={15} />, end: false },
+  { to: "/app/test-lab", label: "Simulated caller", icon: <IconSparkle size={15} />, end: true },
+  { to: "/app/test-lab/phone", label: "Call a phone", icon: <IconPhone size={15} />, end: false },
+  { to: "/app/test-lab/mic", label: "Browser mic", icon: <IconMic size={15} />, end: false },
 ];
 
 export default function TestLab() {
@@ -99,7 +99,7 @@ export function CampaignField({ disabled = false }: { disabled?: boolean }) {
       <div className="rounded-lg border border-dashed border-line-strong px-4 py-4 text-center">
         <p className="text-sm font-medium text-ink">No campaigns yet</p>
         <p className="mt-1 text-xs text-ink-muted">Tests run against a campaign's prompt and models.</p>
-        <ButtonLink to="/templates" size="sm" className="mt-3">
+        <ButtonLink to="/app/templates" size="sm" className="mt-3">
           Start from a template
         </ButtonLink>
       </div>

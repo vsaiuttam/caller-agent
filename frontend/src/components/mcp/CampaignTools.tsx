@@ -100,7 +100,7 @@ export function CampaignToolsCard({
         title="No connected apps yet"
         hint="Connect your CRM, calendar or helpdesk under Integrations — or the built-in Demo CRM — then choose here what this campaign's agent may use."
         action={
-          <ButtonLink to="/settings?connect=1" size="sm" icon={<IconPlug size={13} />}>
+          <ButtonLink to="/app/settings?connect=1" size="sm" icon={<IconPlug size={13} />}>
             Connect an app
           </ButtonLink>
         }
@@ -194,7 +194,7 @@ function ToolChoiceEditor({
       {catalog.length === 0 && (
         <p className="rounded-lg border border-dashed border-line-strong px-4 py-3 text-xs leading-relaxed text-ink-muted">
           None of your connected apps is available right now — they're turned off or failing. Check them under{" "}
-          <Link to="/settings" className="font-medium text-brand hover:underline">
+          <Link to="/app/settings" className="font-medium text-brand hover:underline">
             Integrations
           </Link>
           .

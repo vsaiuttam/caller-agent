@@ -199,7 +199,7 @@ export function CallConsole({
       {terminal && (
         <div className="flex justify-end">
           <Link
-            to={`/calls?call=${callId}`}
+            to={`/app/calls?call=${callId}`}
             className="inline-flex items-center gap-1.5 rounded-md text-xs font-medium text-brand hover:underline"
           >
             Open in the call log <IconArrowRight size={13} />
@@ -443,7 +443,7 @@ function WhisperBox({ callId, onSent }: { callId: string; onSent: (text: string)
             }
           }}
           placeholder="Whisper to the agent — e.g. “Offer the Tuesday 4 pm slot”"
-          className="block max-h-28 min-h-9 w-full resize-none rounded-md border border-line-strong bg-surface px-3 py-2 text-sm leading-snug text-ink placeholder:text-ink-muted/80 focus:border-info focus:outline-none focus:ring-3 focus:ring-info/20"
+          className="block max-h-28 min-h-9 w-full resize-none rounded-md border border-line-control bg-surface px-3 py-2 text-sm leading-snug text-ink placeholder:text-ink-muted focus:border-info focus:outline-none focus:ring-3 focus:ring-info/20"
         />
       </label>
       <span className={cx("tnum mb-2.5 hidden text-2xs sm:block", text.length > WHISPER_MAX * 0.9 ? "text-warning" : "text-ink-muted")}>

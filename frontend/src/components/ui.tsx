@@ -105,7 +105,7 @@ export function PageHeader({
       {back && (
         <Link
           to={back.to}
-          className="mb-3 inline-flex items-center gap-1.5 rounded-md text-xs font-medium text-ink-muted transition-colors hover:text-ink"
+          className="-my-1 mb-2 inline-flex items-center gap-1.5 rounded-md py-1 text-xs font-medium text-ink-muted transition-colors hover:text-ink"
         >
           <IconArrowLeft size={13} /> {back.label}
         </Link>
@@ -194,7 +194,8 @@ const BUTTON_VARIANT: Record<ButtonVariant, string> = {
 
 const BUTTON_SIZE: Record<ButtonSize, string> = {
   sm: "h-8 gap-1.5 px-2.5 text-xs",
-  md: "h-9 gap-2 px-3.5 text-sm",
+  // 40px on phones (touch), 36px from 640px up.
+  md: "h-10 gap-2 px-3.5 text-sm sm:h-9",
   lg: "h-11 gap-2 px-5 text-sm",
 };
 
@@ -292,7 +293,7 @@ export function IconButton({
       aria-label={label}
       className={cx(
         buttonClass(variant, size),
-        size === "sm" ? "h-8 w-8 !px-0" : "h-9 w-9 !px-0",
+        size === "sm" ? "h-8 w-8 !px-0" : "h-10 w-10 !px-0 sm:h-9 sm:w-9",
         className,
       )}
       {...rest}
@@ -323,10 +324,15 @@ export function Spinner({ size = 14 }: { size?: number }) {
 // Form controls
 // ---------------------------------------------------------------------------
 
+/**
+ * Text fields. The border is `line-control` (3.5:1, WCAG 1.4.11) rather than a
+ * hairline, placeholders use full-strength muted ink (6:1), and phones get
+ * 16px text (see index.css) so iOS never zooms on focus.
+ */
 export const inputClass = cx(
-  "w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink",
-  "placeholder:text-ink-muted/80 transition-[border-color,box-shadow] duration-150",
-  "hover:border-ink-muted/60 focus:border-brand focus:outline-none focus:ring-3 focus:ring-brand/20",
+  "w-full rounded-md border border-line-control bg-surface px-3 text-sm text-ink",
+  "placeholder:text-ink-muted transition-[border-color,box-shadow] duration-150",
+  "hover:border-ink-secondary focus:border-brand focus:outline-none focus:ring-3 focus:ring-brand/20",
   "disabled:cursor-not-allowed disabled:opacity-60 aria-invalid:border-critical",
 );
 
@@ -394,7 +400,7 @@ export function Input({
   ref,
   ...rest
 }: InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> }) {
-  return <input ref={ref} className={cx(inputClass, "h-9", className)} {...rest} />;
+  return <input ref={ref} className={cx(inputClass, "h-10 sm:h-9", className)} {...rest} />;
 }
 
 /**
@@ -418,7 +424,7 @@ export function SecretInput({
         spellCheck={false}
         data-1p-ignore
         data-lpignore="true"
-        className={cx(inputClass, "h-9 pr-10 font-mono text-[0.8125rem]")}
+        className={cx(inputClass, "h-10 pr-10 font-mono text-[0.8125rem] sm:h-9")}
         {...rest}
       />
       <button
@@ -449,7 +455,7 @@ export function Select({
 }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <span className={cx("relative block", className)}>
-      <select className={cx(inputClass, "h-9 cursor-pointer appearance-none pr-9")} {...rest}>
+      <select className={cx(inputClass, "h-10 cursor-pointer appearance-none pr-9 sm:h-9")} {...rest}>
         {children}
       </select>
       <IconChevronDown
@@ -493,14 +499,15 @@ export function Switch({
         disabled={disabled}
         onClick={() => onChange(!checked)}
         className={cx(
-          "relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors duration-200",
-          checked ? "border-brand bg-brand" : "border-line-strong bg-subtle-strong",
+          "relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors duration-200",
+          // Off-state edge at 3:1 so the control is findable without colour.
+          checked ? "border-brand bg-brand" : "border-line-control bg-subtle-strong",
         )}
       >
         <span
           className={cx(
-            "inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-[var(--ease-out)]",
-            checked ? "translate-x-[17px]" : "translate-x-[1px]",
+            "inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ease-[var(--ease-out)]",
+            checked ? "translate-x-[21px]" : "translate-x-[1px]",
           )}
         />
       </button>

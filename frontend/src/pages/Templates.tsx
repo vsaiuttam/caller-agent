@@ -39,7 +39,7 @@ export default function Templates() {
     return category === "All" ? all : all.filter((t) => t.category === category);
   }, [catalog.data, category]);
 
-  const use = (template: CampaignTemplate) => navigate("/campaigns/new", { state: { template, language } });
+  const use = (template: CampaignTemplate) => navigate("/app/campaigns/new", { state: { template, language } });
 
   return (
     <Page width="wide">

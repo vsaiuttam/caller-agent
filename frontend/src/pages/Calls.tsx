@@ -286,7 +286,7 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
                       Clear filters
                     </Button>
                   ) : !reviewOnly ? (
-                    <ButtonLink to="/test-lab/phone" size="sm">
+                    <ButtonLink to="/app/test-lab/phone" size="sm">
                       Place a test call
                     </ButtonLink>
                   ) : undefined

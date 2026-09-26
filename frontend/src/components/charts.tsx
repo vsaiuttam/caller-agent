@@ -294,7 +294,10 @@ export function DonutChart({
   const label = (key: string) => OUTCOME_LABEL[key] ?? key.replace(/_/g, " ");
 
   return (
-    <div className="flex flex-col items-center gap-5 sm:flex-row">
+    // Lays out by the space the card gives it, not the viewport: at 1024px the
+    // outcomes card is narrow even though the screen is wide.
+    <div className="@container">
+    <div className="flex flex-col items-center gap-5 @xs:flex-row">
       <div className="relative shrink-0">
         <svg width="140" height="140" viewBox="0 0 140 140" role="img" aria-label="Outcome breakdown">
           <g transform="rotate(-90 70 70)">
@@ -331,7 +334,7 @@ export function DonutChart({
         </div>
       </div>
 
-      <ul className="w-full space-y-1.5">
+      <ul className="w-full min-w-0 space-y-1.5">
         {arcs.map((arc, i) => (
           <li
             key={arc.key}
@@ -350,6 +353,7 @@ export function DonutChart({
           </li>
         ))}
       </ul>
+    </div>
     </div>
   );
 }

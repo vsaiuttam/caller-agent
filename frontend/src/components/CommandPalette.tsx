@@ -11,7 +11,7 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, m } from "framer-motion";
 import { api, type Campaign } from "../api";
-import { useAuth } from "../auth";
+import { canManageTeam, useAuth, useSignOut } from "../auth";
 import { useTheme } from "../theme";
 import { T } from "../motion";
 import { NAV_ITEMS } from "./shell/nav";
@@ -25,6 +25,7 @@ import {
   IconPlus,
   IconSearch,
   IconSun,
+  IconUsers,
 } from "./icons";
 import { Kbd } from "./ui";
 
@@ -49,6 +50,7 @@ export default function CommandPalette({
   const navigate = useNavigate();
   const { theme, toggle } = useTheme();
   const auth = useAuth();
+  const signOut = useSignOut();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null);
@@ -78,9 +80,12 @@ export default function CommandPalette({
         group: "Go to",
         run: go(item.to),
       })),
-      { id: "a-new", label: "New campaign", hint: "Start from scratch", icon: <IconPlus size={15} />, group: "Actions", run: go("/campaigns/new") },
-      { id: "a-call", label: "Place a test call", hint: "Ring your own phone", icon: <IconPhone size={15} />, group: "Actions", run: go("/test-lab/phone") },
-      { id: "a-app", label: "Connect an app", hint: "Give the agent tools over MCP", icon: <IconPlug size={15} />, group: "Actions", run: go("/settings?connect=1") },
+      { id: "a-new", label: "New campaign", hint: "Start from scratch", icon: <IconPlus size={15} />, group: "Actions", run: go("/app/campaigns/new") },
+      { id: "a-call", label: "Place a test call", hint: "Ring your own phone", icon: <IconPhone size={15} />, group: "Actions", run: go("/app/test-lab/phone") },
+      { id: "a-app", label: "Connect an app", hint: "Give the agent tools over MCP", icon: <IconPlug size={15} />, group: "Actions", run: go("/app/settings?connect=1") },
+      ...(auth.registration !== null && canManageTeam(auth.user)
+        ? [{ id: "a-invite", label: "Invite a teammate", hint: "Team and invites", icon: <IconUsers size={15} />, group: "Actions", run: go("/app/settings?tab=team") }]
+        : []),
       {
         id: "a-theme",
         label: theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
@@ -91,7 +96,7 @@ export default function CommandPalette({
       },
       { id: "a-keys", label: "Keyboard shortcuts", hint: "?", icon: <IconKeyboard size={15} />, group: "Actions", run: onShowShortcuts },
       ...(auth.phase === "signed-in"
-        ? [{ id: "a-out", label: "Sign out", hint: "End this session", icon: <IconLogout size={15} />, group: "Actions", run: auth.signOut }]
+        ? [{ id: "a-out", label: "Sign out", hint: "End this session", icon: <IconLogout size={15} />, group: "Actions", run: signOut }]
         : []),
       ...(campaigns ?? []).map((c) => ({
         id: `c-${c.id}`,
@@ -99,13 +104,13 @@ export default function CommandPalette({
         hint: `${c.status} · ${c.total_contacts} contacts`,
         icon: <IconCampaign size={15} />,
         group: "Campaigns",
-        run: go(`/campaigns/${c.id}`),
+        run: go(`/app/campaigns/${c.id}`),
       })),
     ];
     const q = query.trim().toLowerCase();
     if (!q) return all;
     return all.filter((c) => c.label.toLowerCase().includes(q) || c.hint.toLowerCase().includes(q));
-  }, [campaigns, query, navigate, theme, toggle, onShowShortcuts, auth.phase, auth.signOut]);
+  }, [campaigns, query, navigate, theme, toggle, onShowShortcuts, auth.phase, auth.registration, auth.user, signOut]);
 
   const grouped = useMemo(() => {
     const groups = new Map<string, Command[]>();

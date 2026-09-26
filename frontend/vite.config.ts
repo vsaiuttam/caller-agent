@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -6,8 +7,18 @@ import tailwindcss from "@tailwindcss/vite";
 // popular — another project holding it shouldn't mean editing this file.
 const apiTarget = process.env.API_TARGET ?? "http://127.0.0.1:8000";
 
+// Build stamp for the console footer. The commit comes from whichever host
+// is building (Vercel, Render, GitHub Actions); locally it's simply absent.
+const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string };
+const sha = (process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.RENDER_GIT_COMMIT ?? process.env.GITHUB_SHA ?? "").slice(0, 7);
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    __BUILD_SHA__: JSON.stringify(sha),
+    __BUILD_DATE__: JSON.stringify(new Date().toISOString().slice(0, 10)),
+  },
   server: {
     port: 5173,
     proxy: {

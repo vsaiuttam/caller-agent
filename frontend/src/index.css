@@ -11,8 +11,11 @@
    values override the same variables under [data-theme="dark"]. index.html
    sets data-theme before first paint.
 
-   Contrast: every ink/status colour is ≥ 4.5:1 on `surface` and `plane` in
-   its own theme (WCAG AA for body text).
+   Contrast: every ink/status colour is ≥ 4.5:1 on `plane`, `surface`,
+   `subtle` and on its own 10-12% tint, in its own theme (WCAG AA for body
+   text). Hairlines (`line`, `line-strong`) are decorative; anything that
+   marks a control's edge uses `line-control` (≥ 3:1). Measured values and
+   the reasoning live in frontend/DESIGN.md.
    ========================================================================= */
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
@@ -25,17 +28,25 @@
   --color-subtle: #f1efeb;         /* hover fills, wells, chips */
   --color-subtle-strong: #e9e6e0;  /* pressed / selected fills */
   --color-line: #e5e2dc;           /* hairlines */
-  --color-line-strong: #d3cfc7;    /* input borders, hover borders */
+  --color-line-strong: #d3cfc7;    /* hover borders, button outlines */
+  --color-line-control: #8f887e;   /* input / switch edges — 3.5:1 on surface */
 
   /* Text */
   --color-ink: #1c1a17;
   --color-ink-secondary: #55514a;
-  --color-ink-muted: #6b665d;
+  --color-ink-muted: #655f56;
 
-  /* Brand — saffron. `on-brand` is the text colour that sits on it. */
-  --color-brand: #c2410c;
-  --color-brand-hover: #a8380a;
+  /* Brand — saffron. `on-brand` is the text colour that sits on it.
+     #b03b0b rather than #c2410c: the same hue, but brand text now clears
+     4.5:1 on its own tints (badges, active chips), and white on it is 6:1. */
+  --color-brand: #b03b0b;
+  --color-brand-hover: #983208;
   --color-on-brand: #ffffff;
+
+  /* The mark's gradient. Atmosphere only (logo, hero light): never text,
+     never a button or card fill. Same in both themes. */
+  --color-flame-1: #ffa24c;
+  --color-flame-2: #e8531f;
 
   /* Status. Always shipped with a label or icon, never colour alone. */
   --color-good: #13723a;
@@ -43,10 +54,10 @@
   --color-serious: #be123c;
   --color-critical: #b91c1c;
   --color-on-critical: #ffffff;
-  --color-info: #0e7490;
+  --color-info: #0b6780;
 
   /* Sequential ramp for charts, strongest first */
-  --color-ramp-1: #c2410c;
+  --color-ramp-1: #b03b0b;
   --color-ramp-2: #ea6a22;
   --color-ramp-3: #f59a55;
   --color-ramp-4: #f9c08f;
@@ -57,6 +68,18 @@
   --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --text-2xs: 0.6875rem;               /* 11px — micro labels, chips */
   --text-2xs--line-height: 1rem;
+
+  /* Marketing display sizes (landing, login). Weight 600, tracking tightens
+     as size grows; never bold, never gradient. */
+  --text-display-xl: clamp(2.375rem, 2.6vw + 1rem, 3.5rem);
+  --text-display-xl--line-height: 1.04;
+  --text-display-xl--letter-spacing: -0.035em;
+  --text-display-lg: clamp(1.875rem, 2.2vw + 1rem, 2.75rem);
+  --text-display-lg--line-height: 1.1;
+  --text-display-lg--letter-spacing: -0.03em;
+  --text-display-md: clamp(1.5rem, 1vw + 1rem, 1.75rem);
+  --text-display-md--line-height: 1.2;
+  --text-display-md--letter-spacing: -0.02em;
 
   /* Shape */
   --radius-sm: 0.375rem;   /* 6  — chips, kbd */
@@ -80,6 +103,7 @@
   --dur-fast: 150ms;
   --dur-base: 200ms;
   --dur-slow: 300ms;
+  --dur-reveal: 500ms;
 
   /* Elevation — soft, warm, layered */
   --elev-1: 0 1px 2px rgb(28 26 23 / 0.05), 0 1px 1px rgb(28 26 23 / 0.03);
@@ -87,7 +111,9 @@
   --elev-3: 0 24px 48px -12px rgb(28 26 23 / 0.22), 0 6px 16px -6px rgb(28 26 23 / 0.1);
 
   --overlay: rgb(28 26 23 / 0.36);
-  --selection: rgb(194 65 12 / 0.18);
+  --selection: rgb(176 59 11 / 0.18);
+  --glow-a: 30%;
+  --glow-b: 16%;
   --skeleton-a: #eeebe6;
   --skeleton-b: #f7f5f1;
 }
@@ -102,21 +128,24 @@
   --color-subtle-strong: #2c2a26;
   --color-line: #2a2825;
   --color-line-strong: #3b3834;
+  --color-line-control: #736d64;
 
   --color-ink: #f2efea;
   --color-ink-secondary: #bab4aa;
-  --color-ink-muted: #968f85;
+  --color-ink-muted: #9a938a;
 
   --color-brand: #fb8a3c;
   --color-brand-hover: #fda05e;
   --color-on-brand: #1a0d04;
 
-  --color-good: #4ade80;
-  --color-warning: #facc15;
+  /* Softer than Tailwind's 400s, which read as neon on near-black; all
+     still ≥ 7:1 on every dark surface. */
+  --color-good: #5bd08b;
+  --color-warning: #e9bf55;
   --color-serious: #fb7185;
   --color-critical: #f87171;
   --color-on-critical: #1f0707;
-  --color-info: #22d3ee;
+  --color-info: #5cc8dd;
 
   --color-ramp-1: #fb8a3c;
   --color-ramp-2: #e0692a;
@@ -130,6 +159,8 @@
 
   --overlay: rgb(0 0 0 / 0.6);
   --selection: rgb(251 138 60 / 0.28);
+  --glow-a: 16%;
+  --glow-b: 10%;
   --skeleton-a: #201e1b;
   --skeleton-b: #2a2825;
 }
@@ -159,6 +190,8 @@
   html {
     -webkit-text-size-adjust: 100%;
     -webkit-tap-highlight-color: transparent;
+    /* In-page anchors glide; the reduced-motion block below turns it off. */
+    scroll-behavior: smooth;
   }
 
   html, body {
@@ -184,8 +217,17 @@
 
   ::selection { background: var(--selection); color: var(--color-ink); }
 
-  button, [role="button"] { cursor: pointer; }
-  button:disabled { cursor: not-allowed; }
+  /* Headings wrap into balanced lines instead of leaving one word behind. */
+  h1, h2, h3 { text-wrap: balance; }
+  p { text-wrap: pretty; }
+
+  /* Everything clickable says so. */
+  button, [role="button"], [role="switch"], [role="tab"], [role="radio"], [role="option"],
+  a[href], summary, select, label[for],
+  input[type="checkbox"], input[type="radio"], input[type="file"], input[type="range"] {
+    cursor: pointer;
+  }
+  button:disabled, select:disabled, input:disabled { cursor: not-allowed; }
 
   * {
     scrollbar-width: thin;
@@ -231,6 +273,18 @@
   }
 
   .live-dot { animation: var(--animate-pulse-dot); }
+
+  /* Soft light from the mark's gradient, behind a hero visual or a closing
+     band. Pure atmosphere: aria-hidden, pointer-events none, no content. */
+  .flame-glow {
+    pointer-events: none;
+    background:
+      radial-gradient(42% 48% at 68% 38%, color-mix(in oklab, var(--color-flame-1) var(--glow-a), transparent), transparent 72%),
+      radial-gradient(38% 42% at 30% 72%, color-mix(in oklab, var(--color-flame-2) var(--glow-b), transparent), transparent 72%);
+  }
+
+  /* Anchor targets clear the sticky marketing header. */
+  .anchor-offset { scroll-margin-top: 5rem; }
 
   /* Data tables. Density is a data attribute so one toggle restyles rows. */
   .data-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.8125rem; }
@@ -290,6 +344,26 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Blur is only ever a layer cue (sticky bars, scrims). People who ask for
+   less transparency get the solid surface instead. */
+@media (prefers-reduced-transparency: reduce) {
+  .backdrop-blur-md, .backdrop-blur-sm, .backdrop-blur, .backdrop-blur-\[2px\] {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .bg-plane\/85, .bg-plane\/80 { background-color: var(--color-plane) !important; }
+}
+
+/* Phones: text fields at 16px so iOS Safari never zooms the page on focus.
+   Unlayered on purpose, so it beats `text-sm`/`text-xs` utilities. */
+@media (max-width: 639.98px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+  select,
+  textarea {
+    font-size: 1rem;
   }
 }
 

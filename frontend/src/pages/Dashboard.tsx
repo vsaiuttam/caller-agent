@@ -61,10 +61,10 @@ export default function Dashboard() {
         description="Rolling 24 hours, compared with the 24 before. Test calls are never counted."
         actions={
           <>
-            <ButtonLink to="/test-lab/phone" variant="secondary" icon={<IconPhone size={14} />}>
+            <ButtonLink to="/app/test-lab/phone" variant="secondary" icon={<IconPhone size={14} />}>
               Test call
             </ButtonLink>
-            <ButtonLink to="/campaigns/new" icon={<IconPlus size={14} />}>
+            <ButtonLink to="/app/campaigns/new" icon={<IconPlus size={14} />}>
               New campaign
             </ButtonLink>
           </>
@@ -126,7 +126,7 @@ export default function Dashboard() {
             subtitle="Last 24 hours"
             action={
               (s?.pending_review ?? 0) > 0 && (
-                <Link to="/review" className="flex items-center gap-1 text-xs font-medium text-warning hover:underline">
+                <Link to="/app/review" className="flex items-center gap-1 text-xs font-medium text-warning hover:underline">
                   <IconReview size={13} /> {s!.pending_review} to review
                 </Link>
               )
@@ -145,7 +145,7 @@ export default function Dashboard() {
             title="Recent calls"
             subtitle="The latest conversations, newest first"
             action={
-              <Link to="/calls" className="flex items-center gap-1 text-xs font-medium text-brand hover:underline">
+              <Link to="/app/calls" className="flex items-center gap-1 text-xs font-medium text-brand hover:underline">
                 View all <IconArrowRight size={12} />
               </Link>
             }
@@ -173,7 +173,7 @@ export default function Dashboard() {
                 <p className="tnum mt-1 text-2xl font-semibold text-ink">{s ? s.pending_review : "—"}</p>
                 <p className="mt-1 text-xs text-ink-muted">Outcomes the model wasn't sure enough to write.</p>
               </div>
-              <ButtonLink to="/review" size="sm" variant="secondary">
+              <ButtonLink to="/app/review" size="sm" variant="secondary">
                 Review
               </ButtonLink>
             </div>
@@ -247,7 +247,7 @@ function RecentCalls({
         compact
         title="No calls yet"
         hint="Start a campaign, or place a test call — conversations land here the moment they finish."
-        action={<ButtonLink to="/test-lab/phone" size="sm">Place a test call</ButtonLink>}
+        action={<ButtonLink to="/app/test-lab/phone" size="sm">Place a test call</ButtonLink>}
       />
     );
   }
@@ -265,9 +265,9 @@ function RecentCalls({
         </thead>
         <tbody>
           {calls.map((call) => (
-            <tr key={call.id} className="cursor-pointer" onClick={() => navigate(`/calls?call=${call.id}`)}>
+            <tr key={call.id} className="cursor-pointer" onClick={() => navigate(`/app/calls?call=${call.id}`)}>
               <td>
-                <Link to={`/calls?call=${call.id}`} className="flex items-center gap-2 font-medium text-ink hover:underline" onClick={(e) => e.stopPropagation()}>
+                <Link to={`/app/calls?call=${call.id}`} className="flex items-center gap-2 font-medium text-ink hover:underline" onClick={(e) => e.stopPropagation()}>
                   <span className="truncate">{call.contact_name}</span>
                   {call.is_simulation && <TestBadge />}
                 </Link>
@@ -302,7 +302,7 @@ function LiveStrip() {
           <span className="font-medium text-ink">Nobody's on the line.</span>{" "}
           <span className="hidden sm:inline">Calls appear here the moment they're dialled.</span>
         </p>
-        <Link to="/live" className="shrink-0 text-xs font-medium text-brand hover:underline">
+        <Link to="/app/live" className="shrink-0 text-xs font-medium text-brand hover:underline">
           Live view
         </Link>
       </Card>
@@ -317,13 +317,13 @@ function LiveStrip() {
             {calls.length}
           </Badge>
         </h2>
-        <Link to="/live" className="flex items-center gap-1 text-xs font-medium text-brand hover:underline">
+        <Link to="/app/live" className="flex items-center gap-1 text-xs font-medium text-brand hover:underline">
           Open Live <IconArrowRight size={12} />
         </Link>
       </div>
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {calls.slice(0, 6).map((call) => (
-          <LiveCallCard key={call.call_id} call={call} now={now} onSelect={() => navigate(`/live?call=${call.call_id}`)} />
+          <LiveCallCard key={call.call_id} call={call} now={now} onSelect={() => navigate(`/app/live?call=${call.call_id}`)} />
         ))}
       </div>
     </section>
@@ -342,7 +342,7 @@ interface Step {
 }
 
 /** Integrations → Services: where the environment-configured pieces are explained. */
-const SERVICES = "/settings?tab=services";
+const SERVICES = "/app/settings?tab=services";
 
 /** The first-run checklist, driven by /api/health and what exists already. */
 function Onboarding() {
@@ -377,7 +377,7 @@ function Onboarding() {
         title: "Create your first campaign",
         hint: "Start from a template in a minute",
         done: (campaigns.data?.length ?? 0) > 0,
-        to: "/templates",
+        to: "/app/templates",
         cta: "Browse templates",
       },
       // Only on backends that report connected apps.
@@ -391,7 +391,7 @@ function Onboarding() {
                 ? `${health.mcp_servers} connected`
                 : "Let the agent check calendars and update your CRM",
               done: health.mcp_servers > 0,
-              to: "/settings?connect=1",
+              to: "/app/settings?connect=1",
               cta: "Connect",
             },
           ]),
@@ -400,7 +400,7 @@ function Onboarding() {
         title: "Place a test call",
         hint: "Ring your own phone and watch it live",
         done: (tests.data ?? []).some((c) => c.is_simulation),
-        to: "/test-lab/phone",
+        to: "/app/test-lab/phone",
         cta: "Call me",
       },
       {
@@ -414,10 +414,13 @@ function Onboarding() {
       {
         id: "auth",
         title: "Lock the console",
-        hint: "Set ADMIN_PASSWORD so only your team can dial",
+        // With accounts, creating the owner account is the one-click way to lock it.
+        hint: health.accounts
+          ? "Create the owner account so only your team can dial"
+          : "Set ADMIN_PASSWORD so only your team can dial",
         done: health.auth_enabled ?? auth.phase === "signed-in",
-        to: SERVICES,
-        cta: "How",
+        to: health.accounts && health.accounts.users === 0 ? "/register" : SERVICES,
+        cta: health.accounts && health.accounts.users === 0 ? "Create" : "How",
       },
     ];
   }, [health, campaigns.data, campaigns.loading, tests.data, tests.loading, auth.phase]);

@@ -20,6 +20,8 @@ import {
 
 export interface NavItem {
   to: string;
+  /** Active only on an exact match (the overview is the prefix of every page). */
+  end?: boolean;
   label: string;
   hint: string;
   icon: (size: number) => ReactNode;
@@ -31,31 +33,31 @@ export interface NavItem {
 export const NAV_GROUPS: Array<{ heading?: string; items: NavItem[] }> = [
   {
     items: [
-      { to: "/dashboard", label: "Overview", hint: "Today at a glance", key: "o", icon: (s) => <IconDashboard size={s} /> },
+      { to: "/app", end: true, label: "Overview", hint: "Today at a glance", key: "o", icon: (s) => <IconDashboard size={s} /> },
     ],
   },
   {
     heading: "Operate",
     items: [
-      { to: "/campaigns", label: "Campaigns", hint: "Who to call and what to say", key: "p", icon: (s) => <IconCampaign size={s} /> },
-      { to: "/calls", label: "Calls", hint: "Every conversation, saved", key: "c", icon: (s) => <IconPhone size={s} /> },
-      { to: "/review", label: "Review queue", hint: "Outcomes that need a human", key: "r", icon: (s) => <IconReview size={s} />, badge: "review" },
-      { to: "/live", label: "Live", hint: "Calls on the line right now", key: "l", icon: (s) => <IconLive size={s} />, badge: "live" },
+      { to: "/app/campaigns", label: "Campaigns", hint: "Who to call and what to say", key: "p", icon: (s) => <IconCampaign size={s} /> },
+      { to: "/app/calls", label: "Calls", hint: "Every conversation, saved", key: "c", icon: (s) => <IconPhone size={s} /> },
+      { to: "/app/review", label: "Review queue", hint: "Outcomes that need a human", key: "r", icon: (s) => <IconReview size={s} />, badge: "review" },
+      { to: "/app/live", label: "Live", hint: "Calls on the line right now", key: "l", icon: (s) => <IconLive size={s} />, badge: "live" },
     ],
   },
   {
     heading: "Build",
     items: [
-      { to: "/test-lab", label: "Test lab", hint: "Rehearse before you dial", key: "t", icon: (s) => <IconFlask size={s} /> },
-      { to: "/templates", label: "Templates", hint: "Ready-made campaigns", key: "e", icon: (s) => <IconSparkle size={s} /> },
+      { to: "/app/test-lab", label: "Test lab", hint: "Rehearse before you dial", key: "t", icon: (s) => <IconFlask size={s} /> },
+      { to: "/app/templates", label: "Templates", hint: "Ready-made campaigns", key: "e", icon: (s) => <IconSparkle size={s} /> },
     ],
   },
   {
     heading: "Configure",
     items: [
-      { to: "/models", label: "Models", hint: "Pick the LLMs and see the cost", key: "m", icon: (s) => <IconChip size={s} /> },
-      { to: "/settings", label: "Integrations", hint: "Services and their status", key: "i", icon: (s) => <IconSettings size={s} /> },
-      { to: "/suppressions", label: "Do not call", hint: "Numbers never dialled", key: "d", icon: (s) => <IconBlock size={s} /> },
+      { to: "/app/models", label: "Models", hint: "Pick the LLMs and see the cost", key: "m", icon: (s) => <IconChip size={s} /> },
+      { to: "/app/settings", label: "Settings", hint: "Connected apps, services and team", key: "i", icon: (s) => <IconSettings size={s} /> },
+      { to: "/app/suppressions", label: "Do not call", hint: "Numbers never dialled", key: "d", icon: (s) => <IconBlock size={s} /> },
     ],
   },
 ];
@@ -67,15 +69,25 @@ export interface Crumb {
   to?: string;
 }
 
-/** Breadcrumb trail for a path. `dynamic` is a page-supplied last crumb (a campaign name). */
+/** Breadcrumb trail for a console path. `dynamic` is a page-supplied last crumb (a campaign name). */
 export function crumbsFor(pathname: string, dynamic: string | null): Crumb[] {
-  const test = (re: RegExp) => re.test(pathname);
-  if (test(/^\/campaigns\/new/)) return [{ label: "Campaigns", to: "/campaigns" }, { label: "New campaign" }];
-  if (test(/^\/campaigns\/[^/]+/)) return [{ label: "Campaigns", to: "/campaigns" }, { label: dynamic ?? "Campaign" }];
-  if (test(/^\/review/)) return [{ label: "Calls", to: "/calls" }, { label: "Review queue" }];
-  if (test(/^\/test-lab\/phone/)) return [{ label: "Test lab", to: "/test-lab" }, { label: "Call a phone" }];
-  if (test(/^\/test-lab\/mic/)) return [{ label: "Test lab", to: "/test-lab" }, { label: "Browser mic" }];
-  if (test(/^\/test-lab/)) return [{ label: "Test lab", to: "/test-lab" }, { label: "Simulated caller" }];
-  const item = NAV_ITEMS.find((i) => pathname.startsWith(i.to));
+  // Everything below lives under /app; match on the part after it.
+  const path = pathname.replace(/^\/app(?=\/|$)/, "") || "/";
+  const test = (re: RegExp) => re.test(path);
+  if (path === "/") return [{ label: "Overview" }];
+  if (test(/^\/campaigns\/new/)) return [{ label: "Campaigns", to: "/app/campaigns" }, { label: "New campaign" }];
+  if (test(/^\/campaigns\/[^/]+/)) return [{ label: "Campaigns", to: "/app/campaigns" }, { label: dynamic ?? "Campaign" }];
+  if (test(/^\/review/)) return [{ label: "Calls", to: "/app/calls" }, { label: "Review queue" }];
+  if (test(/^\/test-lab\/phone/)) return [{ label: "Test lab", to: "/app/test-lab" }, { label: "Call a phone" }];
+  if (test(/^\/test-lab\/mic/)) return [{ label: "Test lab", to: "/app/test-lab" }, { label: "Browser mic" }];
+  if (test(/^\/test-lab/)) return [{ label: "Test lab", to: "/app/test-lab" }, { label: "Simulated caller" }];
+  const item = NAV_ITEMS.find((i) => !i.end && (pathname === i.to || pathname.startsWith(`${i.to}/`)));
   return item ? [{ label: item.label }] : [{ label: "Not found" }];
+}
+
+/** A plain-language name for a console URL ("Calls"), for "you'll return to…" copy. */
+export function pageNameFor(pathname: string): string | null {
+  const crumbs = crumbsFor(pathname, null);
+  const last = crumbs[crumbs.length - 1]?.label;
+  return last && last !== "Not found" ? last : null;
 }

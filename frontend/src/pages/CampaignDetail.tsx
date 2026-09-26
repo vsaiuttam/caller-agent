@@ -84,14 +84,14 @@ export default function CampaignDetail() {
   return (
     <Page width="wide">
       <PageHeader
-        back={{ to: "/campaigns", label: "Campaigns" }}
+        back={{ to: "/app/campaigns", label: "Campaigns" }}
         icon={<IconCampaign size={18} />}
         title={c.name}
         meta={<StatusBadge status={c.status} />}
         description={c.goal}
         actions={
           <>
-            <ButtonLink to={`/test-lab?campaign=${c.id}`} variant="secondary" icon={<IconFlask size={14} />}>
+            <ButtonLink to={`/app/test-lab?campaign=${c.id}`} variant="secondary" icon={<IconFlask size={14} />}>
               Test it
             </ButtonLink>
             {c.status === "running" ? (

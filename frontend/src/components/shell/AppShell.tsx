@@ -6,7 +6,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
-import { useAuth } from "../../auth";
+import { ROLE_LABEL, canManageTeam, useAuth, useSignOut } from "../../auth";
 import { BRAND } from "../../brand";
 import { useHealth, useLiveCalls, useStats, useStreamStatus } from "../../data";
 import { useLocalStorage } from "../../hooks";
@@ -29,9 +29,12 @@ import {
   IconSidebar,
   IconSun,
   IconUser,
+  IconUsers,
 } from "../icons";
-import { Drawer, IconButton, Kbd, Popover, Tooltip, cx } from "../ui";
+import { Badge, Drawer, IconButton, Kbd, Popover, Tooltip, cx } from "../ui";
 import { NAV_GROUPS, NAV_ITEMS, crumbsFor, type NavItem } from "./nav";
+import { AppFooter } from "./AppFooter";
+import { STATUS_DOT, systemStatus } from "./status";
 
 // ---------------------------------------------------------------------------
 // Breadcrumb override — detail pages name their last crumb (a campaign's name)
@@ -122,7 +125,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
         >
           <div className={cx("flex h-14 shrink-0 items-center", collapsed ? "justify-center" : "px-4")}>
-            <Link to="/dashboard" className="rounded-md" aria-label={`${BRAND.name} — overview`}>
+            <Link to="/app" className="rounded-md" aria-label={`${BRAND.name} overview`}>
               {collapsed ? (
                 <LogoMark size={26} />
               ) : (
@@ -175,9 +178,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             onSearch={() => setPaletteOpen(true)}
             onShortcuts={() => setShortcutsOpen(true)}
           />
-          <main id="main" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden outline-none">
+          <main id="main" tabIndex={-1} className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden outline-none">
             <AuthBanner />
-            {children}
+            <div className="flex-1">{children}</div>
+            <AppFooter onShortcuts={() => setShortcutsOpen(true)} />
           </main>
         </div>
       </div>
@@ -230,10 +234,12 @@ function SidebarNav({ collapsed }: { collapsed: boolean }) {
               const link = (
                 <NavLink
                   to={item.to}
+                  end={item.end}
                   aria-label={collapsed ? item.label : undefined}
                   className={({ isActive }) =>
                     cx(
-                      "group relative flex h-8 items-center gap-2.5 rounded-md text-sm transition-colors duration-150",
+                      // 40px rows in the phone drawer (touch), 32px in the desktop sidebar.
+                      "group relative flex h-10 items-center gap-2.5 rounded-md text-sm transition-colors duration-150 md:h-8",
                       collapsed ? "w-10 justify-center" : "px-2.5",
                       isActive
                         ? "bg-subtle font-medium text-ink"
@@ -305,12 +311,13 @@ function TopBar({
   const location = useLocation();
   const { theme, toggle } = useTheme();
   const auth = useAuth();
+  const signOut = useSignOut();
   const crumbs = crumbsFor(location.pathname, crumb);
 
   return (
     <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-line bg-plane/85 px-3 backdrop-blur-md sm:px-5">
       <IconButton label="Open navigation" icon={<IconMenu size={18} />} className="md:hidden" tooltip={false} onClick={onMenu} />
-      <Link to="/dashboard" className="rounded-md md:hidden" aria-label={`${BRAND.name} — overview`}>
+      <Link to="/app" className="rounded-md md:hidden" aria-label={`${BRAND.name} overview`}>
         <LogoMark size={24} />
       </Link>
 
@@ -359,7 +366,7 @@ function TopBar({
       />
 
       {auth.phase === "signed-in" ? (
-        <UserMenu onShortcuts={onShortcuts} onSignOut={auth.signOut} />
+        <UserMenu onShortcuts={onShortcuts} onSignOut={signOut} />
       ) : (
         <IconButton label="Keyboard shortcuts" icon={<IconHelp size={17} />} className="hidden sm:inline-flex" onClick={onShortcuts} />
       )}
@@ -390,24 +397,8 @@ function HealthPill() {
   const stream = useStreamStatus();
   const [open, setOpen] = useState(false);
 
-  const status: { tone: "good" | "warning" | "critical" | "muted"; label: string; detail: string } = !health
-    ? error
-      ? { tone: "critical", label: "API unreachable", detail: error }
-      : { tone: "muted", label: "Checking…", detail: "Asking the server what's connected." }
-    : !health.ok
-      ? { tone: "critical", label: "Degraded", detail: "The database isn't answering." }
-      : !health.can_run_simulations
-        ? { tone: "warning", label: "No model", detail: "No model provider key is set, so nothing can talk." }
-        : !health.can_place_calls
-          ? { tone: "warning", label: "Demo mode", detail: "Telephony is mocked — rehearsals work, real calls don't." }
-          : { tone: "good", label: "Operational", detail: "Model provider and telephony are connected." };
-
-  const dot = {
-    good: "bg-good",
-    warning: "bg-warning",
-    critical: "bg-critical",
-    muted: "bg-ink-muted/50",
-  }[status.tone];
+  const status = systemStatus(health, error);
+  const dot = STATUS_DOT[status.tone];
 
   return (
     <div className="relative">
@@ -464,7 +455,7 @@ function HealthPill() {
           </p>
         </div>
         <Link
-          to="/settings?tab=services"
+          to="/app/settings?tab=services"
           onClick={() => setOpen(false)}
           className="flex items-center justify-between rounded-lg px-2.5 py-2 text-xs font-medium text-ink transition-colors hover:bg-subtle"
         >
@@ -479,30 +470,53 @@ function HealthPill() {
 // Account
 // ---------------------------------------------------------------------------
 
+/** "Meera Iyer" → "MI"; one name → its first two letters. */
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "";
+  return (parts.length === 1 ? parts[0].slice(0, 2) : parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 function UserMenu({ onShortcuts, onSignOut }: { onShortcuts: () => void; onSignOut: () => void }) {
   const [open, setOpen] = useState(false);
+  const { user, registration } = useAuth();
   const item =
     "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-ink-secondary transition-colors hover:bg-subtle hover:text-ink";
+  // Legacy admin-password sessions (and backends without accounts) have no email.
+  const name = user?.name || "Administrator";
+  const detail = user?.email || "Signed in with the admin password";
+  const role = user ? ROLE_LABEL[user.role] : "Owner";
+  const short = user?.email ? initials(name) : "";
   return (
     <div className="relative">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        aria-label="Account"
-        className="flex h-9 w-9 items-center justify-center rounded-full border border-line bg-subtle text-ink-secondary transition-colors hover:text-ink"
+        aria-label={`Account: ${name}`}
+        className="flex h-10 w-10 items-center justify-center rounded-full border border-line bg-subtle text-xs font-semibold text-ink-secondary transition-colors hover:border-line-strong hover:text-ink sm:h-9 sm:w-9"
       >
-        <IconUser size={16} />
+        {short || <IconUser size={16} />}
       </button>
-      <Popover open={open} onClose={() => setOpen(false)} label="Account" className="w-60 p-1.5">
-        <div className="flex items-center gap-2.5 px-2.5 py-2">
-          <IconLock size={15} className="text-good" />
-          <div>
-            <p className="text-sm font-medium text-ink">Administrator</p>
-            <p className="text-2xs text-ink-muted">Password-protected workspace</p>
+      <Popover open={open} onClose={() => setOpen(false)} label="Account" className="w-64 p-1.5">
+        <div className="flex items-start gap-2.5 px-2.5 py-2">
+          <IconLock size={15} className="mt-0.5 shrink-0 text-good" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-ink">{name}</p>
+            <p className="truncate text-xs text-ink-muted" title={detail}>
+              {detail}
+            </p>
+            <Badge tone={user?.role === "member" ? "neutral" : "brand"} className="mt-1.5">
+              {role}
+            </Badge>
           </div>
         </div>
         <div className="my-1 h-px bg-line" />
+        {registration !== null && canManageTeam(user) && (
+          <Link to="/app/settings?tab=team" className={item} onClick={() => setOpen(false)}>
+            <IconUsers size={15} /> Team and invites
+          </Link>
+        )}
         <button type="button" className={item} onClick={() => { setOpen(false); onShortcuts(); }}>
           <IconKeyboard size={15} /> Keyboard shortcuts
         </button>
@@ -523,14 +537,14 @@ function AuthBanner() {
     <div className="flex items-center gap-3 border-b border-warning/25 bg-warning/8 px-4 py-2 text-xs text-ink-secondary sm:px-6 lg:px-8">
       <IconLock size={14} className="shrink-0 text-warning" />
       <p className="min-w-0 flex-1">
-        <span className="font-medium text-ink">Anyone with this link can place calls</span> — set{" "}
+        <span className="font-medium text-ink">Anyone with this link can place calls.</span> Set{" "}
         <code className="font-mono rounded bg-subtle px-1 py-0.5 text-2xs">ADMIN_PASSWORD</code> to lock it.
       </p>
       <button
         type="button"
         onClick={() => setDismissed(true)}
         aria-label="Dismiss"
-        className="rounded-md p-1 text-ink-muted transition-colors hover:bg-subtle hover:text-ink"
+        className="flex h-8 w-8 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-subtle hover:text-ink"
       >
         <IconClose size={14} />
       </button>
