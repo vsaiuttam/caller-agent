@@ -160,6 +160,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup/shutdown lifecycle for the API server."""
     await init_db()
     logger.info("Database initialized")
+    # Before serving: whether anyone has registered decides whether the
+    # console is locked, and tokens must verify from the first request.
+    await auth.load_accounts()
     yield
     from ..storage import engine
     await engine.dispose()
@@ -168,7 +171,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Samvaad API", version="1.0.0", lifespan=lifespan)
 
-# Opt-in; a no-op unless ADMIN_PASSWORD is set. See auth.py.
+# Opt-in; a no-op until someone registers or ADMIN_PASSWORD is set. See auth.py.
 app.add_middleware(auth.AuthMiddleware)
 
 # Added after the auth gate, so it runs before it: a 401 still carries the
@@ -439,7 +442,7 @@ async def _socket_allowed(ws: WebSocket) -> bool:
     Accepted first and then closed: a browser only sees the close code of a
     socket that opened, and a refused handshake reaches it as a bare 1006.
     """
-    if not auth.auth_enabled() or auth.verify_token(ws.query_params.get("token", "")):
+    if not auth.auth_enabled() or await auth.authenticate(ws.query_params.get("token", "")):
         return True
     await ws.accept()
     await ws.close(code=4401)

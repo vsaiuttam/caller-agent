@@ -77,8 +77,33 @@ SCRYPT_KEY_BYTES = 64
 _SCRYPT_MAXMEM = 64 * 1024 * 1024
 
 
+# Whether anyone has registered. In-process so auth_enabled() stays a cheap
+# synchronous check on every request: loaded at startup, set by the first
+# registration, and never cleared in practice (the owner can't be removed).
+_users_exist = False
+
+
 def auth_enabled() -> bool:
-    return bool(os.getenv("ADMIN_PASSWORD", ""))
+    return bool(os.getenv("ADMIN_PASSWORD", "")) or _users_exist
+
+
+def users_exist() -> bool:
+    return _users_exist
+
+
+def set_users_exist(value: bool) -> None:
+    """Record whether any user exists. Called at startup and on registration;
+    tests call it to reset.
+
+    Also forgets which subjects were seen active, and with no users at all
+    there is nobody left to revoke: both are caches over the users table,
+    which stays the authority.
+    """
+    global _users_exist
+    _users_exist = bool(value)
+    _active.clear()
+    if not value:
+        _revoked.clear()
 
 
 def check_password(password: str) -> bool:
@@ -198,8 +223,130 @@ def token_claims(token: str, now: datetime | None = None) -> dict | None:
 
 
 def verify_token(token: str, now: datetime | None = None) -> bool:
-    """True only for an unexpired token signed with the current secret."""
-    return token_claims(token, now) is not None
+    """True only for an unexpired token signed with the current secret, whose
+    subject has not been revoked in this process."""
+    claims = token_claims(token, now)
+    return claims is not None and claims["sub"] not in _revoked
+
+
+# --------------------------------------------------------------------------
+# Revocation
+# --------------------------------------------------------------------------
+
+# A signed token stays well-formed until it expires, so a disabled or
+# deleted user has to be refused by who they are, not by their token.
+#
+# `_revoked` is what this process has been told (by the team endpoints): it
+# makes a revocation immediate. `_active` remembers subjects the database
+# recently confirmed, so a user's requests don't each cost a query; after a
+# restart it is empty, and a token whose user is gone or disabled fails its
+# first lookup. The expiry bounds how long another worker process, which
+# never heard of the revocation, can go on trusting its cache.
+_revoked: set[str] = set()
+_active: dict[str, float] = {}
+ACTIVE_CACHE_SECONDS = 60.0
+
+
+def revoke_subject(user_id: str) -> None:
+    """Refuse this user's tokens from now on (they were disabled or deleted)."""
+    _revoked.add(user_id)
+    _active.pop(user_id, None)
+
+
+def restore_subject(user_id: str) -> None:
+    """Undo `revoke_subject` (they were re-enabled)."""
+    _revoked.discard(user_id)
+
+
+async def authenticate(token: str | None, now: datetime | None = None) -> dict | None:
+    """The claims of a token that may use the API right now, else None.
+
+    Admin-password tokens never touch the database. A user's token is checked
+    against the users table on first sight, then trusted from memory for a
+    minute unless revoked.
+    """
+    claims = token_claims(token or "", now)
+    if claims is None:
+        return None
+    subject = claims["sub"]
+    if subject == LEGACY_SUBJECT:
+        return claims
+    if subject in _revoked:
+        return None
+    seen = _active.get(subject)
+    if seen is not None and time.monotonic() - seen < ACTIVE_CACHE_SECONDS:
+        return claims
+    if not await _user_is_active(subject):
+        return None
+    # Re-checked after the await: a revocation that landed while the query
+    # was in flight must not be overwritten by a stale "active".
+    if subject in _revoked:
+        return None
+    _active[subject] = time.monotonic()
+    return claims
+
+
+async def _user_is_active(user_id: str) -> bool:
+    try:
+        # Through storage.SessionLocal at call time, not an import of it, so
+        # whatever database the app is using right now is the one asked.
+        async with storage.SessionLocal() as session:
+            disabled = await session.scalar(
+                select(storage.User.disabled).where(storage.User.id == user_id)
+            )
+    except Exception:  # noqa: BLE001
+        # Fail closed: an unreachable database can't vouch for anyone.
+        logger.exception("Auth: could not look up user %s", user_id)
+        return False
+    return disabled is not None and not disabled
+
+
+# --------------------------------------------------------------------------
+# Startup
+# --------------------------------------------------------------------------
+
+_SIGNING_KEY_SETTING = "auth_signing_key"
+
+
+async def load_accounts() -> None:
+    """At startup: whether anyone has registered, and the workspace signing key.
+
+    The key is created on first start and stored, so that tokens signed with
+    it (when neither AUTH_SECRET nor ADMIN_PASSWORD is set) survive a
+    restart. Stored in the settings table under a key no endpoint lists.
+    """
+    global _workspace_key
+    async with storage.SessionLocal() as session:
+        count = await session.scalar(select(func.count()).select_from(storage.User)) or 0
+        set_users_exist(count > 0)
+
+        row = await session.get(storage.Setting, _SIGNING_KEY_SETTING)
+        stored = _decode_key(row.value if row else None)
+        if stored is not None:
+            _workspace_key = stored
+            return
+        value = {"key": base64.b64encode(_workspace_key).decode()}
+        if row is None:
+            session.add(storage.Setting(key=_SIGNING_KEY_SETTING, value=value))
+        else:
+            row.value = value
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Another worker stored its key first; use that one.
+            await session.rollback()
+            row = await session.get(storage.Setting, _SIGNING_KEY_SETTING)
+            stored = _decode_key(row.value if row else None)
+            if stored is not None:
+                _workspace_key = stored
+
+
+def _decode_key(value) -> bytes | None:
+    try:
+        key = base64.b64decode(value["key"], validate=True)
+    except (TypeError, KeyError, ValueError):
+        return None
+    return key if len(key) >= 32 else None
 
 
 def bearer_token(authorization: str | None) -> str | None:
@@ -316,7 +463,7 @@ class AuthMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http" and self._locked(scope):
+        if scope["type"] == "http" and await self._locked(scope):
             response = JSONResponse(
                 {"detail": "Authentication required"},
                 status_code=401,
@@ -327,7 +474,7 @@ class AuthMiddleware:
         await self.app(scope, receive, send)
 
     @staticmethod
-    def _locked(scope: Scope) -> bool:
+    async def _locked(scope: Scope) -> bool:
         path = scope.get("path", "")
         if (
             not path.startswith("/api/")
@@ -336,7 +483,7 @@ class AuthMiddleware:
             or not auth_enabled()
         ):
             return False
-        return not verify_token(request_token(scope) or "")
+        return await authenticate(request_token(scope)) is None
 
 
 def request_token(scope: Scope) -> str | None:
