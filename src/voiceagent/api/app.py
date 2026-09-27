@@ -122,6 +122,7 @@ from .access import workspace_writer
 from .providers_api import check_campaign_choice, model_http_error
 from .providers_api import router as providers_router
 from .voices_api import router as voices_router
+from ..assistant.chat import router as assistant_router
 from .schemas import (
     DEFAULT_GREETING,
     BulkResult,
@@ -250,6 +251,7 @@ app.add_middleware(
 # v3 workspace resources, each in its own module.
 app.include_router(providers_router)
 app.include_router(voices_router)
+app.include_router(assistant_router)
 
 
 def mask(phone: str) -> str:
