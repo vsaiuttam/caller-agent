@@ -14,6 +14,7 @@ import { useMemo, useState, type KeyboardEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   api,
+  isMissing,
   INCLUDE_TESTS_KEY,
   type CallDetail,
   type CallFilters,
@@ -25,6 +26,7 @@ import {
 import { LatencyBars } from "../components/charts";
 import { LiveCallCard } from "../components/live/LiveCallCard";
 import { useLiveCalls, useStats } from "../data";
+import { useCanAdmin } from "../auth";
 import {
   IconCalendar,
   IconCheck,
@@ -33,6 +35,7 @@ import {
   IconFrown,
   IconMeh,
   IconPhone,
+  IconRefresh,
   IconReview,
   IconRows,
   IconRowsCompact,
@@ -46,6 +49,7 @@ import {
   Badge,
   Button,
   ButtonLink,
+  Callout,
   Card,
   CardHeader,
   DispositionBadge,
@@ -465,7 +469,8 @@ function CallList({
                 {!compact && campaignName(call.campaign_id) && (
                   <span className="truncate font-sans">· {campaignName(call.campaign_id)}</span>
                 )}
-                {call.needs_human_review && <Badge tone="warning">Review</Badge>}
+                {call.needs_human_review &&
+                  (/extract/i.test(call.review_reason ?? "") ? <Badge tone="critical">Extraction failed</Badge> : <Badge tone="warning">Review</Badge>)}
               </div>
               {!compact && call.summary && (
                 <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-ink-secondary">{call.summary}</p>
@@ -558,6 +563,8 @@ function CallDetailPanel({
           />
         </div>
       </Card>
+
+      {extractionFailed(data) && <ReextractCard call={data} onDone={refresh} />}
 
       {data.needs_human_review && <ReviewCard call={data} onReviewed={refresh} />}
 
@@ -687,6 +694,48 @@ function CallDetailPanel({
         </Card>
       )}
     </div>
+  );
+}
+
+/** The transcript is saved but no outcome was written from it (provider overload, a timeout). */
+function extractionFailed(call: CallDetail): boolean {
+  if (/extract/i.test(call.review_reason ?? "")) return true;
+  return !call.outcome && call.transcript.length > 1 && call.status !== "dialing" && call.status !== "connected";
+}
+
+function ReextractCard({ call, onDone }: { call: CallDetail; onDone: () => void }) {
+  const canAdmin = useCanAdmin();
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const updated = await api.reextractCall(call.id);
+      if (updated.outcome) toast.success("Extraction finished", updated.summary ?? "The outcome was written from the saved transcript.");
+      else toast.error("Extraction failed again", updated.review_reason ?? "Try again in a minute, or pick another extraction model.");
+      onDone();
+    } catch (err) {
+      toast.error("Couldn't re-run extraction", isMissing(err) ? "This needs a server update." : (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Callout
+      tone="critical"
+      title="The outcome wasn't extracted"
+      action={
+        canAdmin && (
+          <Button size="sm" variant="secondary" icon={<IconRefresh size={13} />} loading={busy} onClick={run}>
+            Re-run extraction
+          </Button>
+        )
+      }
+    >
+      {call.review_reason || "The transcript is saved, but the model didn't return an outcome."}{" "}
+      {canAdmin ? "Re-running reads the saved transcript again; nobody is called." : "An owner or admin can re-run it from the saved transcript."}
+    </Callout>
   );
 }
 
