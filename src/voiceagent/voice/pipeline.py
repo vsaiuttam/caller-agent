@@ -13,6 +13,7 @@ than silently disappearing.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import uuid
 from dataclasses import dataclass
@@ -41,6 +42,7 @@ from ..orchestrator.scheduler import is_terminal, next_attempt_after
 from ..postcall.actions import CalendarClient, RecordsClient, SuppressionList, dispatch
 from ..postcall.extract import extract_outcome
 from ..postcall.mcp_actions import run_for_call
+from ..providers import Runtime, extraction_fallback, runtime
 from ..scoring import qualify_outcome
 from ..storage import Call, CallStatus, Campaign, CampaignStatus, Contact, ContactStatus
 from ..webhooks import fire_webhook
@@ -113,7 +115,10 @@ class CallPipeline:
         phrases = phrases_for(language)
         feed = CallFeed(call_id, self._sessions)
 
-        prepare_telephony(self._telephony, room_name, language=language, greeting=greeting)
+        prepare_telephony(
+            self._telephony, room_name, language=language, greeting=greeting,
+            voice=getattr(campaign, "voice", None),
+        )
 
         await self._create_call_row(call_id, contact, campaign, room_name)
         await feed.publish(
@@ -128,12 +133,14 @@ class CallPipeline:
         # One ledger per call, shared by the conversation and the extraction
         # that follows it, so the cost we record is the cost of the whole call.
         usage = TokenUsage()
+        conversation = await self._runtime(campaign, CONVERSATION)
 
         # Open while the phone rings; closed as soon as the call is over,
         # not after extraction — nothing uses them after the last word.
         async with call_tools(self._sessions, campaign.mcp_tools, on_event=feed.on_tool) as toolbox:
             ending = await self._converse(
-                call_id, room_name, contact, campaign, feed, usage, toolbox, greeting, phrases
+                call_id, room_name, contact, campaign, feed, usage, toolbox, greeting, phrases,
+                conversation,
             )
 
         await feed.drain()
@@ -141,10 +148,41 @@ class CallPipeline:
             call_id, contact, campaign, ending.transcript, ending.disposition, usage,
             room_name=room_name, amd_result=ending.amd_result, rang=ending.rang,
             connected_at=ending.connected_at, tool_calls=feed.tool_calls,
+            conversation=conversation,
         )
 
+    async def _runtime(self, campaign: Campaign, role: str) -> Runtime:
+        """The client, provider and model this campaign's `role` runs on.
+
+        Never raises: if the providers can't be read, the call runs on the
+        process's own client, as every call did before providers existed.
+        """
+        field = "conversation" if role == CONVERSATION else "extraction"
+        model = getattr(campaign, f"{field}_model", None)
+        try:
+            async with self._sessions() as session:
+                return await runtime(
+                    getattr(campaign, f"{field}_provider_id", None),
+                    model,
+                    role,
+                    default_client=self._client,
+                    session=session,
+                )
+        except Exception:  # noqa: BLE001 - a call must not fail over this
+            logger.exception("Could not resolve the %s provider for campaign %s", role, campaign.id)
+            return Runtime(self._client, None, model)
+
+    async def _extraction_fallback(self, primary: Runtime) -> Runtime | None:
+        try:
+            async with self._sessions() as session:
+                return await extraction_fallback(primary, default_client=self._client, session=session)
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not resolve the fallback extraction provider")
+            return None
+
     async def _converse(
-        self, call_id, room_name, contact, campaign, feed, usage, toolbox, greeting, phrases
+        self, call_id, room_name, contact, campaign, feed, usage, toolbox, greeting, phrases,
+        conversation: Runtime | None = None,
     ) -> _Ending:
         """Dial, then either leave a voicemail or hold the conversation."""
         try:
@@ -189,14 +227,16 @@ class CallPipeline:
 
         transcript = []
         try:
+            conversation = conversation or Runtime(self._client, None, campaign.conversation_model)
             llm = ConversationLLM(
-                self._client,
+                conversation.client,
                 contact=_to_model(contact),
                 context=_to_context(campaign),
-                model=campaign.conversation_model,
+                model=conversation.model,
                 effort=campaign.conversation_effort,
                 usage=usage,
                 toolbox=toolbox,
+                provider=conversation.provider,
             )
             session = CallSession(
                 llm=llm,
@@ -268,6 +308,7 @@ class CallPipeline:
         *, room_name: str | None = None, amd_result: str | None = None,
         rang: bool = True, connected_at: datetime | None = None,
         tool_calls: list[dict[str, Any]] | None = None,
+        conversation: Runtime | None = None,
     ) -> None:
         now = datetime.now(timezone.utc)
         usage = usage if usage is not None else TokenUsage()
@@ -314,17 +355,22 @@ class CallPipeline:
             )
         )
 
-        # 2. Extract.
+        # 2. Extract, on the campaign's extraction provider, retried and then
+        #    handed to the workspace default if that provider stays busy.
         context = _to_context(campaign)
+        extraction = await self._runtime(campaign, EXTRACTION)
+        fallback = await self._extraction_fallback(extraction) if transcript else None
         outcome = await extract_outcome(
-            self._client,
+            extraction.client,
             contact=_to_model(contact),
             context=context,
             turns=transcript,
             call_started_at_iso=now.isoformat(),
-            model=campaign.extraction_model,
+            model=extraction.model,
             effort=campaign.extraction_effort,
             usage=usage,
+            provider=extraction.provider,
+            fallback=(fallback.client, fallback.provider, fallback.model) if fallback else None,
         )
         if not transcript:
             outcome.disposition = fallback_disposition
@@ -345,14 +391,15 @@ class CallPipeline:
         # 3a. Write it back into the user's own apps, if the campaign asks.
         #     Before the bill is totted up: it runs on the extraction model.
         after_call, mcp_dispatch = await run_for_call(
-            self._client,
+            extraction.client,
             self._sessions,
-            model=campaign.extraction_model,
+            model=extraction.model,
             effort=campaign.extraction_effort,
             campaign=campaign,
             contact=_to_model(contact),
             outcome=outcome,
             usage=usage,
+            provider=extraction.provider,
         )
 
         # 4. Record the outcome, the bill, and the contact's next state.
@@ -398,8 +445,12 @@ class CallPipeline:
                     cache_read_tokens=usage.cache_read_tokens,
                     cache_write_tokens=usage.cache_write_tokens,
                     cost_usd=cost,
-                    conversation_model=resolve(campaign.conversation_model, CONVERSATION),
-                    extraction_model=resolve(campaign.extraction_model, EXTRACTION),
+                    conversation_model=(
+                        resolve(conversation.model, CONVERSATION, conversation.provider)
+                        if conversation is not None
+                        else resolve(campaign.conversation_model, CONVERSATION)
+                    ),
+                    extraction_model=resolve(extraction.model, EXTRACTION, extraction.provider),
                 )
             )
             await session.execute(
@@ -596,14 +647,26 @@ def _seconds_between(start: datetime | None, end: datetime) -> int:
 # --------------------------------------------------------------------------
 
 
-def prepare_telephony(telephony, room_name: str, *, language: str, greeting: str) -> None:
+def prepare_telephony(
+    telephony, room_name: str, *, language: str, greeting: str, voice: str | None = None
+) -> None:
     """Get the line ready before dialling, for transports that can.
 
-    `prepare_call` sets the call's language and has the greeting made while
-    the phone rings, so the person isn't left in silence after picking up.
+    `prepare_call` sets the call's language (and voice, where the transport
+    takes one) and has the greeting made while the phone rings, so the
+    person isn't left in silence after picking up.
     """
-    if hasattr(telephony, "prepare_call"):
-        telephony.prepare_call(room_name, language=language, greeting=greeting)
+    prepare = getattr(telephony, "prepare_call", None)
+    if prepare is None:
+        return
+    try:
+        takes_voice = "voice" in inspect.signature(prepare).parameters
+    except (TypeError, ValueError):
+        takes_voice = False
+    if takes_voice:
+        prepare(room_name, language=language, greeting=greeting, voice=voice)
+    else:
+        prepare(room_name, language=language, greeting=greeting)
 
 
 def dial_failure_message(exc: Exception, phone_e164: str) -> str:

@@ -700,6 +700,14 @@ def model_price(model_id: str | None, provider=None) -> tuple[float | None, floa
     return None, None
 
 
+def price_custom_model(usage: "TokenUsage", model_id: str, provider) -> None:
+    """Tell a call's ledger the price of a model only its provider row knows."""
+    if model_id in MODELS_BY_ID or not hasattr(provider, "custom_model"):
+        return
+    rate_in, rate_out = model_price(model_id, provider)
+    usage.set_price(model_id, rate_in, rate_out)
+
+
 def _price(value) -> float | None:
     try:
         return float(value) if value is not None else None

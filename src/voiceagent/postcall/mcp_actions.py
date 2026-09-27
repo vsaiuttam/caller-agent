@@ -34,7 +34,7 @@ from ..llm import (
 from ..mcp.ids import SEPARATOR
 from ..mcp.toolbox import EXCERPT_CHARS, CallToolbox, Toolbox, ToolLog, ToolResult, tool_event
 from ..models import CallOutcome, Contact, Disposition
-from ..providers import ANTHROPIC_API, active
+from ..providers import ANTHROPIC_API, active, chat_params
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,7 @@ async def run_post_call_actions(
     outcome: CallOutcome,
     toolbox: Toolbox,
     usage: TokenUsage,
+    provider=None,
 ) -> list[dict[str, Any]]:
     """Record `outcome` with the campaign's after-call tools. Returns the tool log.
 
@@ -92,7 +93,7 @@ async def run_post_call_actions(
     """
     if not _wants_actions(campaign, outcome) or not toolbox.specs():
         return []
-    spec = active()
+    spec = provider or active()
     if spec is not None and not spec.supports_tools:
         logger.info("Post-call actions skipped: %s cannot call tools", spec.label)
         return []
@@ -102,11 +103,12 @@ async def run_post_call_actions(
     try:
         await run(
             client,
-            resolve(model, EXTRACTION),
+            resolve(model, EXTRACTION, provider),
             resolve_effort(effort, EXTRACTION),
             _brief(campaign, contact, outcome),
             actions,
             usage,
+            provider,
         )
     except Exception:  # noqa: BLE001 - the call's outcome is already saved; keep it that way
         logger.exception("Post-call actions failed for contact %s", contact.contact_id)
@@ -123,6 +125,7 @@ async def run_for_call(
     contact: Contact,
     outcome: CallOutcome,
     usage: TokenUsage,
+    provider=None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Post-call actions for a finished call, with their own toolbox.
 
@@ -151,6 +154,7 @@ async def run_for_call(
             outcome=outcome,
             toolbox=toolbox,
             usage=usage,
+            provider=provider,
         )
     finally:
         await toolbox.aclose()
@@ -210,7 +214,7 @@ class _Actions:
         return (server, tool) if tool else ("", tool_id)
 
 
-async def _anthropic_loop(client, model, effort, brief, actions: _Actions, usage) -> None:
+async def _anthropic_loop(client, model, effort, brief, actions: _Actions, usage, provider=None) -> None:
     tools = anthropic_tools(actions.specs())
     messages: list[dict[str, Any]] = [{"role": "user", "content": brief}]
     # Bounded by requests as well as calls: a model sending arguments that
@@ -242,7 +246,7 @@ async def _anthropic_loop(client, model, effort, brief, actions: _Actions, usage
         ]
 
 
-async def _chat_loop(client, model, effort, brief, actions: _Actions, usage) -> None:
+async def _chat_loop(client, model, effort, brief, actions: _Actions, usage, provider=None) -> None:
     tools = chat_tools(actions.specs())
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM},
@@ -253,7 +257,10 @@ async def _chat_loop(client, model, effort, brief, actions: _Actions, usage) -> 
     for request_number in range(MAX_TOOL_CALLS + 1):
         allowed = actions.left > 0 and request_number < MAX_TOOL_CALLS
         kwargs: dict[str, Any] = dict(
-            model=model, max_tokens=MAX_TOKENS, reasoning_effort=effort, messages=messages, tools=tools
+            model=model,
+            messages=messages,
+            tools=tools,
+            **chat_params(provider, model, max_tokens=MAX_TOKENS, effort=effort),
         )
         if not allowed:
             kwargs["tool_choice"] = "none"

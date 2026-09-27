@@ -97,8 +97,14 @@ class LiveCall:
         extraction_model: str | None = None,
         extraction_effort: str | None = None,
         max_turns: int = MAX_TURNS,
+        provider=None,
+        extraction_client=None,
+        extraction_provider=None,
     ) -> None:
         self._client = client
+        # v3: each role on its own provider; None is the env provider.
+        self._extraction_client = extraction_client or client
+        self._extraction_provider = extraction_provider if extraction_client is not None else provider
         self._contact = contact
         self._context = context
         self._greeting = greeting
@@ -114,6 +120,7 @@ class LiveCall:
             model=conversation_model,
             effort=conversation_effort,
             usage=self.usage,
+            provider=provider,
         )
 
         self.transcript: list[Turn] = []
@@ -335,7 +342,7 @@ class LiveCall:
     async def extract(self) -> SimulationResult:
         """Run the real extractor over the transcript, exactly as a call does."""
         outcome = await extract_outcome(
-            self._client,
+            self._extraction_client,
             contact=self._contact,
             context=self._context,
             turns=self.transcript,
@@ -343,6 +350,7 @@ class LiveCall:
             model=self._extraction_model,
             effort=self._extraction_effort,
             usage=self.usage,
+            provider=self._extraction_provider,
         )
 
         return SimulationResult(
@@ -354,7 +362,7 @@ class LiveCall:
                 qualify_outcome(self._context, outcome) if self._context.scorecard else None
             ),
             conversation_model=self.conversation_model,
-            extraction_model=resolve(self._extraction_model, EXTRACTION),
+            extraction_model=resolve(self._extraction_model, EXTRACTION, self._extraction_provider),
             # Not one of the scripted personas — the person was you. Kept in
             # the same shape so a mic test saves and renders like any other
             # rehearsal.

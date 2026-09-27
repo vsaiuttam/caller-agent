@@ -662,6 +662,74 @@ async def client_for(provider_id: str | None, role: str = CONVERSATION_ROLE, ses
     return cached_client(provider)
 
 
+@dataclass
+class Runtime:
+    """What one role of one call runs on: a client, its provider, the model."""
+
+    client: Any
+    provider: Provider | None
+    model: str | None
+
+
+async def runtime(
+    provider_id: str | None,
+    model: str | None,
+    role: str = CONVERSATION_ROLE,
+    *,
+    default_client=None,
+    session=None,
+) -> Runtime:
+    """Resolve a campaign's (provider, model) choice for `role` into a Runtime.
+
+    The model is kept when the provider can run it. When it can't — the
+    campaign names no provider and the workspace default is another vendor,
+    or its provider fell back — the workspace default model is used if it
+    belongs to the provider that won, and the provider's catalog default
+    otherwise.
+
+    `default_client` is the process's own client for the env provider (the
+    worker builds one at start). It is reused whenever that is the provider
+    that won, so a deployment with no provider rows runs exactly as before.
+    """
+    from .catalog import resolve
+
+    provider = await provider_for(provider_id, role, session)
+    if provider is None:
+        return Runtime(default_client, None, model)
+
+    resolved = resolve(model, role, provider)
+    if resolved != model:
+        default = (await workspace_defaults(session))[role]
+        if default["model"] and default["provider_id"] in (None, provider.id):
+            resolved = resolve(default["model"], role, provider)
+
+    env = fallback_provider()
+    if default_client is not None and env is not None and provider.id == env.id:
+        return Runtime(default_client, provider, resolved)
+    return Runtime(cached_client(provider), provider, resolved)
+
+
+async def extraction_fallback(primary: Runtime, *, default_client=None, session=None) -> Runtime | None:
+    """The workspace's default extractor, when it is a different provider.
+
+    Where extraction goes after its own provider has been retried and is
+    still overloaded. None when there is nowhere different to go.
+    """
+    default = (await workspace_defaults(session))[EXTRACTION_ROLE]
+    provider = await provider_for(default["provider_id"], EXTRACTION_ROLE, session)
+    if provider is None or (primary.provider is not None and provider.id == primary.provider.id):
+        return None
+    from .catalog import default_model, resolve
+
+    model = resolve(default["model"], EXTRACTION_ROLE, provider) if default["model"] else default_model(
+        EXTRACTION_ROLE, provider
+    )
+    env = fallback_provider()
+    if default_client is not None and env is not None and provider.id == env.id:
+        return Runtime(default_client, provider, model)
+    return Runtime(cached_client(provider), provider, model)
+
+
 def chat_params(provider, model: str, *, max_tokens: int, effort: str | None) -> dict[str, Any]:
     """The provider-specific part of a `chat/completions` request.
 

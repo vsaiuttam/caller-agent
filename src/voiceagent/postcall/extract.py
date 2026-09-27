@@ -14,18 +14,22 @@ to the first thing it heard.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from dataclasses import dataclass
+from typing import Any
 
 from ..catalog import (
     DEFAULT_EXTRACTION_EFFORT,
     DEFAULT_EXTRACTION_MODEL,
     EXTRACTION,
     TokenUsage,
+    price_custom_model,
     resolve,
     resolve_effort,
 )
 from ..models import CallContext, CallOutcome, Contact, Disposition, Turn
-from ..providers import ANTHROPIC_API, active
+from ..providers import ANTHROPIC_API, active, chat_params, retryable_error_types
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +37,24 @@ logger = logging.getLogger(__name__)
 # extraction role gets a different default from the conversation role.
 MODEL = DEFAULT_EXTRACTION_MODEL
 EFFORT = DEFAULT_EXTRACTION_EFFORT
+
+# Seconds between attempts when the provider is overloaded or rate limiting:
+# three tries over about twenty seconds. A shared free tier turns requests
+# away in bursts, and ten of twelve calls in one afternoon ended "Extraction
+# call failed" for want of a second try. Module-level so tests can shorten it.
+RETRY_DELAYS: tuple[float, ...] = (5.0, 15.0)
+
+FAILED_MESSAGE = "Extraction call failed; transcript preserved for manual review."
+
+
+@dataclass
+class ExtractionTarget:
+    """Where an extraction runs: a client, its provider, and the model on it."""
+
+    client: Any
+    provider: Any = None
+    model: str | None = None
+    effort: str | None = None
 
 EXTRACTION_SYSTEM = """\
 You are extracting a structured record from a completed phone call transcript.
@@ -121,6 +143,8 @@ async def extract_outcome(
     model: str | None = None,
     effort: str | None = None,
     usage: TokenUsage | None = None,
+    provider=None,
+    fallback: ExtractionTarget | tuple | None = None,
 ) -> CallOutcome:
     """Extract a structured outcome. Never raises on model-side failure.
 
@@ -128,11 +152,14 @@ async def extract_outcome(
     outcome flagged for review rather than propagating — one bad extraction
     must not take down the batch, and a human needs to see it either way.
 
+    Before giving up on an overloaded or rate-limited provider it tries
+    again (RETRY_DELAYS), and then once on `fallback` — the workspace's
+    default extractor, when that is a different provider — so a busy
+    afternoon on one vendor doesn't fill the review queue.
+
     `usage` is the call's shared ledger; token counts are folded into it so
     the per-call cost covers both the conversation and this.
     """
-    model_id = resolve(model, EXTRACTION)
-    effort_level = resolve_effort(effort, EXTRACTION)
 
     if not turns:
         # Short-circuits before any model call: a no-answer costs nothing to
@@ -157,30 +184,69 @@ Transcript:
 
     system = EXTRACTION_SYSTEM + (SCORING_RULES if context.scorecard else "")
 
-    spec = active()
-    anthropic_path = spec is None or spec.api == ANTHROPIC_API
+    targets = [ExtractionTarget(client, provider, model, effort)]
+    if isinstance(fallback, tuple):
+        fallback = ExtractionTarget(*fallback)
+    if fallback is not None and fallback.client is not None:
+        targets.append(fallback)
 
-    try:
-        if anthropic_path:
-            outcome = await _extract_anthropic(
-                client, model_id, effort_level, system, user_content, usage
+    outcome: CallOutcome | None = None
+    for index, target in enumerate(targets):
+        last = index == len(targets) - 1
+        try:
+            outcome = await _extract_with_retries(target, system, user_content, usage)
+            break
+        except _Refused as refusal:
+            logger.warning("Extraction refused for contact %s", contact.contact_id)
+            return _needs_review(str(refusal))
+        except retryable_error_types():
+            if last:
+                logger.exception("Extraction failed for contact %s after retries", contact.contact_id)
+                return _needs_review(FAILED_MESSAGE)
+            logger.warning(
+                "Extraction provider still busy for contact %s; trying the workspace default",
+                contact.contact_id,
             )
-        else:
-            outcome = await _extract_openai(
-                client, model_id, effort_level, system, user_content, usage
-            )
-    except _Refused as refusal:
-        logger.warning("Extraction refused for contact %s", contact.contact_id)
-        return _needs_review(str(refusal))
-    except Exception:
-        logger.exception("Extraction failed for contact %s", contact.contact_id)
-        return _needs_review("Extraction call failed; transcript preserved for manual review.")
+        except Exception:
+            logger.exception("Extraction failed for contact %s", contact.contact_id)
+            if last:
+                return _needs_review(FAILED_MESSAGE)
 
     if outcome is None:
         logger.warning("Extraction produced no parsed output for %s", contact.contact_id)
         return _needs_review("Extraction returned malformed output.")
 
     return outcome
+
+
+async def _extract_with_retries(
+    target: ExtractionTarget, system: str, user_content: str, usage: TokenUsage | None
+) -> CallOutcome | None:
+    """One target, retried on overload and rate limits. Other errors raise at once."""
+    spec = target.provider or active()
+    model_id = resolve(target.model, EXTRACTION, target.provider)
+    effort_level = resolve_effort(target.effort, EXTRACTION)
+    if usage is not None:
+        price_custom_model(usage, model_id, target.provider)
+    anthropic_path = spec is None or spec.api == ANTHROPIC_API
+
+    delays = list(RETRY_DELAYS)
+    while True:
+        try:
+            if anthropic_path:
+                return await _extract_anthropic(
+                    target.client, model_id, effort_level, system, user_content, usage
+                )
+            return await _extract_openai(
+                target.client, model_id, effort_level, system, user_content, usage,
+                provider=target.provider,
+            )
+        except retryable_error_types():
+            if not delays:
+                raise
+            delay = delays.pop(0)
+            logger.warning("Extraction on %s turned away; retrying in %.0fs", model_id, delay)
+            await asyncio.sleep(delay)
 
 
 class _Refused(Exception):
@@ -211,7 +277,8 @@ async def _extract_anthropic(
 
 
 async def _extract_openai(
-    client, model_id: str, effort: str, system: str, user_content: str, usage: TokenUsage | None
+    client, model_id: str, effort: str, system: str, user_content: str, usage: TokenUsage | None,
+    *, provider=None,
 ) -> CallOutcome | None:
     """Structured extraction on the `chat/completions` shape.
 
@@ -223,8 +290,7 @@ async def _extract_openai(
     """
     response = await client.chat.completions.parse(
         model=model_id,
-        max_tokens=4096,
-        reasoning_effort=effort,
+        **chat_params(provider, model_id, max_tokens=4096, effort=effort),
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user_content},
