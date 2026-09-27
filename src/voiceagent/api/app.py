@@ -1356,7 +1356,17 @@ async def list_campaigns(db: AsyncSession = Depends(get_session)):
     campaigns = (
         await db.execute(select(Campaign).order_by(Campaign.created_at.desc()))
     ).scalars().all()
-    return [await _campaign_out(db, c) for c in campaigns]
+    from ..orchestrator.status import dialer_status
+
+    out = []
+    for campaign in campaigns:
+        item = await _campaign_out(db, campaign)
+        # Only running campaigns have a state worth a query: the others'
+        # state is their status, which the row already says.
+        if campaign.status is CampaignStatus.RUNNING:
+            item.dialer = DialerStatus(**await dialer_status(db, campaign))
+        out.append(item)
+    return out
 
 
 @app.post("/api/campaigns", response_model=CampaignOut, status_code=201)

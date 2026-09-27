@@ -166,6 +166,9 @@ class CampaignOut(CampaignCreate):
     completed: int = 0
     needs_review: int = 0
     spend_usd: float = 0.0
+    # On list items for running campaigns: the same shape as
+    # GET /api/campaigns/{id}/dialer, to save the list a request per row.
+    dialer: DialerStatus | None = None
 
 
 # --------------------------------------------------------------------------
@@ -306,6 +309,9 @@ class DialerStatus(BaseModel):
     done: int = 0
     failed: int = 0
     blockers: list[str] = Field(default_factory=list)
+
+
+CampaignOut.model_rebuild()
 
 
 # --------------------------------------------------------------------------
