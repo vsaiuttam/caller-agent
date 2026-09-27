@@ -148,7 +148,7 @@ export default function Dashboard() {
             subtitle={span.last}
             action={
               (s?.pending_review ?? 0) > 0 && (
-                <Link to="/app/review" className="flex items-center gap-1 text-xs font-medium text-warning hover:underline">
+                <Link to="/app/calls?view=review" className="flex items-center gap-1 text-xs font-medium text-warning hover:underline">
                   <IconReview size={13} /> {s!.pending_review} to review
                 </Link>
               )
@@ -191,11 +191,11 @@ export default function Dashboard() {
           <Card className="px-5 py-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-medium text-ink-muted">Review queue</p>
+                <p className="text-xs font-medium text-ink-muted">Needs review</p>
                 <p className="tnum mt-1 text-2xl font-semibold text-ink">{s ? s.pending_review : "—"}</p>
                 <p className="mt-1 text-xs text-ink-muted">Outcomes the model wasn't sure enough to write.</p>
               </div>
-              <ButtonLink to="/app/review" size="sm" variant="secondary">
+              <ButtonLink to="/app/calls?view=review" size="sm" variant="secondary">
                 Review
               </ButtonLink>
             </div>
@@ -392,8 +392,8 @@ interface Step {
   cta: string;
 }
 
-/** Integrations → Services: where the environment-configured pieces are explained. */
-const SERVICES = "/app/settings?tab=services";
+/** Integrations → Telephony: where the environment-configured carrier is explained. */
+const SERVICES = "/app/integrations?tab=telephony";
 
 /** The first-run checklist, driven by /api/health and what exists already. */
 function Onboarding() {
@@ -410,9 +410,9 @@ function Onboarding() {
       {
         id: "model",
         title: "Connect a model provider",
-        hint: health.provider_label ? `Using ${health.provider_label}` : "Gemini, Anthropic or OpenAI key",
+        hint: health.provider_label ? `Using ${health.provider_label}` : "Any LLM: OpenAI, Anthropic, Gemini, Sarvam and more",
         done: !!health.checks.model_provider,
-        to: SERVICES,
+        to: "/app/ai-models?add=1",
         cta: "Set up",
       },
       {
@@ -442,7 +442,7 @@ function Onboarding() {
                 ? `${health.mcp_servers} connected`
                 : "Let the agent check calendars and update your CRM",
               done: health.mcp_servers > 0,
-              to: "/app/settings?connect=1",
+              to: "/app/integrations?connect=1",
               cta: "Connect",
             },
           ]),
@@ -459,7 +459,7 @@ function Onboarding() {
         title: "Turn on follow-ups",
         hint: "SMS or WhatsApp after every call",
         done: !!health.checks.sms || !!health.checks.whatsapp,
-        to: SERVICES,
+        to: "/app/integrations?tab=messaging",
         cta: "Set up",
       },
       {
@@ -470,7 +470,7 @@ function Onboarding() {
           ? "Create the owner account so only your team can dial"
           : "Set ADMIN_PASSWORD so only your team can dial",
         done: health.auth_enabled ?? auth.phase === "signed-in",
-        to: health.accounts && health.accounts.users === 0 ? "/register" : SERVICES,
+        to: health.accounts && health.accounts.users === 0 ? "/register" : "/app/settings?tab=security",
         cta: health.accounts && health.accounts.users === 0 ? "Create" : "How",
       },
     ];

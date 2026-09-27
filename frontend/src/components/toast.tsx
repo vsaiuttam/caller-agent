@@ -14,11 +14,18 @@ import { T } from "../motion";
 
 type Tone = "success" | "error" | "info";
 
+interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 interface ToastItem {
   id: number;
   tone: Tone;
   title: string;
   description?: string;
+  /** One follow-up, e.g. "Discard" on "Restored your unsaved changes". */
+  action?: ToastAction;
 }
 
 let items: ToastItem[] = [];
@@ -29,8 +36,8 @@ function emit() {
   listeners.forEach((fn) => fn());
 }
 
-function push(tone: Tone, title: string, description?: string) {
-  const item = { id: nextId++, tone, title, description };
+function push(tone: Tone, title: string, description?: string, action?: ToastAction) {
+  const item = { id: nextId++, tone, title, description, action };
   // Cap the stack: a burst of failures shouldn't bury the page.
   items = [...items, item].slice(-4);
   emit();
@@ -38,9 +45,9 @@ function push(tone: Tone, title: string, description?: string) {
 }
 
 export const toast = {
-  success: (title: string, description?: string) => push("success", title, description),
-  error: (title: string, description?: string) => push("error", title, description),
-  info: (title: string, description?: string) => push("info", title, description),
+  success: (title: string, description?: string, action?: ToastAction) => push("success", title, description, action),
+  error: (title: string, description?: string, action?: ToastAction) => push("error", title, description, action),
+  info: (title: string, description?: string, action?: ToastAction) => push("info", title, description, action),
   dismiss: (id: number) => {
     items = items.filter((t) => t.id !== id);
     emit();
@@ -111,6 +118,18 @@ function ToastCard({ item }: { item: ToastItem }) {
         <p className="text-sm font-medium leading-snug text-ink">{item.title}</p>
         {item.description && (
           <p className="mt-0.5 text-xs leading-relaxed text-ink-secondary">{item.description}</p>
+        )}
+        {item.action && (
+          <button
+            type="button"
+            onClick={() => {
+              item.action!.onClick();
+              toast.dismiss(item.id);
+            }}
+            className="mt-2 rounded text-xs font-semibold text-brand hover:underline"
+          >
+            {item.action.label}
+          </button>
         )}
       </div>
       <button

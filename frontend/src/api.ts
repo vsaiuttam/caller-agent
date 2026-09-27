@@ -96,7 +96,22 @@ export interface CampaignCreate {
   mcp_post_call_tools?: string[];
   /** Plain-language guidance for the after-call tools. */
   mcp_post_call_instructions?: string;
+
+  // --- v3 (docs/v3-spec.md). Optional so older backends still type-check. ---
+  /** Provider row id (`env:<preset>` for env rows). Null means the workspace default. */
+  conversation_provider_id?: string | null;
+  extraction_provider_id?: string | null;
+  /** Sarvam speaker id. Null means the default speaker. */
+  voice?: string | null;
+  /** Pre-call heads-up message (§6). */
+  precall_enabled?: boolean;
+  precall_channel?: PrecallChannel | null;
+  precall_message?: string | null;
+  /** 2–240. */
+  precall_lead_minutes?: number | null;
 }
+
+export type PrecallChannel = "sms" | "whatsapp";
 
 export type CampaignUpdate = Partial<CampaignCreate>;
 
@@ -125,6 +140,9 @@ export interface Campaign extends CampaignCreate {
   conversation_effort: string;
   extraction_model: string;
   extraction_effort: string;
+  /** Present when the list endpoint embeds the dialler state; otherwise fetched per campaign. */
+  dialer?: DialerStatus;
+  updated_at?: string;
 }
 
 // --- Models -----------------------------------------------------------------
@@ -189,6 +207,153 @@ export interface CostEstimate {
   connect_rate: number;
   connected_calls: number;
   total_cost_usd: number;
+}
+
+// --- v3: model providers (§1.4) -----------------------------------------------
+
+export type ApiShape = "anthropic" | "openai";
+export type ProviderStatus = "ok" | "untested" | "error";
+
+export interface Provider {
+  /** A uuid, or `env:<preset>` for a provider configured by environment variable. */
+  id: string;
+  kind: string;
+  label: string;
+  base_url: string | null;
+  source: "db" | "env";
+  enabled: boolean;
+  supports_tools: boolean;
+  api_shape: ApiShape;
+  /** Last four characters of the key; the key itself is never returned. */
+  key_hint: string | null;
+  status: ProviderStatus;
+  last_error: string | null;
+  models_count: number;
+}
+
+export interface ProviderPreset {
+  kind: string;
+  label: string;
+  default_base_url: string | null;
+  needs_base_url: boolean;
+  key_url: string | null;
+  supports_tools: boolean;
+  api_shape: ApiShape;
+  popular_models: Array<string | { id: string; name?: string }>;
+}
+
+export interface CustomModel {
+  id: string;
+  name: string;
+  input_per_mtok: number | null;
+  output_per_mtok: number | null;
+}
+
+export interface ProviderCreate {
+  kind: string;
+  label?: string;
+  base_url?: string;
+  api_key: string;
+  custom_models?: CustomModel[];
+}
+
+export interface ProviderUpdate {
+  label?: string;
+  base_url?: string | null;
+  api_key?: string;
+  enabled?: boolean;
+  custom_models?: CustomModel[];
+}
+
+export interface ProviderTestResult {
+  ok: boolean;
+  latency_ms: number | null;
+  model: string | null;
+  error?: string | null;
+}
+
+export type SpeedTier = "fastest" | "fast" | "balanced" | "deliberate";
+
+export interface ProviderModel {
+  id: string;
+  name: string;
+  input_per_mtok: number | null;
+  output_per_mtok: number | null;
+  speed?: SpeedTier | string | null;
+  roles: ModelRole[];
+  supports_tools: boolean;
+  source: "catalog" | "custom" | "discovered";
+}
+
+export interface ModelChoice {
+  provider_id: string | null;
+  model: string | null;
+}
+
+export interface WorkspaceModelDefaults {
+  conversation: ModelChoice;
+  extraction: ModelChoice;
+}
+
+export type EstimateComponent = "llm" | "extraction" | "stt" | "tts" | "telephony";
+
+export interface EstimateRequest {
+  provider_id?: string | null;
+  conversation_model?: string | null;
+  extraction_model?: string | null;
+  language?: string;
+  minutes_per_call?: number;
+  calls?: number;
+  telephony_region?: "IN" | "US";
+  include_voice?: boolean;
+}
+
+export interface Estimate {
+  per_call: Record<EstimateComponent, number | null> & { total: number | null };
+  per_minute_total: number | null;
+  for_calls: { calls: number; total: number | null };
+  assumptions: string[];
+  pricing_as_of: string;
+  /** Components whose price isn't known. They're never counted as $0. */
+  unknown: string[];
+}
+
+// --- v3: dialler status (§2.3) ------------------------------------------------
+
+export type DialerState = "dialing" | "waiting_window" | "paused" | "draft" | "completed" | "blocked" | "asleep_risk";
+
+export interface DialerStatus {
+  state: DialerState;
+  reason: string;
+  next_window_start: string | null;
+  pending: number;
+  in_progress: number;
+  done: number;
+  failed: number;
+  blockers: string[];
+}
+
+// --- v3: voices (§4) ------------------------------------------------------------
+
+export interface Voice {
+  id: string;
+  name: string;
+  gender: string;
+  languages: string[];
+  provider: string;
+  sample_text: string;
+}
+
+// --- v3: assistant (§7) ---------------------------------------------------------
+
+export interface AssistantMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AssistantLink {
+  label: string;
+  to: string;
 }
 
 // --- Simulation -------------------------------------------------------------
@@ -1076,7 +1241,154 @@ export const api = {
     ),
   /** Tools of enabled, healthy servers — what a campaign can choose from. */
   mcpTools: () => request<McpToolOption[]>("/api/mcp/tools"),
+
+  // --- v3 (docs/v3-spec.md). Wrap reads in `unlessMissing` so a backend that
+  // predates them renders "not available yet" instead of an error. ----------
+  providers: () => request<Provider[]>("/api/providers"),
+  providerPresets: () => request<ProviderPreset[]>("/api/providers/presets"),
+  createProvider: (body: ProviderCreate) => request<Provider>("/api/providers", post(body)),
+  updateProvider: (id: string, body: ProviderUpdate) =>
+    request<Provider>(`/api/providers/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),
+  /** 409 when it's a workspace default. */
+  deleteProvider: (id: string) => request<void>(`/api/providers/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  testProvider: (id: string) => request<ProviderTestResult>(`/api/providers/${encodeURIComponent(id)}/test`, post()),
+  providerModels: (id: string) => request<ProviderModel[]>(`/api/providers/${encodeURIComponent(id)}/models`),
+  workspaceModelDefaults: () => request<WorkspaceModelDefaults>("/api/model-defaults"),
+  saveWorkspaceModelDefaults: (body: WorkspaceModelDefaults) =>
+    request<WorkspaceModelDefaults>("/api/model-defaults", { method: "PUT", body: JSON.stringify(body) }),
+  estimateCost: (body: EstimateRequest) => request<Estimate>("/api/estimate", post(body)),
+
+  dialer: (campaignId: string) => request<DialerStatus>(`/api/campaigns/${encodeURIComponent(campaignId)}/dialer`),
+
+  voices: (language?: string) => request<Voice[]>(`/api/voices${qs({ language })}`),
+  /** A short WAV of `voice` speaking. 409 (with a message) when the deployment has no Sarvam key. */
+  voicePreview: async (body: { voice: string; language: string; text?: string }): Promise<Blob> => {
+    let res: Response;
+    try {
+      res = await fetch("/api/voices/preview", {
+        method: "POST",
+        body: JSON.stringify(body),
+        headers: { "Content-Type": "application/json", Accept: "audio/wav", ...authHeaders() },
+      });
+    } catch {
+      throw new ApiError("Can't reach the server. Check your connection and try again.", 0);
+    }
+    if (!res.ok) throw await toError(res);
+    return res.blob();
+  },
+
+  /** Uses the workspace default model. The result is a suggestion the user edits. */
+  translate: async (text: string, to: string): Promise<string> => {
+    const body = await request<{ text?: string; translation?: string; translated?: string } | string>(
+      "/api/translate",
+      post({ text, to }),
+    );
+    if (typeof body === "string") return body;
+    return body.text ?? body.translation ?? body.translated ?? "";
+  },
+
+  /** Re-runs extraction on the saved transcript (owner/admin). */
+  reextractCall: (id: string) => request<CallDetail>(`/api/calls/${encodeURIComponent(id)}/reextract`, post()),
 };
+
+/** Resolve to null when the endpoint doesn't exist on this backend (404/405). */
+export async function unlessMissing<T>(promise: Promise<T>): Promise<T | null> {
+  try {
+    return await promise;
+  } catch (err) {
+    if (isMissing(err)) return null;
+    throw err;
+  }
+}
+
+export const isMissing = (err: unknown) => err instanceof ApiError && (err.status === 404 || err.status === 405);
+
+/**
+ * Ask Samvaad (§7): POST /api/assistant/chat answers with text/event-stream.
+ * Each event's data is a token, either raw text or JSON (`{token}`, `{delta}`,
+ * `{text}` or `{content}`); the last one is `{done: true, links: [...]}`.
+ * Resolves with the links once the stream ends.
+ */
+export async function streamAssistant(
+  body: { messages: AssistantMessage[]; page?: string },
+  onToken: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<AssistantLink[]> {
+  let res: Response;
+  try {
+    res = await fetch("/api/assistant/chat", {
+      method: "POST",
+      body: JSON.stringify(body),
+      signal,
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream", ...authHeaders() },
+    });
+  } catch (err) {
+    if ((err as Error).name === "AbortError") throw err;
+    throw new ApiError("Can't reach the server. Check your connection and try again.", 0);
+  }
+  if (!res.ok) throw await toError(res);
+
+  // A server that answered with plain JSON instead of a stream.
+  const type = res.headers.get("Content-Type") ?? "";
+  if (type.includes("application/json")) {
+    const json = (await res.json()) as { content?: string; text?: string; links?: AssistantLink[] };
+    onToken(json.content ?? json.text ?? "");
+    return json.links ?? [];
+  }
+  if (!res.body) throw new ApiError("The assistant sent an empty reply.", 0);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let links: AssistantLink[] = [];
+
+  const handle = (raw: string) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      onToken(raw);
+      return;
+    }
+    if (typeof parsed === "string") {
+      onToken(parsed);
+      return;
+    }
+    const data = parsed as {
+      done?: boolean;
+      links?: AssistantLink[];
+      token?: string;
+      delta?: string;
+      text?: string;
+      content?: string;
+      error?: string;
+    };
+    if (data.error) throw new ApiError(data.error, 500);
+    const text = data.token ?? data.delta ?? data.text ?? data.content;
+    if (text) onToken(text);
+    if (data.done) links = data.links ?? [];
+  };
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (value) buffer += decoder.decode(value, { stream: true });
+    // Events are separated by a blank line; each may carry several data lines.
+    let cut: number;
+    while ((cut = buffer.search(/\r?\n\r?\n/)) >= 0) {
+      const event = buffer.slice(0, cut);
+      buffer = buffer.slice(cut).replace(/^\r?\n\r?\n/, "");
+      const data = event
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).replace(/^ /, ""))
+        .join("\n");
+      if (data && data !== "[DONE]") handle(data);
+    }
+    if (done) break;
+  }
+  if (buffer.trim().startsWith("data:")) handle(buffer.trim().slice(5).trim());
+  return links;
+}
 
 function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);

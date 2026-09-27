@@ -1,354 +1,214 @@
 /**
- * Settings, in up to three tabs:
+ * Settings: the workspace itself. Integrations (apps, telephony, messaging,
+ * webhooks) moved to their own page; old links are forwarded:
  *
- *   Connected apps  the user's own MCP servers — the tools the agent can use
- *                   (?connect=1 opens the connect dialog)
- *   Services        what this deployment is wired to, configured with
- *                   environment variables on the server (?tab=services)
- *   Team            people and invites (?tab=team) — owner and admin only, and
- *                   only on a backend with accounts
+ *   ?tab=workspace (default)  what's connected, at a glance, and where to fix it
+ *   ?tab=team                 people and invites (owner and admin, with accounts)
+ *   ?tab=security             sign-in, sessions, secrets at rest
+ *
+ *   ?connect=1, ?tab=apps, ?tab=services   → /app/integrations (v2 links)
  */
 
-import { useEffect, useState, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useState } from "react";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { canManageTeam, useAuth } from "../auth";
-import {
-  IconBlock,
-  IconCalendar,
-  IconCampaign,
-  IconCheck,
-  IconChip,
-  IconCoin,
-  IconLock,
-  IconMic,
-  IconPhone,
-  IconPlug,
-  IconPlus,
-  IconRefresh,
-  IconSettings,
-  IconShield,
-  IconUsers,
-  IconWhisper,
-} from "../components/icons";
-import type { ConnectIntent } from "../components/mcp/ConnectDialog";
-import { ConnectedApps } from "../components/mcp/ConnectedApps";
+import { IconArrowRight, IconChip, IconLock, IconPhone, IconPlug, IconRefresh, IconSettings, IconShield, IconUsers } from "../components/icons";
+import { ServiceGroup } from "../components/integrations/Services";
 import { Team } from "../components/team/Team";
-import { Badge, Button, Callout, Card, CardHeader, ErrorNote, Page, PageHeader, Skeleton, Stat, Tabs, cx } from "../components/ui";
+import { Badge, Button, Callout, Card, CardHeader, Page, PageHeader, Skeleton, Stat, Tabs, cx } from "../components/ui";
 import { useHealth } from "../data";
 import { useDocumentTitle } from "../hooks";
 
-type Tab = "apps" | "services" | "team";
+type Tab = "workspace" | "team" | "security";
 
 const DESCRIPTION: Record<Tab, string> = {
-  apps: "Connect your own apps over MCP, so the agent can look things up during a call and record the outcome after it.",
-  services:
-    "What this deployment is connected to. Everything is configured with environment variables on the server, then a restart.",
+  workspace: "This workspace at a glance: what's connected, and where each part is set up.",
   team: "Who can sign in, and invites for new people.",
+  security: "Who can open this console, how long sessions last, and how secrets are stored.",
 };
 
-interface Integration {
-  key: string;
-  label: string;
-  description: string;
-  icon: ReactNode;
-  configHint: string;
-}
-
-const GROUPS: Array<{ title: string; subtitle: string; items: Integration[] }> = [
-  {
-    title: "Core",
-    subtitle: "Without these, nothing can talk or be saved.",
-    items: [
-      {
-        key: "database",
-        label: "Database",
-        description: "Stores campaigns, contacts and every call.",
-        icon: <IconCoin size={17} />,
-        configHint: "Set DATABASE_URL.",
-      },
-      {
-        key: "model_provider",
-        label: "Model provider",
-        description: "The LLM for the conversation and the post-call extraction.",
-        icon: <IconChip size={17} />,
-        configHint: "Set GEMINI_API_KEY, ANTHROPIC_API_KEY or OPENAI_API_KEY.",
-      },
-      {
-        key: "telephony",
-        label: "Telephony",
-        description: "Places real phone calls through Twilio or Telnyx.",
-        icon: <IconPhone size={17} />,
-        configHint: "Set TELEPHONY=twilio with TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER (or the Telnyx equivalents).",
-      },
-    ],
-  },
-  {
-    title: "Voice",
-    subtitle: "How the agent hears and speaks.",
-    items: [
-      {
-        key: "speech_to_text",
-        label: "Speech-to-text",
-        description: "Transcribes the person. Built into Twilio; Sarvam for Indian languages; Deepgram for LiveKit.",
-        icon: <IconMic size={17} />,
-        configHint: "Built in with Twilio. Otherwise set SARVAM_API_KEY or DEEPGRAM_API_KEY.",
-      },
-      {
-        key: "text_to_speech",
-        label: "Text-to-speech",
-        description: "The agent's voice. Twilio Polly, Sarvam for Indian languages, or Cartesia.",
-        icon: <IconWhisper size={17} />,
-        configHint: "Built in with Twilio. Otherwise set SARVAM_API_KEY or CARTESIA_API_KEY.",
-      },
-    ],
-  },
-  {
-    title: "After the call",
-    subtitle: "Where outcomes go once the call ends.",
-    items: [
-      {
-        key: "sms",
-        label: "SMS follow-up",
-        description: "Texts the person after each call, with delivery receipts.",
-        icon: <IconCampaign size={17} />,
-        configHint: "Uses the Twilio credentials. Turn it on per campaign.",
-      },
-      {
-        key: "whatsapp",
-        label: "WhatsApp follow-up",
-        description: "WhatsApps the person after each call, with delivered/read receipts.",
-        icon: <IconCampaign size={17} />,
-        configHint: "Set TWILIO_WHATSAPP_FROM (Sandbox: +14155238886). Outside the Sandbox also set TWILIO_WHATSAPP_CONTENT_SID.",
-      },
-      {
-        key: "calendar",
-        label: "Calendar",
-        description: "Books agreed appointments on a shared calendar.",
-        icon: <IconCalendar size={17} />,
-        configHint: "Set GOOGLE_CALENDAR_CREDENTIALS, or BUILTIN_CALENDAR=1 for the built-in one.",
-      },
-      {
-        key: "records_api",
-        label: "Records / CRM",
-        description: "Writes collected fields to your CRM or ATS.",
-        icon: <IconCoin size={17} />,
-        configHint: "Set RECORDS_API_URL (and RECORDS_API_KEY), or BUILTIN_RECORDS=1.",
-      },
-      {
-        key: "webhook_signing",
-        label: "Webhook signing",
-        description: "HMAC-SHA256 signatures so webhook receivers can verify us.",
-        icon: <IconBlock size={17} />,
-        configHint: "Set WEBHOOK_SIGNING_SECRET and share it with the receiver.",
-      },
-    ],
-  },
-];
-
 export default function Settings() {
-  const { reload } = useHealth();
   const auth = useAuth();
   const [params, setParams] = useSearchParams();
   const teamAvailable = auth.registration !== null && canManageTeam(auth.user);
   const requested = params.get("tab");
-  const tab: Tab = requested === "services" ? "services" : requested === "team" && teamAvailable ? "team" : "apps";
+  const tab: Tab = requested === "security" ? "security" : requested === "team" && teamAvailable ? "team" : "workspace";
   useDocumentTitle(tab === "team" ? "Team" : "Settings");
-  const [connect, setConnect] = useState<ConnectIntent | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
 
-  // ?connect=1 (from the palette, the checklist, a campaign) opens the
-  // dialog — also when this page is already open. It's one-shot: dropped
-  // once honoured, so a reload doesn't reopen it.
-  useEffect(() => {
-    if (!params.has("connect")) return;
-    setConnect("pick");
-    const next = new URLSearchParams(params);
-    next.delete("connect");
-    setParams(next, { replace: true });
-  }, [params, setParams]);
+  // v2 links: connected apps and services live under Integrations now.
+  if (params.has("connect") || requested === "apps") return <Navigate to={`/app/integrations${params.has("connect") ? "?connect=1" : ""}`} replace />;
+  if (requested === "services") return <Navigate to="/app/integrations?tab=telephony" replace />;
 
   const setTab = (value: Tab) => {
     const next = new URLSearchParams(params);
-    if (value === "apps") next.delete("tab");
+    if (value === "workspace") next.delete("tab");
     else next.set("tab", value);
     setParams(next, { replace: true });
   };
 
-  const refresh = () => {
-    setRefreshing(true);
-    reload();
-    window.setTimeout(() => setRefreshing(false), 800);
-  };
-
   return (
     <Page>
-      <PageHeader
-        icon={<IconSettings size={18} />}
-        title="Settings"
-        description={DESCRIPTION[tab]}
-        actions={
-          tab === "team" ? undefined : tab === "apps" ? (
-            <Button icon={<IconPlus size={14} />} onClick={() => setConnect("pick")}>
-              Connect an app
-            </Button>
-          ) : (
-            <Button variant="secondary" icon={<IconRefresh size={14} />} loading={refreshing} onClick={refresh}>
-              Re-check
-            </Button>
-          )
-        }
-      />
-
+      <PageHeader icon={<IconSettings size={18} />} title="Settings" description={DESCRIPTION[tab]} />
       <Tabs
         label="Settings"
         value={tab}
         onChange={setTab}
         className="mb-5"
         tabs={[
-          {
-            value: "apps",
-            label: (
-              <>
-                Connected apps <Badge tone="neutral">MCP</Badge>
-              </>
-            ),
-            icon: <IconPlug size={15} />,
-          },
-          { value: "services", label: "Services", icon: <IconSettings size={15} /> },
+          { value: "workspace", label: "Workspace", icon: <IconSettings size={15} /> },
           ...(teamAvailable ? [{ value: "team" as const, label: "Team", icon: <IconUsers size={15} /> }] : []),
+          { value: "security", label: "Security", icon: <IconShield size={15} /> },
         ]}
       />
-
-      <div role="tabpanel" aria-label={tab === "apps" ? "Connected apps" : tab === "team" ? "Team" : "Services"}>
-        {tab === "apps" ? (
-          <ConnectedApps connect={connect} onConnect={setConnect} />
-        ) : tab === "team" ? (
-          <Team />
-        ) : (
-          <Services onRetry={refresh} />
-        )}
+      <div role="tabpanel" aria-label={tab}>
+        {tab === "workspace" ? <Workspace /> : tab === "team" ? <Team /> : <Security />}
       </div>
     </Page>
   );
 }
 
-/** The server's own wiring — environment variables and what each unlocks. */
-function Services({ onRetry }: { onRetry: () => void }) {
-  const { health, error } = useHealth();
+function Workspace() {
+  const { health, reload } = useHealth();
+  const [refreshing, setRefreshing] = useState(false);
+  const recheck = () => {
+    setRefreshing(true);
+    reload();
+    window.setTimeout(() => setRefreshing(false), 800);
+  };
+
+  const places = [
+    {
+      to: "/app/ai-models",
+      icon: <IconChip size={17} />,
+      title: "AI models",
+      hint: "Providers, defaults and costs",
+      ok: health ? health.can_run_simulations : null,
+      status: health?.provider_label || "No provider",
+    },
+    {
+      to: "/app/integrations?tab=telephony",
+      icon: <IconPhone size={17} />,
+      title: "Telephony",
+      hint: "Real calls through Twilio or Telnyx",
+      ok: health ? health.can_place_calls : null,
+      status: health ? (health.can_place_calls ? cap(health.telephony_mode) : "Mocked") : "",
+    },
+    {
+      to: "/app/integrations",
+      icon: <IconPlug size={17} />,
+      title: "Connected apps",
+      hint: "Tools over MCP",
+      ok: health?.mcp_servers === undefined ? null : health.mcp_servers > 0,
+      status: health?.mcp_servers === undefined ? "" : `${health.mcp_servers} connected`,
+    },
+  ];
+
+  return (
+    <div className="space-y-5">
+      {!health ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} className="h-24 rounded-xl" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <Stat label="Connected" value={health.live.length} hint="Services with credentials" />
+          <Stat label="Not set up" value={health.mocked.length} hint="Running on mocks or off" accent={health.mocked.length > 0} />
+          <Stat label="Telephony" value={<span className="font-sans capitalize">{health.telephony_mode}</span>} hint={health.can_place_calls ? "Real calls on" : "Rehearsals only"} />
+        </div>
+      )}
+
+      {health?.note && <Callout tone="info">{health.note}</Callout>}
+
+      <Card className="overflow-hidden">
+        <CardHeader
+          title="Where things are set up"
+          action={
+            <Button size="sm" variant="ghost" icon={<IconRefresh size={13} />} loading={refreshing} onClick={recheck}>
+              Re-check
+            </Button>
+          }
+        />
+        <ul className="divide-y divide-line">
+          {places.map((p) => (
+            <li key={p.to}>
+              <Link to={p.to} className="flex items-center gap-4 px-5 py-3.5 transition-colors hover:bg-subtle/60">
+                <span className={cx("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", p.ok ? "bg-good/12 text-good" : "bg-subtle text-ink-muted")}>{p.icon}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-semibold text-ink">{p.title}</span>
+                  <span className="block text-xs text-ink-muted">{p.hint}</span>
+                </span>
+                {p.ok !== null && <Badge tone={p.ok ? "good" : "warning"}>{p.status}</Badge>}
+                <IconArrowRight size={14} className="shrink-0 text-ink-muted" />
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </Card>
+
+      <ServiceGroup title="Core" subtitle="Without these, nothing can talk or be saved." keys={["database", "model_provider"]} />
+    </div>
+  );
+}
+
+function Security() {
+  const { health } = useHealth();
   const auth = useAuth();
   const authOn = health?.auth_enabled ?? auth.enabled;
 
+  if (!health) return <Skeleton className="h-48 rounded-xl" />;
+
   return (
-    <>
-      {error && !health && (
-        <div className="mb-4">
-          <ErrorNote title="Couldn't reach the server" message={error} onRetry={onRetry} />
-        </div>
-      )}
-
-      {!health ? (
-        !error && (
-          <div className="space-y-3">
-            <div className="grid grid-cols-3 gap-3">
-              {[0, 1, 2].map((i) => (
-                <Skeleton key={i} className="h-24 rounded-xl" />
-              ))}
-            </div>
-            {[0, 1, 2].map((i) => (
-              <Skeleton key={i} className="h-40 rounded-xl" />
-            ))}
-          </div>
-        )
-      ) : (
-        <div className="space-y-5">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <Stat label="Connected" value={health.live.length} hint="Integrations with credentials" />
-            <Stat label="Not configured" value={health.mocked.length} hint="Running on mocks or off" accent={health.mocked.length > 0} />
-            <Stat
-              label="Mode"
-              value={<span className="font-sans capitalize">{health.telephony_mode}</span>}
-              hint={health.provider_label ? `Model: ${health.provider_label}` : "No model provider"}
-            />
-          </div>
-
-          <Callout tone="info">{health.note}</Callout>
-
-          {/* Access control */}
-          <Card>
-            <CardHeader title="Access" subtitle="Who can open this console and place calls." icon={<IconLock size={16} />} />
-            <div className="flex items-start gap-3 px-5 py-4">
-              <span className={cx("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", authOn ? "bg-good/12 text-good" : "bg-warning/12 text-warning")}>
-                <IconShield size={16} />
-              </span>
-              <div className="min-w-0 flex-1 text-sm">
-                <p className="font-medium text-ink">{authOn ? "Sign-in required" : "Open to anyone with the link"}</p>
-                <p className="mt-0.5 text-xs leading-relaxed text-ink-secondary">
-                  {authOn
-                    ? "Every API call and live stream needs a session. Sessions expire after AUTH_TOKEN_TTL_HOURS (12 by default)."
-                    : health.accounts
-                      ? "Create the owner account (or set ADMIN_PASSWORD on the server) to require a sign-in."
-                      : "Set ADMIN_PASSWORD on the server and restart to require a password. Optionally set AUTH_SECRET to keep sessions valid across password changes."}
-                </p>
-                {health.accounts && (
-                  <p className="mt-1.5 text-xs text-ink-muted">
-                    {health.accounts.users === 1 ? "1 account" : `${health.accounts.users} accounts`}. New people join by{" "}
-                    {health.accounts.registration_mode === "open"
-                      ? "registering (open)"
-                      : health.accounts.registration_mode === "closed"
-                        ? "nothing: registration is closed"
-                        : "invite"}
-                    . Set REGISTRATION_MODE to change it.
-                  </p>
-                )}
-              </div>
-              <Badge tone={authOn ? "good" : "warning"}>{authOn ? "On" : "Off"}</Badge>
-            </div>
-          </Card>
-
-          {GROUPS.map((group) => (
-            <Card key={group.title} className="overflow-hidden">
-              <CardHeader title={group.title} subtitle={group.subtitle} />
-              <ul className="divide-y divide-line">
-                {group.items.map((item) => {
-                  const live = health.checks[item.key] === true;
-                  return (
-                    <li key={item.key} className="flex items-start gap-4 px-5 py-4">
-                      <span className={cx("mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", live ? "bg-good/12 text-good" : "bg-subtle text-ink-muted")}>
-                        {item.icon}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-sm font-semibold text-ink">{item.label}</h3>
-                          {live ? (
-                            <Badge tone="good" icon={<IconCheck size={11} />}>
-                              Connected
-                            </Badge>
-                          ) : (
-                            <Badge tone="neutral">Not configured</Badge>
-                          )}
-                        </div>
-                        <p className="mt-0.5 text-xs leading-relaxed text-ink-secondary">{item.description}</p>
-                        {!live && (
-                          <p className="mt-2 rounded-md font-mono border border-line bg-subtle/60 px-3 py-2 text-2xs leading-relaxed text-ink-secondary">
-                            {item.configHint}
-                          </p>
-                        )}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </Card>
-          ))}
-
-          {health.provider && health.providers_configured.length > 1 && (
-            <p className="text-xs text-ink-muted">
-              Also configured: {health.providers_configured.filter((p) => p !== health.provider).join(", ")}. The active provider is{" "}
-              {health.provider_label}.
+    <div className="space-y-4">
+      <Card>
+        <CardHeader title="Access" subtitle="Who can open this console and place calls." icon={<IconLock size={16} />} />
+        <div className="flex items-start gap-3 px-5 py-4">
+          <span className={cx("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", authOn ? "bg-good/12 text-good" : "bg-warning/12 text-warning")}>
+            <IconShield size={16} />
+          </span>
+          <div className="min-w-0 flex-1 text-sm">
+            <p className="font-medium text-ink">{authOn ? "Sign-in required" : "Open to anyone with the link"}</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-ink-secondary">
+              {authOn
+                ? "Every API call and live stream needs a session. Sessions expire after AUTH_TOKEN_TTL_HOURS (12 by default)."
+                : health.accounts
+                  ? "Create the owner account (or set ADMIN_PASSWORD on the server) to require a sign-in."
+                  : "Set ADMIN_PASSWORD on the server and restart to require a password. Optionally set AUTH_SECRET to keep sessions valid across password changes."}
             </p>
-          )}
+            {health.accounts && (
+              <p className="mt-1.5 text-xs text-ink-muted">
+                {health.accounts.users === 1 ? "1 account" : `${health.accounts.users} accounts`}. New people join by{" "}
+                {health.accounts.registration_mode === "open" ? "registering (open)" : health.accounts.registration_mode === "closed" ? "nothing: registration is closed" : "invite"}. Set
+                REGISTRATION_MODE to change it.
+              </p>
+            )}
+            {!authOn && health.accounts && (
+              <Link to="/register" className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline">
+                Create the owner account <IconArrowRight size={12} />
+              </Link>
+            )}
+          </div>
+          <Badge tone={authOn ? "good" : "warning"}>{authOn ? "On" : "Off"}</Badge>
         </div>
-      )}
-    </>
+      </Card>
+
+      <Card>
+        <CardHeader title="Secrets at rest" subtitle="Provider keys, app URLs and headers stored by the console." icon={<IconLock size={16} />} />
+        <div className="flex items-start gap-3 px-5 py-4 text-sm">
+          <div className="min-w-0 flex-1">
+            <p className="font-medium text-ink">{health.secrets_sealed === false ? "Stored unencrypted" : "Encrypted"}</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-ink-secondary">
+              {health.secrets_sealed === false
+                ? "Set SECRETS_KEY (or AUTH_SECRET) on the server and restart to encrypt them. Keys are never shown again either way."
+                : "Keys are sealed before they're saved and never returned by the API, only their last four characters."}
+            </p>
+          </div>
+          <Badge tone={health.secrets_sealed === false ? "warning" : "good"}>{health.secrets_sealed === false ? "Off" : "On"}</Badge>
+        </div>
+      </Card>
+    </div>
   );
 }
+
+const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);

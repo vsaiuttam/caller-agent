@@ -32,7 +32,7 @@ export function AppFooter({ onShortcuts }: { onShortcuts: () => void }) {
         <span className="tnum" title="Console version and build">
           {BUILD}
         </span>
-        <Link to="/app/settings?tab=services" className={link} title={status.detail}>
+        <Link to="/app/integrations?tab=telephony" className={link} title={status.detail}>
           <span className={cx("h-1.5 w-1.5 rounded-full", STATUS_DOT[status.tone])} aria-hidden />
           <span>
             <span className="sr-only">System status: </span>

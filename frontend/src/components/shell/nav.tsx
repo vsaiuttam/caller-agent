@@ -13,7 +13,7 @@ import {
   IconFlask,
   IconLive,
   IconPhone,
-  IconReview,
+  IconPlug,
   IconSettings,
   IconSparkle,
 } from "../icons";
@@ -40,8 +40,7 @@ export const NAV_GROUPS: Array<{ heading?: string; items: NavItem[] }> = [
     heading: "Operate",
     items: [
       { to: "/app/campaigns", label: "Campaigns", hint: "Who to call and what to say", key: "p", icon: (s) => <IconCampaign size={s} /> },
-      { to: "/app/calls", label: "Calls", hint: "Every conversation, saved", key: "c", icon: (s) => <IconPhone size={s} /> },
-      { to: "/app/review", label: "Review queue", hint: "Outcomes that need a human", key: "r", icon: (s) => <IconReview size={s} />, badge: "review" },
+      { to: "/app/calls", label: "Calls", hint: "Every conversation, and what needs review", key: "c", icon: (s) => <IconPhone size={s} />, badge: "review" },
       { to: "/app/live", label: "Live", hint: "Calls on the line right now", key: "l", icon: (s) => <IconLive size={s} />, badge: "live" },
     ],
   },
@@ -55,8 +54,9 @@ export const NAV_GROUPS: Array<{ heading?: string; items: NavItem[] }> = [
   {
     heading: "Configure",
     items: [
-      { to: "/app/models", label: "Models", hint: "Pick the LLMs and see the cost", key: "m", icon: (s) => <IconChip size={s} /> },
-      { to: "/app/settings", label: "Settings", hint: "Connected apps, services and team", key: "i", icon: (s) => <IconSettings size={s} /> },
+      { to: "/app/ai-models", label: "AI models", hint: "Providers, defaults and what a call costs", key: "m", icon: (s) => <IconChip size={s} /> },
+      { to: "/app/integrations", label: "Integrations", hint: "Apps, telephony, messaging, webhooks", key: "i", icon: (s) => <IconPlug size={s} /> },
+      { to: "/app/settings", label: "Settings", hint: "Workspace, team and security", key: "s", icon: (s) => <IconSettings size={s} /> },
       { to: "/app/suppressions", label: "Do not call", hint: "Numbers never dialled", key: "d", icon: (s) => <IconBlock size={s} /> },
     ],
   },
@@ -76,8 +76,9 @@ export function crumbsFor(pathname: string, dynamic: string | null): Crumb[] {
   const test = (re: RegExp) => re.test(path);
   if (path === "/") return [{ label: "Overview" }];
   if (test(/^\/campaigns\/new/)) return [{ label: "Campaigns", to: "/app/campaigns" }, { label: "New campaign" }];
+  if (test(/^\/campaigns\/[^/]+\/edit/))
+    return [{ label: "Campaigns", to: "/app/campaigns" }, { label: dynamic ?? "Campaign", to: path.replace(/\/edit.*$/, "").replace(/^/, "/app") }, { label: "Edit" }];
   if (test(/^\/campaigns\/[^/]+/)) return [{ label: "Campaigns", to: "/app/campaigns" }, { label: dynamic ?? "Campaign" }];
-  if (test(/^\/review/)) return [{ label: "Calls", to: "/app/calls" }, { label: "Review queue" }];
   if (test(/^\/test-lab\/phone/)) return [{ label: "Test lab", to: "/app/test-lab" }, { label: "Call a phone" }];
   if (test(/^\/test-lab\/mic/)) return [{ label: "Test lab", to: "/app/test-lab" }, { label: "Browser mic" }];
   if (test(/^\/test-lab/)) return [{ label: "Test lab", to: "/app/test-lab" }, { label: "Simulated caller" }];

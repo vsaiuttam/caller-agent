@@ -10,7 +10,7 @@ import { useState } from "react";
 import { ApiError, api } from "../api";
 import { CallConsole, type CallPhase } from "../components/live/CallConsole";
 import { IconPhone } from "../components/icons";
-import { Button, Callout, Card, CardHeader, EmptyState, Field, Input, Switch, toast } from "../components/ui";
+import { Button, ButtonLink, Callout, Card, CardHeader, EmptyState, Field, Input, Switch, toast } from "../components/ui";
 import { useHealth } from "../data";
 import { useLocalStorage } from "../hooks";
 import { CampaignField, useTestLab } from "./TestLab";
@@ -132,12 +132,16 @@ export default function PhoneTest() {
 
       <div className="min-w-0 space-y-3">
         {health && !modelReady && (
-          <Callout tone="warning" title="No model provider is configured">
-            Set a provider key on the server — the agent has nothing to think with yet.
+          <Callout tone="warning" title="No model provider is configured" action={<ButtonLink to="/app/ai-models?add=1" size="sm" variant="secondary">Add a provider</ButtonLink>}>
+            The agent has nothing to think with yet. Add an LLM key on AI models.
           </Callout>
         )}
         {health && modelReady && !telephonyReady && (
-          <Callout tone="warning" title="Real calls need a phone carrier">
+          <Callout
+            tone="warning"
+            title="Real calls need a phone carrier"
+            action={<ButtonLink to="/app/integrations?tab=telephony" size="sm" variant="secondary">Set up Twilio</ButtonLink>}
+          >
             The server is in <span className="font-medium capitalize">{health.telephony_mode}</span> mode. Set{" "}
             <code className="font-mono text-2xs">TELEPHONY=twilio</code> (or <code className="font-mono text-2xs">telnyx</code>) with its
             credentials and restart. Simulated calls and the browser mic work without it.

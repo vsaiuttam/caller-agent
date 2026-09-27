@@ -22,6 +22,8 @@ export const LEGACY_SECTIONS = [
   "test-lab",
   "templates",
   "models",
+  "integrations",
+  "ai-models",
   "settings",
   "suppressions",
 ] as const;

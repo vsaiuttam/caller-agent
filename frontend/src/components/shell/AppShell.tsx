@@ -11,6 +11,7 @@ import { BRAND } from "../../brand";
 import { useHealth, useLiveCalls, useStats, useStreamStatus } from "../../data";
 import { useLocalStorage } from "../../hooks";
 import { useTheme } from "../../theme";
+import { Assistant } from "../assistant/Assistant";
 import CommandPalette from "../CommandPalette";
 import { Logo, LogoMark } from "../Logo";
 import { MOD_KEY, ShortcutsDialog } from "../ShortcutsDialog";
@@ -192,6 +193,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         onShowShortcuts={() => setShortcutsOpen(true)}
       />
       <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <Assistant />
     </CrumbContext.Provider>
   );
 }
@@ -455,7 +457,7 @@ function HealthPill() {
           </p>
         </div>
         <Link
-          to="/app/settings?tab=services"
+          to="/app/integrations?tab=telephony"
           onClick={() => setOpen(false)}
           className="flex items-center justify-between rounded-lg px-2.5 py-2 text-xs font-medium text-ink transition-colors hover:bg-subtle"
         >

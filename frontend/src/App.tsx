@@ -26,7 +26,7 @@ const ConsoleLayout = lazy(() => import("./components/shell/ConsoleLayout"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Campaigns = lazy(() => import("./pages/Campaigns"));
 const CampaignDetail = lazy(() => import("./pages/CampaignDetail"));
-const NewCampaign = lazy(() => import("./pages/NewCampaign"));
+const CampaignBuilder = lazy(() => import("./pages/CampaignBuilder"));
 const Calls = lazy(() => import("./pages/Calls"));
 const Live = lazy(() => import("./pages/Live"));
 const TestLab = lazy(() => import("./pages/TestLab"));
@@ -34,8 +34,9 @@ const Simulator = lazy(() => import("./pages/Simulator"));
 const PhoneTest = lazy(() => import("./pages/PhoneTest"));
 const LiveMic = lazy(() => import("./pages/LiveMic"));
 const Templates = lazy(() => import("./pages/Templates"));
-const Models = lazy(() => import("./pages/Models"));
+const AiModels = lazy(() => import("./pages/AiModels"));
 const Settings = lazy(() => import("./pages/Settings"));
+const Integrations = lazy(() => import("./pages/Integrations"));
 const Suppressions = lazy(() => import("./pages/Suppressions"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
@@ -52,10 +53,11 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="dashboard" element={<Moved to={APP} />} />
             <Route path="campaigns" element={<Campaigns />} />
-            <Route path="campaigns/new" element={<NewCampaign />} />
+            <Route path="campaigns/new" element={<CampaignBuilder key="new" />} />
+            <Route path="campaigns/:id/edit" element={<CampaignBuilder key="edit" />} />
             <Route path="campaigns/:id" element={<CampaignDetail />} />
             <Route path="calls" element={<Calls />} />
-            <Route path="review" element={<Calls reviewOnly />} />
+            <Route path="review" element={<ToReview />} />
             <Route path="live" element={<Live />} />
             <Route path="test-lab" element={<TestLab />}>
               <Route index element={<Simulator />} />
@@ -64,7 +66,9 @@ export default function App() {
             </Route>
             <Route path="simulator" element={<Moved to={`${APP}/test-lab`} />} />
             <Route path="templates" element={<Templates />} />
-            <Route path="models" element={<Models />} />
+            <Route path="ai-models" element={<AiModels />} />
+            <Route path="models" element={<Moved to={`${APP}/ai-models`} />} />
+            <Route path="integrations" element={<Integrations />} />
             <Route path="settings" element={<Settings />} />
             <Route path="suppressions" element={<Suppressions />} />
             <Route path="*" element={<NotFound />} />
@@ -104,6 +108,14 @@ function Moved({ to }: { to?: string }) {
   const location = useLocation();
   const pathname = to ?? `${APP}${location.pathname}`;
   return <Navigate to={{ pathname, search: location.search, hash: location.hash }} replace />;
+}
+
+/** The review queue is a view of Calls now; `/app/review?call=42` keeps its call. */
+function ToReview() {
+  const location = useLocation();
+  const search = new URLSearchParams(location.search);
+  search.set("view", "review");
+  return <Navigate to={{ pathname: `${APP}/calls`, search: `?${search}`, hash: location.hash }} replace />;
 }
 
 function Splash() {

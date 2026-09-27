@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type Campaign, type CampaignStatus } from "../api";
+import { DialerPill, useDialer } from "../components/campaign/Dialer";
 import { IconCampaign, IconPlus, IconSearch, IconSparkle } from "../components/icons";
 import {
   Badge,
@@ -13,7 +14,6 @@ import {
   PageHeader,
   Segmented,
   Skeleton,
-  StatusBadge,
 } from "../components/ui";
 import { formatUsd } from "../format";
 import { useAsync, useDocumentTitle } from "../hooks";
@@ -120,7 +120,7 @@ export default function Campaigns() {
           <EmptyState compact avatar="thinking" title="No campaigns match" hint="Try another status or search." />
         </Card>
       ) : (
-        <ul className="grid gap-3 md:grid-cols-2">
+        <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {visible.map((c) => (
             <li key={c.id}>
               <CampaignCard campaign={c} />
@@ -133,15 +133,18 @@ export default function Campaigns() {
 }
 
 function CampaignCard({ campaign: c }: { campaign: Campaign }) {
+  const dialer = useDialer(c);
+  const reason = c.status === "running" && dialer.status && dialer.status.state !== "dialing" ? dialer.status.reason : null;
   const progress = c.total_contacts ? (c.completed / c.total_contacts) * 100 : 0;
   return (
     <Link to={`/app/campaigns/${c.id}`} className="block h-full rounded-xl">
       <Card interactive className="flex h-full flex-col px-5 py-4">
         <div className="flex items-start justify-between gap-3">
           <h2 className="min-w-0 truncate text-base font-semibold tracking-tight text-ink">{c.name}</h2>
-          <StatusBadge status={c.status} />
+          <DialerPill campaign={c} status={dialer.status} />
         </div>
         <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-ink-secondary">{c.goal}</p>
+        {reason && <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-ink-muted">{reason}</p>}
 
         <div className="mt-auto pt-4">
           <div className="flex items-baseline justify-between text-xs">

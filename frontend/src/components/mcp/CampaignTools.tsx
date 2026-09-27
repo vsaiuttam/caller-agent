@@ -12,6 +12,7 @@ import { useHealth } from "../../data";
 import { useAsync } from "../../hooks";
 import { IconPlug, IconSearch, IconWrench } from "../icons";
 import {
+  Button,
   ButtonLink,
   Callout,
   Card,
@@ -55,11 +56,17 @@ export function CampaignToolsCard({
   value,
   onChange,
   action,
+  onConnect,
+  reloadKey = 0,
 }: {
   value: ToolChoice;
   onChange: (next: ToolChoice) => void;
   /** Header actions, e.g. Save / Discard on a saved campaign. */
   action?: ReactNode;
+  /** Open the connect flow in place (the builder) instead of linking to Integrations. */
+  onConnect?: () => void;
+  /** Bump to refetch the tool list, e.g. after an app was connected in place. */
+  reloadKey?: number;
 }) {
   // Null: the backend predates connected apps (404), so there's nothing to choose.
   const catalog = useAsync(async () => {
@@ -69,7 +76,7 @@ export function CampaignToolsCard({
       if (err instanceof ApiError && err.status === 404) return null;
       throw err;
     }
-  }, []);
+  }, [reloadKey]);
   const { health } = useHealth();
   const nothingChosen = !value.mcp_tools.length && !value.mcp_post_call_tools.length;
 
@@ -98,16 +105,38 @@ export function CampaignToolsCard({
         avatar={false}
         icon={<IconPlug size={26} />}
         title="No connected apps yet"
-        hint="Connect your CRM, calendar or helpdesk under Integrations — or the built-in Demo CRM — then choose here what this campaign's agent may use."
+        hint="Connect your CRM, calendar or helpdesk (or the built-in Demo CRM), then choose here what this campaign's agent may use."
         action={
-          <ButtonLink to="/app/settings?connect=1" size="sm" icon={<IconPlug size={13} />}>
-            Connect an app
-          </ButtonLink>
+          onConnect ? (
+            <Button size="sm" icon={<IconPlug size={13} />} onClick={onConnect}>
+              Connect an app
+            </Button>
+          ) : (
+            <ButtonLink to="/app/integrations?connect=1" size="sm" icon={<IconPlug size={13} />}>
+              Connect an app
+            </ButtonLink>
+          )
         }
       />
     );
   } else {
     body = <ToolChoiceEditor catalog={catalog.data ?? []} value={value} onChange={onChange} />;
+  }
+
+  const connectAction = onConnect && catalog.data && !(catalog.data.length === 0 && nothingChosen) && (
+    <Button size="sm" variant="secondary" icon={<IconPlug size={13} />} onClick={onConnect}>
+      Connect an app
+    </Button>
+  );
+  if (connectAction) {
+    action = action ? (
+      <>
+        {connectAction}
+        {action}
+      </>
+    ) : (
+      connectAction
+    );
   }
 
   return (
@@ -194,7 +223,7 @@ function ToolChoiceEditor({
       {catalog.length === 0 && (
         <p className="rounded-lg border border-dashed border-line-strong px-4 py-3 text-xs leading-relaxed text-ink-muted">
           None of your connected apps is available right now — they're turned off or failing. Check them under{" "}
-          <Link to="/app/settings" className="font-medium text-brand hover:underline">
+          <Link to="/app/integrations" className="font-medium text-brand hover:underline">
             Integrations
           </Link>
           .

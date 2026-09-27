@@ -35,6 +35,7 @@ import CallResult, { FigureCard } from "../components/CallResult";
 import { IconCheck, IconMic, IconMicOff, IconPhoneOff, IconSend, IconShield } from "../components/icons";
 import { LiveTranscript, type DisplayTurn } from "../components/Transcript";
 import {
+  ButtonLink,
   Badge,
   Button,
   Callout,
@@ -645,8 +646,8 @@ export default function LiveMic() {
       {/* ---- The call ---- */}
       <div className="min-w-0 space-y-3">
         {health && !health.can_run_simulations && (
-          <Callout tone="warning" title="No model provider is configured">
-            There is nothing to talk to yet. Set a provider key on the server and restart it.
+          <Callout tone="warning" title="No model provider is configured" action={<ButtonLink to="/app/ai-models?add=1" size="sm" variant="secondary">Add a provider</ButtonLink>}>
+            There is nothing to talk to yet. Add an LLM key on AI models, then start the call.
           </Callout>
         )}
         {!SPEECH && (
