@@ -443,9 +443,10 @@ export function SecretInput({
 
 export function Textarea({
   className = "",
+  ref,
   ...rest
-}: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea className={cx(inputClass, "min-h-20 resize-y py-2 leading-relaxed", className)} {...rest} />;
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & { ref?: Ref<HTMLTextAreaElement> }) {
+  return <textarea ref={ref} className={cx(inputClass, "min-h-20 resize-y py-2 leading-relaxed", className)} {...rest} />;
 }
 
 export function Select({
