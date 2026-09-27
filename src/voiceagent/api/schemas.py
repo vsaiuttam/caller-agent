@@ -56,7 +56,7 @@ class CampaignCreate(BaseModel):
     extra_instructions: str = Field(
         default="", description="Free-form persona guidance for this campaign."
     )
-    language: str = Field(default="en", description="Language code: en, hi, ur, hi-en.")
+    language: str = Field(default="en", description="Language code from GET /api/languages.")
     template_id: str | None = Field(
         default=None, description="Template this campaign was created from, if any."
     )
@@ -101,6 +101,18 @@ class CampaignCreate(BaseModel):
         default="", max_length=4000, description="What to record after the call, and where."
     )
 
+    # v3. A provider id from GET /api/providers (a row id or `env:<kind>`);
+    # null means the workspace default for that role.
+    conversation_provider_id: str | None = Field(default=None, max_length=64)
+    extraction_provider_id: str | None = Field(default=None, max_length=64)
+    # A voice id from GET /api/voices; null is the default speaker.
+    voice: str | None = Field(default=None, max_length=40)
+    # A short text before the call. {name}, {company}, {minutes}, {agent}.
+    precall_enabled: bool = False
+    precall_channel: Literal["sms", "whatsapp"] = "sms"
+    precall_message: str = Field(default="", max_length=1000)
+    precall_lead_minutes: int = Field(default=10, ge=2, le=240)
+
 
 class CampaignUpdate(BaseModel):
     """Partial update. Omitted fields are left unchanged."""
@@ -129,6 +141,13 @@ class CampaignUpdate(BaseModel):
     mcp_tools: list[str] | None = None
     mcp_post_call_tools: list[str] | None = None
     mcp_post_call_instructions: str | None = Field(default=None, max_length=4000)
+    conversation_provider_id: str | None = Field(default=None, max_length=64)
+    extraction_provider_id: str | None = Field(default=None, max_length=64)
+    voice: str | None = Field(default=None, max_length=40)
+    precall_enabled: bool | None = None
+    precall_channel: Literal["sms", "whatsapp"] | None = None
+    precall_message: str | None = Field(default=None, max_length=1000)
+    precall_lead_minutes: int | None = Field(default=None, ge=2, le=240)
 
 
 class CampaignOut(CampaignCreate):
@@ -147,6 +166,9 @@ class CampaignOut(CampaignCreate):
     completed: int = 0
     needs_review: int = 0
     spend_usd: float = 0.0
+    # On list items for running campaigns: the same shape as
+    # GET /api/campaigns/{id}/dialer, to save the list a request per row.
+    dialer: DialerStatus | None = None
 
 
 # --------------------------------------------------------------------------
@@ -164,13 +186,132 @@ class ModelDefaults(BaseModel):
 
 
 class EstimateRequest(BaseModel):
-    conversation_model: str = DEFAULT_CONVERSATION_MODEL
+    """What a call and a campaign cost: model, voice and phone line (v3).
+
+    Unset models mean the provider's defaults. The pre-v3 fields (`contacts`,
+    efforts, `exchanges`, `connect_rate`) are still accepted; with
+    `contacts` set, the pre-v3 token-only estimate is included as well.
+    """
+
+    provider_id: str | None = Field(default=None, max_length=64)
+    conversation_model: str | None = None
+    extraction_model: str | None = None
+    language: str | None = None
+    minutes_per_call: float = Field(default=3, gt=0, le=120)
+    calls: int = Field(default=1000, ge=0, le=10_000_000)
+    telephony_region: Literal["IN", "US"] = "IN"
+    include_voice: bool = True
+    # Pre-v3.
     conversation_effort: str = DEFAULT_CONVERSATION_EFFORT
-    extraction_model: str = DEFAULT_EXTRACTION_MODEL
     extraction_effort: str = DEFAULT_EXTRACTION_EFFORT
-    contacts: int = Field(default=1000, ge=1, le=1_000_000)
+    contacts: int | None = Field(default=None, ge=1, le=1_000_000)
     exchanges: int = Field(default=8, ge=1, le=60)
     connect_rate: float = Field(default=0.55, ge=0.0, le=1.0)
+
+
+# --------------------------------------------------------------------------
+# Model providers (v3)
+# --------------------------------------------------------------------------
+
+
+class CustomModel(BaseModel):
+    """A model the catalog doesn't list, priced by whoever added it. Prices
+    may be null: unknown, shown as "price not set", never as $0."""
+
+    id: str = Field(min_length=1, max_length=200)
+    name: str = Field(default="", max_length=200)
+    input_per_mtok: float | None = Field(default=None, ge=0)
+    output_per_mtok: float | None = Field(default=None, ge=0)
+
+
+class ProviderCreate(BaseModel):
+    kind: str = Field(min_length=1, max_length=32)
+    label: str | None = Field(default=None, max_length=80)
+    base_url: str | None = Field(default=None, max_length=500)
+    # Optional only for an OpenAI-compatible local server, which takes none.
+    api_key: str | None = Field(default=None, max_length=1000)
+    custom_models: list[CustomModel] = Field(default_factory=list, max_length=200)
+
+
+class ProviderUpdate(BaseModel):
+    label: str | None = Field(default=None, max_length=80)
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=1000)
+    enabled: bool | None = None
+    custom_models: list[CustomModel] | None = Field(default=None, max_length=200)
+
+
+class ProviderOut(BaseModel):
+    id: str
+    kind: str
+    label: str
+    base_url: str | None
+    source: Literal["db", "env"]
+    enabled: bool
+    supports_tools: bool
+    api_shape: str
+    # The last four characters of the key. The key itself never leaves.
+    key_hint: str
+    status: Literal["ok", "untested", "error"]
+    last_error: str | None = None
+    models_count: int
+    custom_models: list[CustomModel] = Field(default_factory=list)
+
+
+class ProviderTestResult(BaseModel):
+    ok: bool
+    latency_ms: int
+    model: str | None = None
+    error: str | None = None
+
+
+class RoleDefault(BaseModel):
+    provider_id: str | None = Field(default=None, max_length=64)
+    model: str | None = Field(default=None, max_length=200)
+
+
+class WorkspaceModelDefaults(BaseModel):
+    conversation: RoleDefault = Field(default_factory=RoleDefault)
+    extraction: RoleDefault = Field(default_factory=RoleDefault)
+
+
+class TranslateRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    to: str = Field(min_length=2, max_length=8)
+
+
+class VoicePreviewRequest(BaseModel):
+    voice: str = Field(min_length=1, max_length=40)
+    language: str = Field(default="en", max_length=8)
+    text: str | None = Field(default=None, max_length=300)
+
+
+class AssistantMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=4000)
+
+
+class AssistantChatRequest(BaseModel):
+    messages: list[AssistantMessage] = Field(min_length=1, max_length=40)
+    page: str | None = Field(default=None, max_length=200)
+
+
+class DialerStatus(BaseModel):
+    """Why a campaign is or isn't dialling right now (GET /campaigns/{id}/dialer)."""
+
+    state: Literal[
+        "dialing", "waiting_window", "paused", "draft", "completed", "blocked", "asleep_risk"
+    ]
+    reason: str
+    next_window_start: datetime | None = None
+    pending: int = 0
+    in_progress: int = 0
+    done: int = 0
+    failed: int = 0
+    blockers: list[str] = Field(default_factory=list)
+
+
+CampaignOut.model_rebuild()
 
 
 # --------------------------------------------------------------------------

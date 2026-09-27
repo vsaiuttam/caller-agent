@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Any
 
 from .catalog import (
     CONVERSATION,
+    price_custom_model,
     DEFAULT_CONVERSATION_EFFORT,
     DEFAULT_CONVERSATION_MODEL,
     TokenUsage,
@@ -53,7 +54,7 @@ from .catalog import (
 )
 from .models import CallContext, Contact, Turn
 from .prompts import build_guidance_block, build_system_blocks, build_system_text
-from .providers import ANTHROPIC_API, active
+from .providers import ANTHROPIC_API, active, chat_params, stream_params
 
 if TYPE_CHECKING:
     from .mcp.toolbox import Toolbox, ToolResult, ToolSpec
@@ -186,11 +187,15 @@ class ConversationLLM:
         effort: str | None = None,
         usage: TokenUsage | None = None,
         toolbox: Toolbox | None = None,
+        provider=None,
     ) -> None:
         self._client = client
-        self._model = resolve(model, CONVERSATION)
+        # The campaign's own provider (v3), or None for the env provider.
+        # Its shape decides the request; its presets decide what it accepts.
+        self._provider = provider
+        self._model = resolve(model, CONVERSATION, provider)
         self._effort = resolve_effort(effort, CONVERSATION)
-        spec = active()
+        spec = provider or active()
         self._api = spec.api if spec else ANTHROPIC_API
         # Tools are offered only where the provider can use them; otherwise
         # the call runs exactly as it would with no toolbox at all.
@@ -209,6 +214,7 @@ class ConversationLLM:
         # Shared with the pipeline so the call's ledger accumulates across
         # both the conversation and the extraction that follows it.
         self.usage = usage if usage is not None else TokenUsage()
+        price_custom_model(self.usage, self._model, provider)
         # Notes whispered by a supervisor during the call. See add_guidance().
         self._guidance: list[str] = []
         # Whether the last generated turn ended with END_CALL_MARKER.
@@ -411,8 +417,6 @@ class ConversationLLM:
         """
         kwargs: dict = dict(
             model=self._model,
-            max_tokens=MAX_TOKENS,
-            reasoning_effort=self._effort,
             messages=[
                 {"role": "system", "content": self._system_prompt_text()},
                 *self._messages(),
@@ -420,7 +424,8 @@ class ConversationLLM:
             stream=True,
             # Usage arrives in a final chunk only if asked for, and without it
             # every call on this path would silently record as free.
-            stream_options={"include_usage": True},
+            **stream_params(self._provider),
+            **chat_params(self._provider, self._model, max_tokens=MAX_TOKENS, effort=self._effort),
         )
         if self._specs:
             kwargs["tools"] = chat_tools(self._specs)
@@ -583,3 +588,72 @@ def _find_flush_point(buffer: str) -> int | None:
             return match.end()
 
     return None
+
+
+# --------------------------------------------------------------------------
+# Plain text, off the call: translation and the in-app assistant. Same two
+# API shapes, no tools, no prompt caching, no clause flushing.
+# --------------------------------------------------------------------------
+
+
+async def stream_text(
+    client,
+    provider,
+    model: str,
+    *,
+    system: str,
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    usage: TokenUsage | None = None,
+) -> AsyncIterator[str]:
+    """Stream a reply as raw text deltas, on whichever shape `provider` speaks."""
+    spec = provider or active()
+    if spec is None or spec.api == ANTHROPIC_API:
+        async with client.messages.stream(
+            model=model, max_tokens=max_tokens, system=system, messages=messages
+        ) as stream:
+            async for delta in stream.text_stream:
+                yield delta
+            if usage is not None:
+                try:
+                    final = await stream.get_final_message()
+                    usage.add_response_usage(model, final.usage)
+                except Exception:  # noqa: BLE001 - accounting never breaks a reply
+                    pass
+        return
+
+    stream = await client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": system}, *messages],
+        stream=True,
+        **stream_params(provider),
+        **chat_params(provider, model, max_tokens=max_tokens, effort=None),
+    )
+    async for event in stream:
+        if event.choices and event.choices[0].delta.content:
+            yield event.choices[0].delta.content
+        if usage is not None and getattr(event, "usage", None):
+            usage.add_response_usage(model, event.usage)
+
+
+async def complete_text(
+    client,
+    provider,
+    model: str,
+    *,
+    system: str,
+    user: str,
+    max_tokens: int,
+    usage: TokenUsage | None = None,
+) -> str:
+    """One reply as a string. Built on `stream_text`, so both shapes (and any
+    test double that streams) behave the same here."""
+    parts = [
+        delta
+        async for delta in stream_text(
+            client, provider, model, system=system,
+            messages=[{"role": "user", "content": user}],
+            max_tokens=max_tokens, usage=usage,
+        )
+    ]
+    return "".join(parts).strip()

@@ -37,7 +37,7 @@ from .catalog import CONVERSATION, EXTRACTION, TokenUsage, resolve, resolve_effo
 from .llm import ConversationLLM, ToolPause
 from .models import CallContext, CallOutcome, Contact, Qualification, Turn
 from .postcall.extract import extract_outcome
-from .providers import ANTHROPIC_API, active
+from .providers import ANTHROPIC_API, active, chat_params
 from .scoring import qualify_outcome
 from .voice.session import _is_closing
 
@@ -61,8 +61,14 @@ PERSONA_MODEL = PERSONA_MODELS["anthropic"]
 PERSONA_MAX_TOKENS = 200
 
 
-def persona_model() -> str:
-    return PERSONA_MODELS.get((active().id if active() else ""), PERSONA_MODEL)
+def persona_model(provider=None, fallback: str | None = None) -> str:
+    """The model that plays the person. On a provider with no persona model
+    of its own, the agent's model plays it too: that costs a shared quota
+    pool, but it is the one model this key is known to reach."""
+    if provider is None:
+        return PERSONA_MODELS.get((active().id if active() else ""), PERSONA_MODEL)
+    kind = getattr(provider, "kind", None) or provider.id
+    return PERSONA_MODELS.get(kind) or fallback or PERSONA_MODEL
 
 # A simulated call cannot hang up on itself, and a model happily talking to a
 # model will keep going indefinitely. This is the stop.
@@ -254,6 +260,9 @@ async def simulate_call(
     extraction_effort: str | None = None,
     max_exchanges: int = DEFAULT_MAX_EXCHANGES,
     toolbox: Toolbox | None = None,
+    provider=None,
+    extraction_client=None,
+    extraction_provider=None,
 ) -> SimulationResult:
     """Run one call end to end against a simulated person.
 
@@ -271,6 +280,7 @@ async def simulate_call(
         effort=conversation_effort,
         usage=usage,
         toolbox=toolbox,
+        provider=provider,
     )
 
     persona_system = PERSONA_SYSTEM.format(
@@ -299,7 +309,9 @@ async def simulate_call(
     ended_because = "hit the exchange limit"
 
     for _ in range(max_exchanges):
-        person_text = await _persona_reply(client, persona_system, transcript, usage)
+        person_text = await _persona_reply(
+            client, persona_system, transcript, usage, provider, agent.model
+        )
 
         if not person_text or "[HANGUP]" in person_text:
             ended_because = "the person hung up"
@@ -345,7 +357,7 @@ async def simulate_call(
             break
 
     outcome = await extract_outcome(
-        client,
+        extraction_client or client,
         contact=contact,
         context=context,
         turns=transcript,
@@ -353,6 +365,7 @@ async def simulate_call(
         model=extraction_model,
         effort=extraction_effort,
         usage=usage,
+        provider=extraction_provider if extraction_client is not None else provider,
     )
 
     return SimulationResult(
@@ -360,8 +373,11 @@ async def simulate_call(
         turns=turns,
         outcome=outcome,
         usage=usage,
-        conversation_model=resolve(conversation_model, CONVERSATION),
-        extraction_model=resolve(extraction_model, EXTRACTION),
+        conversation_model=agent.model,
+        extraction_model=resolve(
+            extraction_model, EXTRACTION,
+            extraction_provider if extraction_client is not None else provider,
+        ),
         persona=persona.id,
         ended_because=ended_because,
         qualification=qualify_outcome(context, outcome) if context.scorecard else None,
@@ -373,6 +389,8 @@ async def _persona_reply(
     system: str,
     transcript: list[Turn],
     usage: TokenUsage,
+    provider=None,
+    agent_model: str | None = None,
 ) -> str:
     """One turn from the simulated person.
 
@@ -388,8 +406,8 @@ async def _persona_reply(
         # that somehow starts with the person can't be replayed as-is.
         messages.insert(0, {"role": "user", "content": "(the phone rings)"})
 
-    model = persona_model()
-    spec = active()
+    model = persona_model(provider, agent_model)
+    spec = provider or active()
 
     if spec is None or spec.api == ANTHROPIC_API:
         response = await client.messages.create(
@@ -404,8 +422,8 @@ async def _persona_reply(
 
     response = await client.chat.completions.create(
         model=model,
-        max_tokens=PERSONA_MAX_TOKENS,
         messages=[{"role": "system", "content": system}, *messages],
+        **chat_params(provider, model, max_tokens=PERSONA_MAX_TOKENS, effort=None),
     )
     usage.add_response_usage(model, getattr(response, "usage", None))
     return (response.choices[0].message.content or "").strip()

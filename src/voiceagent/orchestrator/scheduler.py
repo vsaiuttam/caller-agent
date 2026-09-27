@@ -79,9 +79,11 @@ def next_window_open(tz_name: str, window: CallingWindow, now_utc: datetime) -> 
             open_at = candidate.replace(
                 hour=window.start_hour, minute=0, second=0, microsecond=0
             )
+            # An end hour of 24 (calling until midnight) is the start of the
+            # next day, which `replace(hour=24)` cannot say.
             close_at = candidate.replace(
-                hour=window.end_hour, minute=0, second=0, microsecond=0
-            )
+                hour=min(window.end_hour, 23), minute=0, second=0, microsecond=0
+            ) + timedelta(hours=max(0, window.end_hour - 23))
             if candidate < open_at:
                 return open_at.astimezone(timezone.utc)
             if candidate < close_at:

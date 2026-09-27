@@ -25,6 +25,15 @@ class Language:
     # because a model given Hindi contact data will otherwise drift into
     # English mid-call.
     instruction: str
+    # Sarvam's code for speech in and out (Saarika STT, Bulbul TTS). Urdu and
+    # Hinglish are spoken by the Hindi voice: the phrases and the model's
+    # replies for them are written in Devanagari (Urdu) or Latin (Hinglish),
+    # both of which the Hindi voice reads.
+    sarvam_code: str = "en-IN"
+    # Twilio <Gather> speech-recognition tag. None where Twilio has none
+    # (Odia), in which case calls listen in Indian English — see
+    # voice/twilio_adapter.py.
+    twilio_code: str | None = "en-IN"
 
 
 LANGUAGES: list[Language] = [
@@ -32,7 +41,14 @@ LANGUAGES: list[Language] = [
         code="en",
         name="English",
         native_name="English",
-        instruction="Speak English throughout the call.",
+        # Indian English by default: the voices are Indian, and so, mostly,
+        # are the people being called.
+        instruction=(
+            "Speak English throughout the call, plainly and warmly. If the person "
+            "mixes in Hindi or another Indian language, follow their lead."
+        ),
+        sarvam_code="en-IN",
+        twilio_code="en-IN",
     ),
     Language(
         code="hi",
@@ -45,6 +61,8 @@ LANGUAGES: list[Language] = [
             "use heavily Sanskritised vocabulary; it sounds stilted spoken aloud. "
             "If the person replies in English, switch to English and stay there."
         ),
+        sarvam_code="hi-IN",
+        twilio_code="hi-IN",
     ),
     Language(
         code="ur",
@@ -56,6 +74,8 @@ LANGUAGES: list[Language] = [
             "speech — keep them. If the person replies in English or Hindi, switch "
             "to match them."
         ),
+        sarvam_code="hi-IN",
+        twilio_code="ur-IN",
     ),
     Language(
         code="hi-en",
@@ -67,8 +87,102 @@ LANGUAGES: list[Language] = [
             "not translate technical or business terms into formal Hindi. Follow "
             "the person's lead: if they use more English, use more English."
         ),
+        sarvam_code="hi-IN",
+        twilio_code="hi-IN",
+    ),
+    Language(
+        code="te",
+        name="Telugu",
+        native_name="తెలుగు",
+        instruction=(
+            'Speak Telugu throughout the call, in the everyday spoken register people use on the phone, not the formal written one (colloquial Telugu, not granthika). Keep common English words as they are (appointment, confirm, payment, address); translating them sounds stilted aloud. Write in Telugu script, which is what the voice reads. If the person switches to English or another language, switch with them and stay there.'
+        ),
+        sarvam_code="te-IN",
+        twilio_code="te-IN",
+    ),
+    Language(
+        code="ta",
+        name="Tamil",
+        native_name="தமிழ்",
+        instruction=(
+            'Speak Tamil throughout the call, in the everyday spoken register people use on the phone, not the formal written one (spoken Tamil, not centamil). Keep common English words as they are (appointment, confirm, payment, address); translating them sounds stilted aloud. Write in Tamil script, which is what the voice reads. If the person switches to English or another language, switch with them and stay there.'
+        ),
+        sarvam_code="ta-IN",
+        twilio_code="ta-IN",
+    ),
+    Language(
+        code="kn",
+        name="Kannada",
+        native_name="ಕನ್ನಡ",
+        instruction=(
+            'Speak Kannada throughout the call, in the everyday spoken register people use on the phone, not the formal written one (conversational Kannada, not textbook Kannada). Keep common English words as they are (appointment, confirm, payment, address); translating them sounds stilted aloud. Write in Kannada script, which is what the voice reads. If the person switches to English or another language, switch with them and stay there.'
+        ),
+        sarvam_code="kn-IN",
+        twilio_code="kn-IN",
+    ),
+    Language(
+        code="ml",
+        name="Malayalam",
+        native_name="മലയാളം",
+        instruction=(
+            'Speak Malayalam throughout the call, in the everyday spoken register people use on the phone, not the formal written one (conversational Malayalam, not the literary register). Keep common English words as they are (appointment, confirm, payment, address); translating them sounds stilted aloud. Write in Malayalam script, which is what the voice reads. If the person switches to English or another language, switch with them and stay there.'
+        ),
+        sarvam_code="ml-IN",
+        twilio_code="ml-IN",
+    ),
+    Language(
+        code="mr",
+        name="Marathi",
+        native_name="मराठी",
+        instruction=(
+            'Speak Marathi throughout the call, in the everyday spoken register people use on the phone, not the formal written one (everyday Marathi, not heavily Sanskritised Marathi). Keep common English words as they are (appointment, confirm, payment, address); translating them sounds stilted aloud. Write in Devanagari script, which is what the voice reads. If the person switches to English or another language, switch with them and stay there.'
+        ),
+        sarvam_code="mr-IN",
+        twilio_code="mr-IN",
+    ),
+    Language(
+        code="bn",
+        name="Bengali",
+        native_name="বাংলা",
+        instruction=(
+            'Speak Bengali throughout the call, in the everyday spoken register people use on the phone, not the formal written one (cholito bhasha, not sadhu bhasha). Keep common English words as they are (appointment, confirm, payment, address); translating them sounds stilted aloud. Write in Bengali script, which is what the voice reads. If the person switches to English or another language, switch with them and stay there.'
+        ),
+        sarvam_code="bn-IN",
+        twilio_code="bn-IN",
+    ),
+    Language(
+        code="gu",
+        name="Gujarati",
+        native_name="ગુજરાતી",
+        instruction=(
+            'Speak Gujarati throughout the call, in the everyday spoken register people use on the phone, not the formal written one (everyday Gujarati, not formal written Gujarati). Keep common English words as they are (appointment, confirm, payment, address); translating them sounds stilted aloud. Write in Gujarati script, which is what the voice reads. If the person switches to English or another language, switch with them and stay there.'
+        ),
+        sarvam_code="gu-IN",
+        twilio_code="gu-IN",
+    ),
+    Language(
+        code="pa",
+        name="Punjabi",
+        native_name="ਪੰਜਾਬੀ",
+        instruction=(
+            'Speak Punjabi throughout the call, in the everyday spoken register people use on the phone, not the formal written one (everyday Punjabi as spoken in Punjab). Keep common English words as they are (appointment, confirm, payment, address); translating them sounds stilted aloud. Write in Gurmukhi script, which is what the voice reads. If the person switches to English or another language, switch with them and stay there.'
+        ),
+        sarvam_code="pa-IN",
+        twilio_code="pa-guru-IN",
+    ),
+    Language(
+        code="od",
+        name="Odia",
+        native_name="ଓଡ଼ିଆ",
+        instruction=(
+            'Speak Odia throughout the call, in the everyday spoken register people use on the phone, not the formal written one (everyday spoken Odia, not the formal written register). Keep common English words as they are (appointment, confirm, payment, address); translating them sounds stilted aloud. Write in Odia script, which is what the voice reads. If the person switches to English or another language, switch with them and stay there.'
+        ),
+        sarvam_code="od-IN",
+        twilio_code=None,
     ),
 ]
+
+LANGUAGES_BY_CODE = {lang.code: lang for lang in LANGUAGES}
 
 
 @dataclass(frozen=True)
@@ -560,6 +674,12 @@ TEMPLATES: list[CampaignTemplate] = [
 
 def get_template(template_id: str) -> CampaignTemplate | None:
     return next((t for t in TEMPLATES if t.id == template_id), None)
+
+
+def sarvam_code(code: str | None) -> str:
+    """Sarvam's `xx-IN` code for a campaign language; Indian English if unknown."""
+    lang = LANGUAGES_BY_CODE.get((code or "").strip().lower())
+    return lang.sarvam_code if lang else "en-IN"
 
 
 def language_instruction(code: str) -> str:

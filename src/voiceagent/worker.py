@@ -64,18 +64,21 @@ def build_telephony():
 def build_runner():
     """The campaign dispatch loop and the model client it owns.
 
-    Returns (runner, client), or None when no model provider is configured.
-    Used by this process's main() and by the API, which runs the loop in its
-    own process by default (DIALER_IN_API): Twilio's webhooks land on the API,
+    Returns (runner, client). `client` is the env provider's, or None when
+    no env key is set: providers added in the console are resolved per call
+    (providers.runtime), so a workspace with no env key still dials. Used by
+    this process's main() and by the API, which runs the loop in its own
+    process by default (DIALER_IN_API): Twilio's webhooks land on the API,
     and a call's state lives in the process that placed it.
     """
     provider = active()
-    if provider is None:
-        logger.error(missing_key_message())
-        return None
-
-    client = make_client(provider)
-    logger.info("Model provider: %s", provider.label)
+    client = make_client(provider) if provider is not None else None
+    if provider is not None:
+        logger.info("Model provider (env): %s", provider.label)
+    else:
+        logger.warning(
+            "%s Campaigns will use providers added on the AI models page.", missing_key_message()
+        )
 
     pipeline = CallPipeline(
         SessionLocal,
@@ -87,7 +90,9 @@ def build_runner():
         # Scripted calls go to made-up people; never text their numbers.
         followups=os.getenv("TELEPHONY", "mock").lower() != "mock",
     )
-    return CampaignRunner(SessionLocal, pipeline.place_call), client
+    # Heads-ups likewise: never to the made-up numbers of a scripted run.
+    precall = os.getenv("TELEPHONY", "mock").lower() != "mock"
+    return CampaignRunner(SessionLocal, pipeline.place_call, precall=precall), client
 
 
 async def main() -> None:
@@ -113,7 +118,8 @@ async def main() -> None:
     finally:
         # run_forever() drains in-flight calls first, so by here it's safe to
         # tear down the pool. Without this the process hangs on exit.
-        await client.close()
+        if client is not None:
+            await client.close()
         await engine.dispose()
 
 
