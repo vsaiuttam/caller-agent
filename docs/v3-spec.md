@@ -305,7 +305,24 @@ The UI agent uses the project design skills (`.claude/skills/`) and
   detect intent, say a handoff line, `<Dial>` the campaign's
   `handoff_number` over Twilio, and post a summary to the human's screen.
   Needs a handoff number per campaign and after-hours behaviour.
-- Research-driven items from `docs/research.md` §5, planned into v4.
+- Research-driven items from `docs/research.md` §5, planned into v4 ("Ready
+  for India"), in this order:
+  1. Plivo carrier with Indian caller IDs: about 12× cheaper per minute than
+     Twilio to Indian mobiles, with better pickup.
+  2. India compliance pack: automated-call disclosure at the opening, DND
+     scrub, consent records, and a register of declared caller IDs (TRAI
+     amendment of 18 Sep 2026; DPDP consent phase from 13 Nov 2026).
+  3. Knowledge base per campaign.
+  4. Warm transfer (above), moved up.
+  5. Auto language detection and a pronunciation dictionary.
+  6. Saved test suites and tests made from flagged calls.
+  7. Per-turn latency meter.
+- Then v5 "one agent, every channel": inbound receptionist, missed-call
+  callback, WhatsApp calling and voice notes, web widget, public API, CRM
+  connectors, wallet billing.
+- Brand: `docs/research.md` §1 flags that Sarvam AI's own platform is called
+  "Sarvam Samvaad". Get a trademark opinion before investing further in the
+  name.
 
 ---
 
