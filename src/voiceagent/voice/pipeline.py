@@ -42,7 +42,7 @@ from ..orchestrator.scheduler import is_terminal, next_attempt_after
 from ..postcall.actions import CalendarClient, RecordsClient, SuppressionList, dispatch
 from ..postcall.extract import extract_outcome
 from ..postcall.mcp_actions import run_for_call
-from ..providers import Runtime, extraction_fallback, runtime
+from ..providers import NoModelProvider, Runtime, extraction_fallback, missing_key_message, runtime
 from ..scoring import qualify_outcome
 from ..storage import Call, CallStatus, Campaign, CampaignStatus, Contact, ContactStatus
 from ..webhooks import fire_webhook
@@ -134,6 +134,10 @@ class CallPipeline:
         # that follows it, so the cost we record is the cost of the whole call.
         usage = TokenUsage()
         conversation = await self._runtime(campaign, CONVERSATION)
+        if conversation.client is None:
+            # Before dialling: nobody's phone should ring for a call the
+            # agent could not hold.
+            raise NoModelProvider(missing_key_message())
 
         # Open while the phone rings; closed as soon as the call is over,
         # not after extraction — nothing uses them after the last word.

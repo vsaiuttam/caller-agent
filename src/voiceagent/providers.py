@@ -18,6 +18,14 @@ usable key. "Usable" excludes the placeholders that ship in `.env.example` —
 a key of `sk-ant-...` reads as configured to a naive presence check and then
 fails on the first real call, which is a confusing way to find out you never
 set a key.
+
+v3 makes providers a workspace resource as well. `PRESETS` lists every
+provider the console can connect (still two API shapes); rows in
+`llm_providers` hold a preset, a sealed key and an optional base URL; and a
+campaign names one per role. `runtime()` turns that choice into a client —
+cached per provider until its row changes — with a fallback to the
+workspace default, then to the env provider above, so a deleted or
+disabled provider degrades a call rather than failing it.
 """
 
 from __future__ import annotations
@@ -363,6 +371,15 @@ def make_client(spec: ProviderSpec | None = None):
 # row of the same kind is listed ahead of it.
 
 ENV_PREFIX = "env:"
+
+
+class NoModelProvider(RuntimeError):
+    """No provider is usable for a call: none configured, or all disabled.
+
+    Raised before dialling. The runner puts the contact back without
+    spending an attempt, since nothing was dialled.
+    """
+
 CONVERSATION_ROLE = "conversation"
 EXTRACTION_ROLE = "extraction"
 MODEL_DEFAULTS_KEY = "model_defaults"

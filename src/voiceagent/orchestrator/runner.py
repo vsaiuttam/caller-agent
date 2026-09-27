@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from .. import followup
 from ..followup import SendResult, compose_precall
+from ..providers import NoModelProvider
 from ..storage import Call, CallStatus, Campaign, CampaignStatus, Contact, ContactStatus, Suppression
 from .events import CAMPAIGN_UPDATED, Event, bus
 from .scheduler import OK, CallingWindow, check_eligibility, next_window_open
@@ -44,6 +45,9 @@ PRECALL_REPEAT_AFTER = timedelta(hours=12)
 # How long to sleep when there's nothing eligible to dial. Short enough that
 # a campaign resuming at 9am local starts promptly, long enough not to spin.
 _IDLE_SLEEP_SECONDS = 15
+
+# How long a contact waits when no model provider is configured at all.
+_NO_PROVIDER_RETRY = timedelta(minutes=5)
 
 # A contact IN_PROGRESS with no call started for this long is not on a call:
 # the process that was dialling it went away (a redeploy, a crash). Longer
@@ -372,12 +376,30 @@ class CampaignRunner:
     async def _run_call(self, contact: Contact, campaign: Campaign) -> None:
         try:
             await self._place_call(contact, campaign)
-        except Exception:
-            logger.exception("Call failed for contact %s", contact.id)
+        except NoModelProvider as exc:
+            # Not the contact's fault and not an attempt: nothing was dialled.
+            # Back in the queue a few minutes out, so a provider added in
+            # the meantime is picked up without anyone restarting anything.
+            logger.warning("Not dialling contact %s: %s", contact.id, exc)
             async with self._sessions() as session:
                 await session.execute(
                     update(Contact)
                     .where(Contact.id == contact.id)
-                    .values(status=ContactStatus.PENDING, attempts=Contact.attempts + 1)
+                    .values(
+                        status=ContactStatus.PENDING,
+                        next_attempt_at=datetime.now(timezone.utc) + _NO_PROVIDER_RETRY,
+                    )
                 )
                 await session.commit()
+        except Exception:
+            await self._call_failed(contact)
+
+    async def _call_failed(self, contact: Contact) -> None:
+        logger.exception("Call failed for contact %s", contact.id)
+        async with self._sessions() as session:
+            await session.execute(
+                update(Contact)
+                .where(Contact.id == contact.id)
+                .values(status=ContactStatus.PENDING, attempts=Contact.attempts + 1)
+            )
+            await session.commit()

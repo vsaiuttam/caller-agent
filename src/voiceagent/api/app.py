@@ -228,7 +228,8 @@ async def _stop_dialer(runner, client, task) -> None:
         logger.warning("Dialler: calls still in flight at shutdown, cancelling")
     except Exception:
         logger.exception("Dialler stopped with an error")
-    await client.close()
+    if client is not None:
+        await client.close()
 
 
 app = FastAPI(title="Samvaad API", version="1.0.0", lifespan=lifespan)
@@ -451,10 +452,15 @@ async def health(db: AsyncSession = Depends(get_session)) -> dict:
     it holds real credentials, and the UI shows it on every screen.
     """
     provider = active_provider()
+    try:
+        # A provider added in the console counts as much as an env key.
+        workspace_provider = await provider_registry.default_provider(db)
+    except Exception:  # noqa: BLE001 - the database check below reports it
+        workspace_provider = None
     checks = {
         # Named for the role, not the vendor: which vendor fills it is now a
         # setting, and `provider` below says which one won.
-        "model_provider": provider is not None,
+        "model_provider": provider is not None or workspace_provider is not None,
         "telephony": bool(
             (os.getenv("LIVEKIT_API_KEY") and os.getenv("LIVEKIT_URL"))
             or (os.getenv("TWILIO_ACCOUNT_SID") and os.getenv("TWILIO_AUTH_TOKEN") and os.getenv("TWILIO_PHONE_NUMBER"))
@@ -2335,6 +2341,9 @@ class _CallSetup:
     language: str = "en"
     # The campaign's Sarvam speaker; None is the default voice.
     voice: str | None = None
+    # The campaign's providers per role (v3); None is the workspace default.
+    conversation_provider_id: str | None = None
+    extraction_provider_id: str | None = None
 
 
 def _as_criteria(raw) -> list[ScoreCriterion]:
@@ -2386,12 +2395,18 @@ async def _resolve_call_setup(db: AsyncSession, body: CallSetupRequest) -> _Call
         raise HTTPException(400, "A goal is required — either pass one or pick a campaign.")
 
     language = pick("language", "en") or "en"
-    conversation_model = pick("conversation_model")
+    conversation_provider_id = getattr(campaign, "conversation_provider_id", None) if campaign else None
+    extraction_provider_id = getattr(campaign, "extraction_provider_id", None) if campaign else None
     conversation_effort = pick("conversation_effort")
-    extraction_model = pick("extraction_model")
     extraction_effort = pick("extraction_effort")
-    _validate_assignment(conversation_model, CONVERSATION, conversation_effort)
-    _validate_assignment(extraction_model, EXTRACTION, extraction_effort)
+    conversation_model = await _settle_model(
+        db, conversation_provider_id, pick("conversation_model"), conversation_effort, CONVERSATION,
+        explicit=False,
+    )
+    extraction_model = await _settle_model(
+        db, extraction_provider_id, pick("extraction_model"), extraction_effort, EXTRACTION,
+        explicit=False,
+    )
 
     campaign_name = campaign.name if campaign else "our team"
     greeting_template = pick("greeting", DEFAULT_GREETING)
@@ -2435,7 +2450,39 @@ async def _resolve_call_setup(db: AsyncSession, body: CallSetupRequest) -> _Call
         ),
         language=language,
         voice=getattr(campaign, "voice", None) if campaign is not None else None,
+        conversation_provider_id=conversation_provider_id,
+        extraction_provider_id=extraction_provider_id,
     )
+
+
+@dataclass
+class _Runtimes:
+    """What a rehearsal or test call runs on, per role."""
+
+    conversation: "provider_registry.Runtime"
+    extraction: "provider_registry.Runtime"
+    fallback: "provider_registry.Runtime | None"
+
+    @property
+    def fallback_target(self):
+        fb = self.fallback
+        return (fb.client, fb.provider, fb.model) if fb else None
+
+
+async def _runtimes(setup: _CallSetup) -> _Runtimes:
+    """Resolve a setup's providers into clients — the same resolution a
+    campaign call makes, so a rehearsal runs on what the campaign will.
+    503 when there is no provider at all."""
+    conversation = await provider_registry.runtime(
+        setup.conversation_provider_id, setup.conversation_model, CONVERSATION
+    )
+    extraction = await provider_registry.runtime(
+        setup.extraction_provider_id, setup.extraction_model, EXTRACTION
+    )
+    if conversation.client is None or extraction.client is None:
+        raise HTTPException(503, missing_key_message())
+    fallback = await provider_registry.extraction_fallback(extraction)
+    return _Runtimes(conversation, extraction, fallback)
 
 
 def _campaign_tools(setup: _CallSetup) -> list[str]:
@@ -2490,15 +2537,13 @@ async def simulate(body: SimulationRequest, db: AsyncSession = Depends(get_sessi
     staring at the screen waiting for it, and a job queue for something nobody
     walks away from is machinery with no user.
     """
-    if active_provider() is None:
-        raise HTTPException(503, missing_key_message())
-
     from ..simulate import PERSONAS_BY_ID, simulate_call
 
     if body.persona not in PERSONAS_BY_ID:
         raise HTTPException(400, f"Unknown persona: {body.persona}")
 
     setup = await _resolve_call_setup(db, body)
+    run = await _runtimes(setup)
 
     # A rehearsal uses the campaign's tools for real, like a call would —
     # that is what makes it a rehearsal of the call rather than of the prompt.
@@ -2507,22 +2552,24 @@ async def simulate(body: SimulationRequest, db: AsyncSession = Depends(get_sessi
     async def on_tool(event: dict) -> None:
         tools.add(event)
 
-    client = make_client()
     try:
         async with call_tools(storage.SessionLocal, _campaign_tools(setup), on_event=on_tool) as toolbox:
             result = await simulate_call(
-                client,
+                run.conversation.client,
                 contact=setup.contact,
                 context=setup.context,
                 greeting=setup.greeting,
                 persona_id=body.persona,
                 language_name=setup.language_name,
-                conversation_model=setup.conversation_model,
+                conversation_model=run.conversation.model,
                 conversation_effort=setup.conversation_effort,
-                extraction_model=setup.extraction_model,
+                extraction_model=run.extraction.model,
                 extraction_effort=setup.extraction_effort,
                 max_exchanges=body.max_exchanges,
                 toolbox=toolbox,
+                provider=run.conversation.provider,
+                extraction_client=run.extraction.client,
+                extraction_provider=run.extraction.provider,
             )
         result.tool_calls = tools.entries
     except auth_error_types() as exc:
@@ -2542,11 +2589,10 @@ async def simulate(body: SimulationRequest, db: AsyncSession = Depends(get_sessi
     except Exception as exc:  # noqa: BLE001
         logger.exception("Simulation failed")
         raise HTTPException(502, f"The simulation could not run: {exc}") from exc
-    finally:
-        await client.close()
 
     payload = result.to_dict()
     payload["greeting"] = setup.greeting
+    payload["voice"] = setup.voice
 
     if body.save and setup.campaign is not None:
         payload["call_id"] = await _save_simulation(db, setup.campaign, result)
@@ -2661,9 +2707,6 @@ async def test_call(body: TestCallRequest, db: AsyncSession = Depends(get_sessio
 
     Anything wrong with the request itself still fails here, synchronously.
     """
-    if active_provider() is None:
-        raise HTTPException(503, missing_key_message())
-
     telephony_mode = os.getenv("TELEPHONY", "mock").lower()
     if telephony_mode not in ("twilio", "telnyx"):
         raise HTTPException(
@@ -2673,6 +2716,8 @@ async def test_call(body: TestCallRequest, db: AsyncSession = Depends(get_sessio
         )
 
     setup = await _resolve_call_setup(db, body)
+    # Resolved now, so a missing provider fails the request, not the call.
+    await _runtimes(setup)
 
     call_id = str(uuid.uuid4())
     room_name = f"test-{call_id}"
@@ -2782,9 +2827,10 @@ async def _run_test_call(
     )
 
     usage = TokenUsage()
-    client = control = None
+    control = None
     session_started = False
     try:
+        run = await _runtimes(setup)
         telephony = _test_call_telephony()
         prepare_telephony(
             telephony, room_name, language=setup.language, greeting=setup.greeting, voice=setup.voice
@@ -2805,16 +2851,16 @@ async def _run_test_call(
             )
             await feed.publish(CALL_CONNECTED)
 
-            client = make_client()
             session = CallSession(
                 llm=ConversationLLM(
-                    client,
+                    run.conversation.client,
                     contact=setup.contact,
                     context=setup.context,
-                    model=setup.conversation_model,
+                    model=run.conversation.model,
                     effort=setup.conversation_effort,
                     usage=usage,
                     toolbox=toolbox,
+                    provider=run.conversation.provider,
                 ),
                 listener=listener,
                 speaker=speaker,
@@ -2846,7 +2892,7 @@ async def _run_test_call(
         state = telephony.get_call_state(room_name) if hasattr(telephony, "get_call_state") else None
         await _complete_test_call(
             feed,
-            client,
+            run,
             usage,
             body,
             setup,
@@ -2862,14 +2908,11 @@ async def _run_test_call(
                 await control.hangup()
         await feed.drain()
         await _fail_test_call(feed, exc, body, setup, usage)
-    finally:
-        if client is not None:
-            await client.close()
 
 
 async def _complete_test_call(
     feed: CallFeed,
-    client,
+    run: _Runtimes,
     usage: TokenUsage,
     body: TestCallRequest,
     setup: _CallSetup,
@@ -2881,28 +2924,31 @@ async def _complete_test_call(
 ) -> None:
     """Extract, score and follow up on a finished test call, then report it."""
     outcome = await extract_outcome(
-        client,
+        run.extraction.client,
         contact=setup.contact,
         context=setup.context,
         turns=transcript,
         call_started_at_iso=connected_at.isoformat(),
-        model=setup.extraction_model,
+        model=run.extraction.model,
         effort=setup.extraction_effort,
         usage=usage,
+        provider=run.extraction.provider,
+        fallback=run.fallback_target,
     )
     qualification = qualify_outcome(setup.context, outcome) if setup.context.scorecard else None
 
     # Written back into the user's apps like a campaign call's, about the
     # number actually called rather than the rehearsal placeholder.
     after_call, mcp_dispatch = await run_for_call(
-        client,
+        run.extraction.client,
         storage.SessionLocal,
-        model=setup.extraction_model,
+        model=run.extraction.model,
         effort=setup.extraction_effort,
         campaign=setup.campaign,
         contact=setup.contact.model_copy(update={"phone_e164": body.phone_number}),
         outcome=outcome,
         usage=usage,
+        provider=run.extraction.provider,
     )
 
     # Follow-ups to the number just called.
@@ -2959,8 +3005,8 @@ async def _complete_test_call(
     latencies = [t.latency_ms for t in transcript if t.latency_ms is not None]
     result = {
         "call_id": feed.call_id,
-        "conversation_model": resolve(setup.conversation_model, CONVERSATION),
-        "extraction_model": resolve(setup.extraction_model, EXTRACTION),
+        "conversation_model": resolve(run.conversation.model, CONVERSATION, run.conversation.provider),
+        "extraction_model": resolve(run.extraction.model, EXTRACTION, run.extraction.provider),
         "ended_because": "call completed",
         "greeting": setup.greeting,
         "call_sid": call_sid,
@@ -3081,29 +3127,28 @@ async def live(ws: WebSocket) -> None:
         await _refuse(ws, f"That call setup was not usable: {exc}")
         return
 
-    if active_provider() is None:
-        await _refuse(ws, missing_key_message())
-        return
-
     try:
         async with storage.SessionLocal() as db:
             setup = await _resolve_call_setup(db, body)
+        run = await _runtimes(setup)
     except HTTPException as exc:
         await _refuse(ws, str(exc.detail))
         return
 
     from ..live import LiveCall
 
-    client = make_client()
     call = LiveCall(
-        client,
+        run.conversation.client,
         contact=setup.contact,
         context=setup.context,
         greeting=setup.greeting,
-        conversation_model=setup.conversation_model,
+        conversation_model=run.conversation.model,
         conversation_effort=setup.conversation_effort,
-        extraction_model=setup.extraction_model,
+        extraction_model=run.extraction.model,
         extraction_effort=setup.extraction_effort,
+        provider=run.conversation.provider,
+        extraction_client=run.extraction.client,
+        extraction_provider=run.extraction.provider,
     )
     started_at = datetime.now(timezone.utc)
 
@@ -3114,6 +3159,7 @@ async def live(ws: WebSocket) -> None:
                 "greeting": setup.greeting,
                 "conversation_model": call.conversation_model,
                 "language": body.language or (setup.campaign.language if setup.campaign else "en"),
+                "voice": setup.voice,
             }
         )
         await call.run(_SocketTransport(ws))
@@ -3159,7 +3205,6 @@ async def live(ws: WebSocket) -> None:
         logger.exception("Live call failed")
         await _refuse(ws, f"The call failed: {exc}")
     finally:
-        await client.close()
         with _suppress_all():
             await ws.close()
 
