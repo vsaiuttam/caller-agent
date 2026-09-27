@@ -56,7 +56,7 @@ export default function App() {
             <Route path="campaigns/:id/edit" element={<CampaignBuilder key="edit" />} />
             <Route path="campaigns/:id" element={<CampaignDetail />} />
             <Route path="calls" element={<Calls />} />
-            <Route path="review" element={<Calls reviewOnly />} />
+            <Route path="review" element={<ToReview />} />
             <Route path="live" element={<Live />} />
             <Route path="test-lab" element={<TestLab />}>
               <Route index element={<Simulator />} />
@@ -106,6 +106,14 @@ function Moved({ to }: { to?: string }) {
   const location = useLocation();
   const pathname = to ?? `${APP}${location.pathname}`;
   return <Navigate to={{ pathname, search: location.search, hash: location.hash }} replace />;
+}
+
+/** The review queue is a view of Calls now; `/app/review?call=42` keeps its call. */
+function ToReview() {
+  const location = useLocation();
+  const search = new URLSearchParams(location.search);
+  search.set("view", "review");
+  return <Navigate to={{ pathname: `${APP}/calls`, search: `?${search}`, hash: location.hash }} replace />;
 }
 
 function Splash() {

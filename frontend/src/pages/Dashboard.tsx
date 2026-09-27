@@ -148,7 +148,7 @@ export default function Dashboard() {
             subtitle={span.last}
             action={
               (s?.pending_review ?? 0) > 0 && (
-                <Link to="/app/review" className="flex items-center gap-1 text-xs font-medium text-warning hover:underline">
+                <Link to="/app/calls?view=review" className="flex items-center gap-1 text-xs font-medium text-warning hover:underline">
                   <IconReview size={13} /> {s!.pending_review} to review
                 </Link>
               )
@@ -191,11 +191,11 @@ export default function Dashboard() {
           <Card className="px-5 py-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-medium text-ink-muted">Review queue</p>
+                <p className="text-xs font-medium text-ink-muted">Needs review</p>
                 <p className="tnum mt-1 text-2xl font-semibold text-ink">{s ? s.pending_review : "—"}</p>
                 <p className="mt-1 text-xs text-ink-muted">Outcomes the model wasn't sure enough to write.</p>
               </div>
-              <ButtonLink to="/app/review" size="sm" variant="secondary">
+              <ButtonLink to="/app/calls?view=review" size="sm" variant="secondary">
                 Review
               </ButtonLink>
             </div>

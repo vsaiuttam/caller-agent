@@ -1,13 +1,17 @@
 /**
- * The call log (and, with `reviewOnly`, the review queue).
+ * Calls: every conversation, and the review queue, in one place.
+ *
+ *   ?view=all | review | live   the view switch (/app/review lands on review)
+ *   ?call=<id>                  the selected call, so any call is linkable
+ *   ?campaign=<id>              start filtered to one campaign
  *
  * List on the left, the selected call on the right (a drawer on phones).
- * Selection lives in ?call= so any call is linkable — the Overview, the
- * Live console and the command palette all deep-link here.
+ * Live stays its own page (the wallboard); "Live now" lists what's on the
+ * line and links into it.
  */
 
 import { useMemo, useState, type KeyboardEvent } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   api,
   INCLUDE_TESTS_KEY,
@@ -19,10 +23,13 @@ import {
   type Sentiment,
 } from "../api";
 import { LatencyBars } from "../components/charts";
+import { LiveCallCard } from "../components/live/LiveCallCard";
+import { useLiveCalls, useStats } from "../data";
 import {
   IconCalendar,
   IconCheck,
   IconDownload,
+  IconLive,
   IconFrown,
   IconMeh,
   IconPhone,
@@ -49,6 +56,7 @@ import {
   Figure,
   FollowupBadge,
   Input,
+  NotAvailable,
   Page,
   PageHeader,
   ScoreBadge,
@@ -58,6 +66,7 @@ import {
   Skeleton,
   SkeletonText,
   Switch,
+  Tabs,
   TestBadge,
   Textarea,
   buttonClass,
@@ -65,7 +74,7 @@ import {
   toast,
 } from "../components/ui";
 import { formatDateTime, formatDuration, formatUsd } from "../format";
-import { useAsync, useDocumentTitle, useLocalStorage, useMediaQuery } from "../hooks";
+import { useAsync, useDocumentTitle, useLocalStorage, useMediaQuery, useNow } from "../hooks";
 
 const DISPOSITIONS: Array<[string, string]> = [
   ["completed", "Completed"],
@@ -81,10 +90,16 @@ const DISPOSITIONS: Array<[string, string]> = [
 
 type Density = "comfortable" | "compact";
 
-export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) {
-  useDocumentTitle(reviewOnly ? "Review queue" : "Calls");
+type View = "all" | "review" | "live";
+
+export default function Calls() {
   const [params, setParams] = useSearchParams();
+  const view: View = params.get("view") === "review" ? "review" : params.get("view") === "live" ? "live" : "all";
+  const reviewOnly = view === "review";
+  useDocumentTitle(reviewOnly ? "Needs review" : view === "live" ? "Live now" : "Calls");
   const selected = params.get("call");
+  const stats = useStats();
+  const live = useLiveCalls();
   const wide = useMediaQuery("(min-width: 1024px)");
 
   // Shown by default, badged "Test": before a campaign runs, test calls are the
@@ -93,7 +108,7 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
   const [density, setDensity] = useLocalStorage<Density>("samvaad.calls.density", "comfortable");
   const [sort, setSort] = useState<"recent" | "score">("recent");
   const [band, setBand] = useState<QualificationBand | "">("");
-  const [campaignId, setCampaignId] = useState("");
+  const [campaignId, setCampaignId] = useState(() => params.get("campaign") ?? "");
   const [disposition, setDisposition] = useState("");
   const [sentiment, setSentiment] = useState<Sentiment | "all">("all");
   const [query, setQuery] = useState("");
@@ -144,6 +159,14 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
     setSentiment("all");
   };
 
+  const setView = (next: View) => {
+    const q = new URLSearchParams(params);
+    if (next === "all") q.delete("view");
+    else q.set("view", next);
+    q.delete("call");
+    setParams(q, { replace: true });
+  };
+
   const select = (id: string | null) => {
     const next = new URLSearchParams(params);
     if (id) next.set("call", id);
@@ -168,19 +191,48 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
   return (
     <Page width="wide">
       <PageHeader
-        icon={reviewOnly ? <IconReview size={18} /> : <IconPhone size={18} />}
-        title={reviewOnly ? "Review queue" : "Calls"}
+        icon={<IconPhone size={18} />}
+        title="Calls"
         description={
           reviewOnly
             ? "Calls the model wasn't confident enough to write automatically. Approve to write the outcome through, or dismiss."
-            : "Every conversation, saved — transcript, recording, outcome and follow-ups."
+            : view === "live"
+              ? "Conversations on the line right now. Open the wallboard to listen in, whisper or hang up."
+              : "Every conversation, saved: transcript, recording, outcome and follow-ups."
         }
         actions={
-          <a href={api.callsExportUrl(filters)} className={buttonClass("secondary")} download>
-            <IconDownload size={15} /> Export CSV
-          </a>
+          view === "live" ? (
+            <ButtonLink to="/app/live" variant="secondary" icon={<IconLive size={15} />}>
+              Open the wallboard
+            </ButtonLink>
+          ) : (
+            <a href={api.callsExportUrl(filters)} className={buttonClass("secondary")} download>
+              <IconDownload size={15} /> Export CSV
+            </a>
+          )
         }
       />
+
+      <Tabs
+        label="Calls view"
+        value={view}
+        onChange={setView}
+        className="mb-4"
+        tabs={[
+          { value: "all", label: "All" },
+          {
+            value: "review",
+            label: "Needs review",
+            count: reviewOnly && calls.data ? calls.data.length : (stats?.pending_review ?? undefined),
+          },
+          { value: "live", label: "Live now", count: live.calls.length },
+        ]}
+      />
+
+      {view === "live" ? (
+        <LiveNow campaignName={campaignName} />
+      ) : (
+      <>
 
       {/* Filters */}
       <div className="mb-4 flex flex-col gap-3">
@@ -339,6 +391,8 @@ export default function Calls({ reviewOnly = false }: { reviewOnly?: boolean }) 
           </Drawer>
         )}
       </div>
+      </>
+      )}
     </Page>
   );
 }
@@ -738,5 +792,55 @@ function Followups({ call, onChanged }: { call: CallDetail; onChanged: () => voi
         })}
       </ul>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/** "Live now": the calls on the line, each opening in the wallboard. */
+function LiveNow({ campaignName }: { campaignName: (id: string) => string | undefined }) {
+  const { calls, supported, loaded } = useLiveCalls();
+  const navigate = useNavigate();
+  const now = useNow(1000, calls.length > 0);
+
+  if (!loaded) {
+    return (
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-16 rounded-xl" />
+        ))}
+      </div>
+    );
+  }
+  if (!supported) return <NotAvailable>Live calls need a newer backend (/api/calls/live).</NotAvailable>;
+  if (!calls.length) {
+    return (
+      <Card>
+        <EmptyState
+          avatar="listening"
+          title="Nobody on the line right now"
+          hint="Running campaigns dial inside their calling windows. Calls appear here the moment they ring."
+          action={
+            <ButtonLink to="/app/test-lab/phone" size="sm" variant="secondary">
+              Place a test call
+            </ButtonLink>
+          }
+        />
+      </Card>
+    );
+  }
+  return (
+    <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {calls.map((call) => (
+        <li key={call.call_id}>
+          <LiveCallCard
+            call={call}
+            now={now}
+            campaignName={call.campaign_id ? campaignName(call.campaign_id) : undefined}
+            onSelect={() => navigate(`/app/live?call=${call.call_id}`)}
+          />
+        </li>
+      ))}
+    </ul>
   );
 }
