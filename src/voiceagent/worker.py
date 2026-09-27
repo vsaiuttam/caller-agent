@@ -87,7 +87,9 @@ def build_runner():
         # Scripted calls go to made-up people; never text their numbers.
         followups=os.getenv("TELEPHONY", "mock").lower() != "mock",
     )
-    return CampaignRunner(SessionLocal, pipeline.place_call), client
+    # Heads-ups likewise: never to the made-up numbers of a scripted run.
+    precall = os.getenv("TELEPHONY", "mock").lower() != "mock"
+    return CampaignRunner(SessionLocal, pipeline.place_call, precall=precall), client
 
 
 async def main() -> None:

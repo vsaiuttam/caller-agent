@@ -206,48 +206,110 @@ async def send_followups(
     return {result.channel: result for result in results}
 
 
-async def _send(channel: str, to: str, message: FollowUpMessage, call_id: str | None) -> SendResult:
-    credentials = _credentials()
+def _unconfigured(channel: str) -> SendResult | None:
+    """A failed result naming what to set, when `channel` can't send."""
     if channel == SMS and not sms_configured():
         return SendResult(SMS, "failed", error="SMS needs TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER.")
     if channel == WHATSAPP and not whatsapp_configured():
         return SendResult(WHATSAPP, "failed", error="WhatsApp needs TWILIO_WHATSAPP_FROM (and the Twilio credentials).")
+    if channel not in CHANNELS:
+        return SendResult(channel, "failed", error=f"Unknown channel {channel!r}; use sms or whatsapp.")
+    return None
 
+
+def _addresses(channel: str, to: str) -> dict:
     if channel == SMS:
-        kwargs: dict = {"to": to, "from_": os.environ["TWILIO_PHONE_NUMBER"], "body": message.text}
+        return {"to": to, "from_": os.environ["TWILIO_PHONE_NUMBER"]}
+    return {"to": _whatsapp_address(to), "from_": _whatsapp_address(os.environ["TWILIO_WHATSAPP_FROM"])}
+
+
+async def _send(channel: str, to: str, message: FollowUpMessage, call_id: str | None) -> SendResult:
+    refused = _unconfigured(channel)
+    if refused is not None:
+        return refused
+
+    kwargs = _addresses(channel, to)
+    content_sid = os.getenv("TWILIO_WHATSAPP_CONTENT_SID", "").strip()
+    if channel == WHATSAPP and content_sid:
+        # WhatsApp only allows business-initiated messages from an approved
+        # template. Expected shape: "Hi {{1}}, {{2}} — {{3}}".
+        kwargs["content_sid"] = content_sid
+        kwargs["content_variables"] = json.dumps(
+            {"1": message.first_name, "2": message.detail, "3": message.campaign_name}
+        )
     else:
-        kwargs = {
-            "to": _whatsapp_address(to),
-            "from_": _whatsapp_address(os.environ["TWILIO_WHATSAPP_FROM"]),
-        }
-        content_sid = os.getenv("TWILIO_WHATSAPP_CONTENT_SID", "").strip()
-        if content_sid:
-            # WhatsApp only allows business-initiated messages from an
-            # approved template. Expected shape: "Hi {{1}}, {{2}} — {{3}}".
-            kwargs["content_sid"] = content_sid
-            kwargs["content_variables"] = json.dumps(
-                {"1": message.first_name, "2": message.detail, "3": message.campaign_name}
-            )
-        else:
-            kwargs["body"] = message.text
+        kwargs["body"] = message.text
 
     callback = _status_callback(call_id, channel)
     if callback:
         kwargs["status_callback"] = callback
+    return await _deliver(channel, to, kwargs, what="follow-up")
 
+
+async def _deliver(channel: str, to: str, kwargs: dict, *, what: str) -> SendResult:
+    """Hand one message to Twilio. Never raises; a failure is on the result."""
     try:
         from twilio.rest import Client
 
-        client = Client(*credentials)
+        client = Client(*_credentials())
         sent = await asyncio.to_thread(client.messages.create, **kwargs)
     except Exception as exc:  # noqa: BLE001 - reported on the result instead
         code = str(getattr(exc, "code", "") or "")
         error = _ERROR_HINTS.get(code) or str(getattr(exc, "msg", "") or exc)
-        logger.warning("%s follow-up to %s…. failed: %s", channel, to[:6], error)
+        logger.warning("%s %s to %s…. failed: %s", channel, what, to[:6], error)
         return SendResult(channel, "failed", error=f"{code}: {error}" if code else error)
 
-    logger.info("%s follow-up sent to %s…. (SID %s)", channel, to[:6], sent.sid)
+    logger.info("%s %s sent to %s…. (SID %s)", channel, what, to[:6], sent.sid)
     return SendResult(channel, str(sent.status or "queued"), sid=sent.sid)
+
+
+# --------------------------------------------------------------------------
+# Pre-call heads-up
+# --------------------------------------------------------------------------
+#
+# A short text a few minutes before the call, so the call is expected rather
+# than screened out as an unknown number. Sent by the campaign runner (see
+# orchestrator/runner.py), on the same Twilio senders as the follow-ups.
+# India requires SMS templates registered on DLT, and WhatsApp needs an
+# approved template for a business-initiated message — set
+# TWILIO_WHATSAPP_PRECALL_CONTENT_SID to one shaped "{{1}}" for WhatsApp.
+
+DEFAULT_PRECALL_MESSAGE = (
+    "Hi {name}, {agent} from {company} will call you in about {minutes} minutes. "
+    "Reply STOP to opt out."
+)
+DEFAULT_AGENT = "our assistant"
+
+
+def compose_precall(
+    template: str | None, *, contact_name: str, company: str, minutes: int, agent: str = DEFAULT_AGENT
+) -> str:
+    """The heads-up text. Unknown placeholders are left as written rather
+    than failing the send — a typo in the builder must not cost the call."""
+    first_name = contact_name.split()[0] if contact_name.strip() else "there"
+    values = {"name": first_name, "company": company, "minutes": minutes, "agent": agent}
+    text = (template or "").strip() or DEFAULT_PRECALL_MESSAGE
+    try:
+        return text.format(**values)
+    except (KeyError, IndexError, ValueError):
+        for key, value in values.items():
+            text = text.replace("{" + key + "}", str(value))
+        return text
+
+
+async def send_precall(channel: str, to: str, text: str) -> SendResult:
+    """Send a pre-call heads-up on `channel`. Never raises."""
+    refused = _unconfigured(channel)
+    if refused is not None:
+        return refused
+    kwargs = _addresses(channel, to)
+    content_sid = os.getenv("TWILIO_WHATSAPP_PRECALL_CONTENT_SID", "").strip()
+    if channel == WHATSAPP and content_sid:
+        kwargs["content_sid"] = content_sid
+        kwargs["content_variables"] = json.dumps({"1": text})
+    else:
+        kwargs["body"] = text
+    return await _deliver(channel, to, kwargs, what="heads-up")
 
 
 def followup_columns(results: dict[str, SendResult]) -> dict:
