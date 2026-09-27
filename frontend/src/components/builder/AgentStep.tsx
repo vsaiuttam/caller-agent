@@ -1,12 +1,13 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { api, isMissing } from "../../api";
 import { useAsync } from "../../hooks";
-import { IconPlus } from "../icons";
+import { IconPlus, IconSparkle } from "../icons";
 import { CostChip } from "../models/estimate";
 import { ModelPicker } from "../models/ModelPicker";
 import { ScorecardEditor } from "../Scorecard";
-import { Button, Card, CardHeader, Field, Select, Skeleton, Textarea, cx } from "../ui";
-import { useBuilder } from "./context";
+import { Button, Callout, Card, CardHeader, Field, Select, Skeleton, Textarea, cx, toast } from "../ui";
+import { languageName, useBuilder } from "./context";
+import { VoicePicker } from "./VoicePicker";
 import { greetingPreview, unknownPlaceholders } from "./draft";
 
 export const chipClass = (active: boolean) =>
@@ -25,6 +26,29 @@ export function AgentStep() {
   };
 
   const unknown = useMemo(() => unknownPlaceholders(f.greeting), [f.greeting]);
+  const langLabel = languageName(languages, f.language).split(" · ")[0];
+  const [translating, setTranslating] = useState(false);
+  const english = f.language === "en" || f.language.startsWith("en-");
+  // A template without a greeting for this language: offer to translate.
+  const templateMissing = !!draft.templateGreetings && !english && !draft.templateGreetings[f.language];
+
+  const translate = async () => {
+    const before = f.greeting;
+    setTranslating(true);
+    try {
+      const text = await api.translate(before, f.language);
+      if (!text.trim()) throw new Error("The translation came back empty.");
+      setForm({ greeting: text });
+      toast.success(`Translated to ${langLabel}`, "Read it through before saving. It's spoken exactly as written.", {
+        label: "Undo",
+        onClick: () => setForm({ greeting: before }),
+      });
+    } catch (err) {
+      toast.error("Couldn't translate", isMissing(err) ? "Translation needs a server update." : (err as Error).message);
+    } finally {
+      setTranslating(false);
+    }
+  };
   const preview = greetingPreview(f.greeting, f.name, draft.contacts[0]?.full_name);
 
   return (
@@ -53,7 +77,40 @@ export function AgentStep() {
             )}
           </Field>
 
-          <Field label="Opening line" hint="Placeholders: {first_name}, {full_name}, {campaign_name}. Spoken exactly as saved.">
+          <Field label="Voice" group hint={`Speakers for ${langLabel}. Play a sample before choosing.`}>
+            <VoicePicker language={f.language} languageLabel={langLabel} value={f.voice ?? null} onChange={(voice) => setForm({ voice })} />
+          </Field>
+
+          {templateMissing && (
+            <Callout
+              tone="info"
+              title={`This template has no ${langLabel} opening line`}
+              action={
+                <Button size="sm" variant="secondary" icon={<IconSparkle size={13} />} loading={translating} onClick={translate}>
+                  Translate greeting
+                </Button>
+              }
+            >
+              Translate the English one with your default model, then edit it. At call time the saved line is spoken, never re-translated.
+            </Callout>
+          )}
+
+          <Field
+            label="Opening line"
+            hint={
+              <>
+                Placeholders: {"{first_name}"}, {"{full_name}"}, {"{campaign_name}"}. Spoken exactly as saved.
+                {!english && !templateMissing && (
+                  <>
+                    {" "}
+                    <button type="button" onClick={translate} disabled={translating} className="font-medium text-brand hover:underline disabled:opacity-50">
+                      {translating ? "Translating…" : `Translate to ${langLabel}`}
+                    </button>
+                  </>
+                )}
+              </>
+            }
+          >
             <Textarea className="min-h-16 font-mono text-xs" value={f.greeting} onChange={(e) => setForm({ greeting: e.target.value })} />
           </Field>
 
