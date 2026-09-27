@@ -588,3 +588,72 @@ def _find_flush_point(buffer: str) -> int | None:
             return match.end()
 
     return None
+
+
+# --------------------------------------------------------------------------
+# Plain text, off the call: translation and the in-app assistant. Same two
+# API shapes, no tools, no prompt caching, no clause flushing.
+# --------------------------------------------------------------------------
+
+
+async def stream_text(
+    client,
+    provider,
+    model: str,
+    *,
+    system: str,
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    usage: TokenUsage | None = None,
+) -> AsyncIterator[str]:
+    """Stream a reply as raw text deltas, on whichever shape `provider` speaks."""
+    spec = provider or active()
+    if spec is None or spec.api == ANTHROPIC_API:
+        async with client.messages.stream(
+            model=model, max_tokens=max_tokens, system=system, messages=messages
+        ) as stream:
+            async for delta in stream.text_stream:
+                yield delta
+            if usage is not None:
+                try:
+                    final = await stream.get_final_message()
+                    usage.add_response_usage(model, final.usage)
+                except Exception:  # noqa: BLE001 - accounting never breaks a reply
+                    pass
+        return
+
+    stream = await client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": system}, *messages],
+        stream=True,
+        **stream_params(provider),
+        **chat_params(provider, model, max_tokens=max_tokens, effort=None),
+    )
+    async for event in stream:
+        if event.choices and event.choices[0].delta.content:
+            yield event.choices[0].delta.content
+        if usage is not None and getattr(event, "usage", None):
+            usage.add_response_usage(model, event.usage)
+
+
+async def complete_text(
+    client,
+    provider,
+    model: str,
+    *,
+    system: str,
+    user: str,
+    max_tokens: int,
+    usage: TokenUsage | None = None,
+) -> str:
+    """One reply as a string. Built on `stream_text`, so both shapes (and any
+    test double that streams) behave the same here."""
+    parts = [
+        delta
+        async for delta in stream_text(
+            client, provider, model, system=system,
+            messages=[{"role": "user", "content": user}],
+            max_tokens=max_tokens, usage=usage,
+        )
+    ]
+    return "".join(parts).strip()

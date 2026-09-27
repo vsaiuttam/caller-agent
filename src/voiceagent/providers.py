@@ -671,6 +671,23 @@ class Runtime:
     model: str | None
 
 
+async def choice(
+    provider_id: str | None, model: str | None, role: str = CONVERSATION_ROLE, session=None
+) -> tuple[Provider | None, str | None]:
+    """(provider, model) a campaign's role will actually run on. See `runtime`."""
+    from .catalog import resolve
+
+    provider = await provider_for(provider_id, role, session)
+    if provider is None:
+        return None, model
+    resolved = resolve(model, role, provider)
+    if resolved != model:
+        default = (await workspace_defaults(session))[role]
+        if default["model"] and default["provider_id"] in (None, provider.id):
+            resolved = resolve(default["model"], role, provider)
+    return provider, resolved
+
+
 async def runtime(
     provider_id: str | None,
     model: str | None,
@@ -691,17 +708,9 @@ async def runtime(
     worker builds one at start). It is reused whenever that is the provider
     that won, so a deployment with no provider rows runs exactly as before.
     """
-    from .catalog import resolve
-
-    provider = await provider_for(provider_id, role, session)
+    provider, resolved = await choice(provider_id, model, role, session)
     if provider is None:
         return Runtime(default_client, None, model)
-
-    resolved = resolve(model, role, provider)
-    if resolved != model:
-        default = (await workspace_defaults(session))[role]
-        if default["model"] and default["provider_id"] in (None, provider.id):
-            resolved = resolve(default["model"], role, provider)
 
     env = fallback_provider()
     if default_client is not None and env is not None and provider.id == env.id:

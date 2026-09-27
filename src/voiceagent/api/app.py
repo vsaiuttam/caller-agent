@@ -51,7 +51,7 @@ from ..catalog import (
     catalog_dict,
     estimate_campaign,
 )
-from ..catalog import active_defaults, resolve
+from ..catalog import active_defaults, default_model, resolve
 from ..followup import followup_columns, send_followups, sms_configured, whatsapp_configured
 from ..llm import ConversationLLM
 from ..mcp.client import (
@@ -115,7 +115,12 @@ from ..voice.live_feed import CallFeed
 from ..voice.phrases import phrases_for
 from ..voice.pipeline import dial_failure_message, prepare_telephony
 from ..voice.session import CallNotPlaced, CallSession
+from .. import providers as provider_registry
+from ..catalog import estimate_breakdown, model_price
 from . import auth
+from .providers_api import check_campaign_choice, model_http_error
+from .providers_api import router as providers_router
+from .voices_api import router as voices_router
 from .schemas import (
     DEFAULT_GREETING,
     BulkResult,
@@ -240,6 +245,11 @@ app.add_middleware(
 )
 
 
+# v3 workspace resources, each in its own module.
+app.include_router(providers_router)
+app.include_router(voices_router)
+
+
 def mask(phone: str) -> str:
     return phone[:-4] + "••••" if len(phone) > 4 else "••••"
 
@@ -260,7 +270,12 @@ async def list_templates() -> dict:
 @app.get("/api/languages")
 async def list_languages() -> list[dict]:
     return [
-        {"code": lang.code, "name": lang.name, "native_name": lang.native_name}
+        {
+            "code": lang.code,
+            "name": lang.name,
+            "native_name": lang.native_name,
+            "sarvam_code": lang.sarvam_code,
+        }
         for lang in LANGUAGES
     ]
 
@@ -358,20 +373,64 @@ async def set_model_defaults(
 
 
 @app.post("/api/estimate")
-async def estimate(body: EstimateRequest) -> dict:
-    """Project what a campaign will cost before any of it is spent."""
-    _validate_assignment(body.conversation_model, CONVERSATION, body.conversation_effort)
-    _validate_assignment(body.extraction_model, EXTRACTION, body.extraction_effort)
+async def estimate(body: EstimateRequest, db: AsyncSession = Depends(get_session)) -> dict:
+    """What a call, a minute, and N calls cost: model, voice and phone line.
 
-    return estimate_campaign(
-        contacts=body.contacts,
-        connect_rate=body.connect_rate,
-        conversation_model=body.conversation_model,
-        conversation_effort=body.conversation_effort,
-        extraction_model=body.extraction_model,
-        extraction_effort=body.extraction_effort,
-        exchanges=body.exchanges,
+    Priced on the named provider, else the workspace default conversation
+    provider. Models default to that provider's. A model with no known price
+    is reported as unknown rather than free (catalog.estimate_breakdown).
+    """
+    if body.provider_id:
+        provider = await provider_registry.get_provider(body.provider_id, db)
+        if provider is None:
+            raise HTTPException(404, "No such provider.")
+    else:
+        defaults = await provider_registry.workspace_defaults(db)
+        provider = await provider_registry.provider_for(
+            defaults[CONVERSATION]["provider_id"], CONVERSATION, db
+        )
+
+    def pick(requested: str | None, role: str) -> str:
+        if requested:
+            return requested
+        if provider is not None:
+            return default_model(role, provider)
+        return active_defaults()[f"{role}_model"]
+
+    conversation_model = pick(body.conversation_model, CONVERSATION)
+    extraction_model = pick(body.extraction_model, EXTRACTION)
+    result = estimate_breakdown(
+        conversation_model=conversation_model,
+        extraction_model=extraction_model,
+        conversation_price=model_price(conversation_model, provider),
+        extraction_price=model_price(extraction_model, provider),
+        language=body.language or "en",
+        minutes_per_call=body.minutes_per_call,
+        calls=body.calls,
+        telephony_region=body.telephony_region,
+        include_voice=body.include_voice,
     )
+    result["provider_id"] = provider.id if provider else None
+    result["conversation_model"] = conversation_model
+    result["extraction_model"] = extraction_model
+
+    if body.contacts is not None:
+        # The pre-v3 token-only projection, for callers that still ask for it.
+        legacy_conversation = body.conversation_model or active_defaults()["conversation_model"]
+        legacy_extraction = body.extraction_model or active_defaults()["extraction_model"]
+        _validate_assignment(legacy_conversation, CONVERSATION, body.conversation_effort)
+        _validate_assignment(legacy_extraction, EXTRACTION, body.extraction_effort)
+        legacy = estimate_campaign(
+            contacts=body.contacts,
+            connect_rate=body.connect_rate,
+            conversation_model=legacy_conversation,
+            conversation_effort=body.conversation_effort,
+            extraction_model=legacy_extraction,
+            extraction_effort=body.extraction_effort,
+            exchanges=body.exchanges,
+        )
+        result = {**legacy, **result}
+    return result
 
 
 # --------------------------------------------------------------------------
@@ -1158,6 +1217,19 @@ async def _volume_by_hour(
 
 async def _campaign_out(db: AsyncSession, campaign: Campaign) -> CampaignOut:
     defaults = active_defaults()
+    # Reported as what will actually run on the provider that will run it.
+    _, conversation_model = await provider_registry.choice(
+        getattr(campaign, "conversation_provider_id", None),
+        campaign.conversation_model or defaults["conversation_model"],
+        CONVERSATION,
+        db,
+    )
+    _, extraction_model = await provider_registry.choice(
+        getattr(campaign, "extraction_provider_id", None),
+        campaign.extraction_model or defaults["extraction_model"],
+        EXTRACTION,
+        db,
+    )
     counts = dict(
         (
             await db.execute(
@@ -1195,14 +1267,21 @@ async def _campaign_out(db: AsyncSession, campaign: Campaign) -> CampaignOut:
         # `claude-sonnet-5`; under a Gemini key it dials on Gemini, and a
         # screen that kept showing the Anthropic id would be describing a call
         # that never happens.
-        conversation_model=resolve(
+        conversation_model=conversation_model or resolve(
             campaign.conversation_model or defaults["conversation_model"], CONVERSATION
         ),
         conversation_effort=campaign.conversation_effort or defaults["conversation_effort"],
-        extraction_model=resolve(
+        extraction_model=extraction_model or resolve(
             campaign.extraction_model or defaults["extraction_model"], EXTRACTION
         ),
         extraction_effort=campaign.extraction_effort or defaults["extraction_effort"],
+        conversation_provider_id=getattr(campaign, "conversation_provider_id", None),
+        extraction_provider_id=getattr(campaign, "extraction_provider_id", None),
+        voice=getattr(campaign, "voice", None),
+        precall_enabled=bool(getattr(campaign, "precall_enabled", False)),
+        precall_channel=getattr(campaign, "precall_channel", None) or "sms",
+        precall_message=getattr(campaign, "precall_message", None) or "",
+        precall_lead_minutes=getattr(campaign, "precall_lead_minutes", None) or 10,
         budget_usd=campaign.budget_usd,
         sms_followup=getattr(campaign, "sms_followup", False) or False,
         whatsapp_followup=getattr(campaign, "whatsapp_followup", False) or False,
@@ -1218,6 +1297,48 @@ async def _campaign_out(db: AsyncSession, campaign: Campaign) -> CampaignOut:
         needs_review=needs_review or 0,
         spend_usd=round(campaign.spend_usd or 0.0, 4),
     )
+
+
+async def _settle_model(
+    db: AsyncSession,
+    provider_id: str | None,
+    model: str | None,
+    effort: str | None,
+    role: str,
+    *,
+    explicit: bool,
+) -> str | None:
+    """Validate a campaign's model for one role, returning the model to store.
+
+    With no provider the pre-v3 catalog rules apply. With one, the model is
+    checked against that provider: a model chosen in the same request must
+    fit it (400 if not), while one merely carried over — the workspace's old
+    default, or the model from before the provider changed — is swapped for
+    the provider's default rather than refused. Ids the catalog doesn't know
+    (custom, discovered) are the provider's to vouch for.
+    """
+    if not provider_id:
+        _validate_assignment(model, role, effort)
+        return model
+    if effort not in EFFORT_MULTIPLIER:
+        raise HTTPException(400, f"Unknown effort level: {effort}")
+    if explicit:
+        await check_campaign_choice(db, provider_id, model, role)
+        return model
+    await check_campaign_choice(db, provider_id, None, role)
+    provider = await provider_registry.get_provider(provider_id, db)
+    if resolve(model, role, provider) != model:
+        return default_model(role, provider) or model
+    return model
+
+
+def _check_voice(voice: str | None, language: str) -> None:
+    if not voice:
+        return
+    from ..voice.voices import VOICES_BY_ID
+
+    if voice not in VOICES_BY_ID:
+        raise HTTPException(400, f"Unknown voice: {voice}. See GET /api/voices.")
 
 
 @app.get("/api/campaigns", response_model=list[CampaignOut])
@@ -1237,14 +1358,17 @@ async def create_campaign(body: CampaignCreate, db: AsyncSession = Depends(get_s
     # default rather than the code default, so changing it once on the Models
     # page actually takes effect.
     fields = body.model_dump()
+    explicit = {role: bool(fields.get(f"{role}_model")) for role in (CONVERSATION, EXTRACTION)}
     for key, value in (await _model_defaults(db)).items():
         if not fields.get(key):
             fields[key] = value
 
-    _validate_assignment(
-        fields["conversation_model"], CONVERSATION, fields["conversation_effort"]
-    )
-    _validate_assignment(fields["extraction_model"], EXTRACTION, fields["extraction_effort"])
+    for role in (CONVERSATION, EXTRACTION):
+        fields[f"{role}_model"] = await _settle_model(
+            db, fields[f"{role}_provider_id"], fields[f"{role}_model"],
+            fields[f"{role}_effort"], role, explicit=explicit[role],
+        )
+    _check_voice(fields.get("voice"), fields.get("language") or "en")
     await _check_tool_ids(db, fields["mcp_tools"], fields["mcp_post_call_tools"])
 
     campaign = Campaign(id=str(uuid.uuid4()), **fields)
@@ -1286,18 +1410,32 @@ async def update_campaign(
     if "calling_days" in changes and not changes["calling_days"]:
         raise HTTPException(400, "At least one calling day is required")
 
-    if {"conversation_model", "conversation_effort"} & changes.keys():
-        _validate_assignment(
-            changes.get("conversation_model", campaign.conversation_model),
-            CONVERSATION,
-            changes.get("conversation_effort", campaign.conversation_effort),
+    for role in (CONVERSATION, EXTRACTION):
+        keys = {f"{role}_model", f"{role}_effort", f"{role}_provider_id"}
+        if keys & changes.keys():
+            settled = await _settle_model(
+                db,
+                changes.get(f"{role}_provider_id", getattr(campaign, f"{role}_provider_id", None)),
+                changes.get(f"{role}_model") or getattr(campaign, f"{role}_model"),
+                changes.get(f"{role}_effort") or getattr(campaign, f"{role}_effort"),
+                role,
+                explicit=bool(changes.get(f"{role}_model")),
+            )
+            if settled != getattr(campaign, f"{role}_model"):
+                changes[f"{role}_model"] = settled
+            if f"{role}_effort" in changes and changes[f"{role}_effort"] is None:
+                del changes[f"{role}_effort"]
+            if f"{role}_model" in changes and changes[f"{role}_model"] is None:
+                del changes[f"{role}_model"]
+    if "voice" in changes or "language" in changes:
+        _check_voice(
+            changes.get("voice", getattr(campaign, "voice", None)),
+            changes.get("language", campaign.language) or "en",
         )
-    if {"extraction_model", "extraction_effort"} & changes.keys():
-        _validate_assignment(
-            changes.get("extraction_model", campaign.extraction_model),
-            EXTRACTION,
-            changes.get("extraction_effort", campaign.extraction_effort),
-        )
+    # Sent as null, these mean "the default", like on rows made before them.
+    for field, empty in (("precall_enabled", False), ("precall_message", ""), ("precall_lead_minutes", 10)):
+        if field in changes and changes[field] is None:
+            changes[field] = empty
 
     # Sent as null, the tool fields mean "none", like on rows made before them.
     for field, empty in (("mcp_tools", []), ("mcp_post_call_tools", []), ("mcp_post_call_instructions", "")):
@@ -2097,6 +2235,8 @@ class _CallSetup:
     extraction_effort: str
     language_name: str
     language: str = "en"
+    # The campaign's Sarvam speaker; None is the default voice.
+    voice: str | None = None
 
 
 def _as_criteria(raw) -> list[ScoreCriterion]:
@@ -2196,6 +2336,7 @@ async def _resolve_call_setup(db: AsyncSession, body: CallSetupRequest) -> _Call
             (lang.name for lang in LANGUAGES if lang.code == language), "English"
         ),
         language=language,
+        voice=getattr(campaign, "voice", None) if campaign is not None else None,
     )
 
 
@@ -2547,7 +2688,9 @@ async def _run_test_call(
     session_started = False
     try:
         telephony = _test_call_telephony()
-        prepare_telephony(telephony, room_name, language=setup.language, greeting=setup.greeting)
+        prepare_telephony(
+            telephony, room_name, language=setup.language, greeting=setup.greeting, voice=setup.voice
+        )
         # Open while the phone rings, closed the moment the call is over.
         async with call_tools(
             storage.SessionLocal, _campaign_tools(setup), on_event=feed.on_tool

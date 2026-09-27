@@ -72,6 +72,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape
 
+from ..templates import LANGUAGES_BY_CODE
 from .phrases import phrases_for
 from .session import CallNotPlaced
 
@@ -107,14 +108,18 @@ _AUDIO_STORE_MAX = 256
 _audio_store: OrderedDict[str, bytes] = OrderedDict()
 # Synthesis in flight, so two requests for the same line share one API call.
 _inflight: dict[str, asyncio.Task[str | None]] = {}
-# The process's SarvamTTS clients, one per TTS language, created on first use.
-_tts_clients: dict[str, SarvamTTS] = {}
-# The TTS language of the synthesis running in this task. `_synthesize_sarvam`
-# is a one-argument seam (text in, audio out), so the language travels with
-# the task's context rather than through its signature.
+# The process's SarvamTTS clients, one per TTS language and speaker, created
+# on first use.
+_tts_clients: dict[tuple[str, str | None], SarvamTTS] = {}
+# The TTS language and speaker of the synthesis running in this task.
+# `_synthesize_sarvam` is a one-argument seam (text in, audio out), so they
+# travel with the task's context rather than through its signature.
 _synthesis_language: ContextVar[str] = ContextVar("_synthesis_language", default="en-IN")
+_synthesis_speaker: ContextVar[str | None] = ContextVar("_synthesis_speaker", default=None)
 # Languages from `prepare_call`, waiting for their room to be dialled.
 _prepared_languages: dict[str, str] = {}
+# The campaign's voice (a Sarvam speaker), likewise. None is the default.
+_prepared_voices: dict[str, str | None] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -127,10 +132,15 @@ def _gather_language(language: str) -> str:
     pinned = os.getenv("SARVAM_STT_LANGUAGE", "").strip()
     if pinned:
         return pinned
-    if language in ("hi", "hi-en"):
-        return "hi-IN"
-    if language == "ur":
-        return "ur-IN"
+    lang = LANGUAGES_BY_CODE.get(language)
+    if lang is not None and lang.code != "en":
+        if lang.twilio_code:
+            return lang.twilio_code
+        # Twilio's recogniser has no Odia. Indian English at least catches
+        # the English words people mix in; the model is told what happened
+        # by the transcript itself.
+        logger.warning("Twilio has no speech recognition for %s; listening in en-IN", lang.name)
+        return "en-IN"
     # The Sarvam voice is an Indian voice, and its callers speak Indian English.
     return "en-IN" if VOICE_PROVIDER == "sarvam" else "en-US"
 
@@ -144,7 +154,8 @@ def _tts_language(language: str) -> str:
     pinned = os.getenv("SARVAM_TTS_LANGUAGE", "").strip()
     if pinned:
         return pinned
-    return "hi-IN" if language in ("hi", "hi-en", "ur") else "en-IN"
+    lang = LANGUAGES_BY_CODE.get(language)
+    return lang.sarvam_code if lang is not None else "en-IN"
 
 
 def _filler_after_seconds() -> float:
@@ -194,8 +205,10 @@ class _CallState:
     # Twilio reported the call over, so there is nothing left to hang up.
     completed: bool = False
 
-    # The campaign's language code (en, hi, ur, hi-en), from prepare_call.
+    # The campaign's language code (en, hi, te, ...), from prepare_call.
     language: str = "en"
+    # The campaign's Sarvam speaker, from prepare_call. None is the default.
+    voice: str | None = None
     # Index of the acknowledgement last played, so the next one differs.
     last_acknowledgement: int = -1
 
@@ -286,7 +299,7 @@ class TwilioSpeaker:
     def _synthesis(self, text: str) -> asyncio.Future[str | None] | None:
         if VOICE_PROVIDER != "sarvam":
             return None
-        return synthesis(text, _tts_language(self._state.language))
+        return synthesis(text, _tts_language(self._state.language), self._state.voice)
 
     async def flush(self) -> None:
         """Queue the buffered turn as ONE reply for the webhook."""
@@ -401,27 +414,28 @@ async def _let_last_reply_play(state: _CallState) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _voice_key(tts_language: str) -> str:
+def _voice_key(tts_language: str, speaker: str | None = None) -> str:
     from .sarvam_voice import SARVAM_TTS_MODEL, SARVAM_TTS_SPEAKER
 
-    return f"{SARVAM_TTS_MODEL}|{SARVAM_TTS_SPEAKER}|{tts_language}|{SARVAM_TWILIO_SAMPLE_RATE}"
+    speaker = speaker or SARVAM_TTS_SPEAKER
+    return f"{SARVAM_TTS_MODEL}|{speaker}|{tts_language}|{SARVAM_TWILIO_SAMPLE_RATE}"
 
 
-def _audio_id(text: str, tts_language: str) -> str:
+def _audio_id(text: str, tts_language: str, speaker: str | None = None) -> str:
     # Content-addressed: the same line in the same voice and language is the
     # same file, so it is synthesized once and Twilio may cache it across
-    # calls. The language is part of it because the same words read as
-    # English and as Hindi are two different recordings.
-    return hashlib.sha256(f"{_voice_key(tts_language)}|{text}".encode()).hexdigest()[:20]
+    # calls. The language and speaker are part of it because the same words
+    # read as English and as Hindi, or by two voices, are different recordings.
+    return hashlib.sha256(f"{_voice_key(tts_language, speaker)}|{text}".encode()).hexdigest()[:20]
 
 
-def synthesis(text: str, tts_language: str) -> asyncio.Future[str | None]:
+def synthesis(text: str, tts_language: str, speaker: str | None = None) -> asyncio.Future[str | None]:
     """Start (or join) synthesis of `text`; resolves to its audio id or None.
 
     Deduplicated: a line already stored resolves at once, and a line being
     synthesized is shared rather than requested twice.
     """
-    audio_id = _audio_id(text, tts_language)
+    audio_id = _audio_id(text, tts_language, speaker)
     if audio_id in _audio_store:
         _audio_store.move_to_end(audio_id)
         done: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
@@ -430,20 +444,20 @@ def synthesis(text: str, tts_language: str) -> asyncio.Future[str | None]:
 
     task = _inflight.get(audio_id)
     if task is None:
-        task = asyncio.create_task(_synthesize_into_store(audio_id, text, tts_language))
+        task = asyncio.create_task(_synthesize_into_store(audio_id, text, tts_language, speaker))
         _inflight[audio_id] = task
         task.add_done_callback(lambda _: _inflight.pop(audio_id, None))
     return task
 
 
-def prefetch_speech(text: str, language: str = "en") -> None:
+def prefetch_speech(text: str, language: str = "en", voice: str | None = None) -> None:
     """Synthesize a line ahead of need — the greeting, while the phone rings.
 
     Without this the person answers and waits through a synthesis before
     hearing anything. Fire-and-forget; a no-op unless Sarvam is the voice.
     """
     if VOICE_PROVIDER == "sarvam" and text.strip():
-        synthesis(text.strip(), _tts_language(language))
+        synthesis(text.strip(), _tts_language(language), voice)
 
 
 async def _audio_id_or_none(future: asyncio.Future[str | None] | None) -> str | None:
@@ -454,10 +468,13 @@ async def _audio_id_or_none(future: asyncio.Future[str | None] | None) -> str | 
     return await asyncio.shield(future)
 
 
-async def _synthesize_into_store(audio_id: str, text: str, tts_language: str) -> str | None:
-    # This runs as its own task, so the language set here is this synthesis's
-    # alone.
+async def _synthesize_into_store(
+    audio_id: str, text: str, tts_language: str, speaker: str | None = None
+) -> str | None:
+    # This runs as its own task, so the language and speaker set here are
+    # this synthesis's alone.
     _synthesis_language.set(tts_language)
+    _synthesis_speaker.set(speaker)
     audio = await _synthesize_sarvam(text)
     if not audio:
         return None
@@ -472,10 +489,12 @@ async def _synthesize_sarvam(text: str) -> bytes | None:
     from .sarvam_voice import SarvamTTS
 
     language = _synthesis_language.get()
-    tts = _tts_clients.get(language)
+    speaker = _synthesis_speaker.get()
+    tts = _tts_clients.get((language, speaker))
     if tts is None:
-        tts = _tts_clients[language] = SarvamTTS(
-            language=language, sample_rate=SARVAM_TWILIO_SAMPLE_RATE
+        options = {"speaker": speaker} if speaker else {}
+        tts = _tts_clients[(language, speaker)] = SarvamTTS(
+            language=language, sample_rate=SARVAM_TWILIO_SAMPLE_RATE, **options
         )
     try:
         return await asyncio.wait_for(tts.synthesize_wav(text), timeout=8.0) or None
@@ -803,7 +822,7 @@ def _next_acknowledgement(state: _CallState) -> tuple[str, str | None] | None:
         text = acknowledgements[index]
         audio_id = None
         if VOICE_PROVIDER == "sarvam":
-            audio_id = _audio_id(text, tts_language)
+            audio_id = _audio_id(text, tts_language, state.voice)
             if audio_id not in _audio_store:
                 continue
         state.last_acknowledgement = index
@@ -938,18 +957,22 @@ class TwilioTelephony:
         self._server_started = False
         self._server_task: asyncio.Task | None = None
 
-    def prepare_call(self, room_name: str, *, language: str, greeting: str) -> None:
+    def prepare_call(
+        self, room_name: str, *, language: str, greeting: str, voice: str | None = None
+    ) -> None:
         """Set up the next call to `room_name` before it is dialled.
 
         Remembers the call's language — what <Gather> listens for and which
-        voice language Sarvam speaks in — and, with the Sarvam voice, starts
-        synthesizing the greeting, this language's acknowledgements and its
-        "let me check", so all are ready by the time someone answers.
+        voice language Sarvam speaks in — and its voice, and, with the Sarvam
+        voice, starts synthesizing the greeting, this language's
+        acknowledgements and its "let me check", so all are ready by the
+        time someone answers.
         """
         _prepared_languages[room_name] = language
+        _prepared_voices[room_name] = voice
         phrases = phrases_for(language)
         for line in (greeting, *phrases.acknowledgements, phrases.checking):
-            prefetch_speech(line, language)
+            prefetch_speech(line, language, voice)
 
     async def _ensure_server(self) -> None:
         """Start the embedded webhook server if it isn't running yet.
@@ -998,7 +1021,10 @@ class TwilioTelephony:
         """
         await self._ensure_server()
 
-        state = _CallState(language=_prepared_languages.pop(room_name, "en"))
+        state = _CallState(
+            language=_prepared_languages.pop(room_name, "en"),
+            voice=_prepared_voices.pop(room_name, None),
+        )
         _active_calls[room_name] = state
 
         try:
