@@ -370,7 +370,7 @@
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
   }
-  .bg-plane\/85, .bg-plane\/80 { background-color: var(--color-plane) !important; }
+  .bg-plane\/85, .bg-plane\/80, .bg-plane\/90 { background-color: var(--color-plane) !important; }
 }
 
 /* Phones: text fields at 16px so iOS Safari never zooms the page on focus.

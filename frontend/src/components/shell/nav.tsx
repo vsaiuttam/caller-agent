@@ -76,6 +76,8 @@ export function crumbsFor(pathname: string, dynamic: string | null): Crumb[] {
   const test = (re: RegExp) => re.test(path);
   if (path === "/") return [{ label: "Overview" }];
   if (test(/^\/campaigns\/new/)) return [{ label: "Campaigns", to: "/app/campaigns" }, { label: "New campaign" }];
+  if (test(/^\/campaigns\/[^/]+\/edit/))
+    return [{ label: "Campaigns", to: "/app/campaigns" }, { label: dynamic ?? "Campaign", to: path.replace(/\/edit.*$/, "").replace(/^/, "/app") }, { label: "Edit" }];
   if (test(/^\/campaigns\/[^/]+/)) return [{ label: "Campaigns", to: "/app/campaigns" }, { label: dynamic ?? "Campaign" }];
   if (test(/^\/review/)) return [{ label: "Calls", to: "/app/calls" }, { label: "Review queue" }];
   if (test(/^\/test-lab\/phone/)) return [{ label: "Test lab", to: "/app/test-lab" }, { label: "Call a phone" }];

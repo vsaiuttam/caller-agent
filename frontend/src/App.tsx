@@ -26,7 +26,7 @@ const ConsoleLayout = lazy(() => import("./components/shell/ConsoleLayout"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Campaigns = lazy(() => import("./pages/Campaigns"));
 const CampaignDetail = lazy(() => import("./pages/CampaignDetail"));
-const NewCampaign = lazy(() => import("./pages/NewCampaign"));
+const CampaignBuilder = lazy(() => import("./pages/CampaignBuilder"));
 const Calls = lazy(() => import("./pages/Calls"));
 const Live = lazy(() => import("./pages/Live"));
 const TestLab = lazy(() => import("./pages/TestLab"));
@@ -52,7 +52,8 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="dashboard" element={<Moved to={APP} />} />
             <Route path="campaigns" element={<Campaigns />} />
-            <Route path="campaigns/new" element={<NewCampaign />} />
+            <Route path="campaigns/new" element={<CampaignBuilder key="new" />} />
+            <Route path="campaigns/:id/edit" element={<CampaignBuilder key="edit" />} />
             <Route path="campaigns/:id" element={<CampaignDetail />} />
             <Route path="calls" element={<Calls />} />
             <Route path="review" element={<Calls reviewOnly />} />
