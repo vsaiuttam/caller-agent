@@ -4,20 +4,31 @@ On Render only the API runs, and Twilio's call webhooks land on it, so the
 campaign dispatch loop runs inside the API's lifespan unless
 DIALER_IN_API=false. Before this, campaigns set to Running never dialled.
 
+On startup the dialler also puts contacts stuck IN_PROGRESS with no live call
+for more than 10 minutes back to PENDING (docs/v3-spec.md §2.4): a redeploy
+that interrupts a call must not strand its contact forever.
+
 Runs standalone (`python tests/test_dialer.py`) or under pytest.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from src.voiceagent import worker  # noqa: E402
+from test_api_v2 import _temp_db  # noqa: E402
+
+from src.voiceagent import storage, worker  # noqa: E402
 from src.voiceagent.api import app as app_module  # noqa: E402
+from src.voiceagent.orchestrator import runner as runner_module  # noqa: E402
+from src.voiceagent.storage import CallStatus, ContactStatus  # noqa: E402
 
 
 class FakeRunner:
@@ -96,6 +107,137 @@ def test_dialer_in_api_false_leaves_dialling_to_a_separate_worker() -> None:
 def test_no_model_provider_means_no_dialler_but_the_api_still_starts() -> None:
     _, attempted = _lifespan_with(None, None)
     assert attempted
+
+
+# ---------------------------------------------------------------------------
+# Stale IN_PROGRESS recovery
+# ---------------------------------------------------------------------------
+
+
+async def _seed_stuck(sessions, now: datetime) -> None:
+    """Contacts as a redeploy leaves them.
+
+    stale-call:    IN_PROGRESS, its call started 30 minutes ago and never ended
+    stale-no-call: IN_PROGRESS, created an hour ago, no call row (died before dialling)
+    fresh:         IN_PROGRESS, its call started 2 minutes ago (may still be live)
+    done:          COMPLETED long ago (not stuck)
+    """
+    async with sessions() as db:
+        db.add(storage.Campaign(id="camp-1", name="Smile Dental", goal="Confirm Tuesday."))
+        for contact_id, status, created in (
+            ("stale-call", ContactStatus.IN_PROGRESS, now - timedelta(hours=1)),
+            ("stale-no-call", ContactStatus.IN_PROGRESS, now - timedelta(hours=1)),
+            ("fresh", ContactStatus.IN_PROGRESS, now - timedelta(hours=1)),
+            ("done", ContactStatus.COMPLETED, now - timedelta(hours=1)),
+        ):
+            db.add(storage.Contact(
+                id=contact_id, campaign_id="camp-1", full_name="Asha Rao",
+                phone_e164="+15555550100", status=status, created_at=created,
+            ))
+        for call_id, contact_id, started, status in (
+            ("call-stale", "stale-call", now - timedelta(minutes=30), CallStatus.CONNECTED),
+            ("call-fresh", "fresh", now - timedelta(minutes=2), CallStatus.CONNECTED),
+            ("call-done", "done", now - timedelta(minutes=50), CallStatus.COMPLETED),
+        ):
+            db.add(storage.Call(id=call_id, contact_id=contact_id, campaign_id="camp-1",
+                                status=status, started_at=started))
+        await db.commit()
+
+
+async def _statuses(sessions) -> dict[str, ContactStatus]:
+    async with sessions() as db:
+        rows = (await db.execute(storage.Contact.__table__.select())).all()
+    return {row.id: ContactStatus(row.status) if not isinstance(row.status, ContactStatus) else row.status
+            for row in rows}
+
+
+EXPECTED_AFTER_RECOVERY = {
+    "stale-call": ContactStatus.PENDING,
+    "stale-no-call": ContactStatus.PENDING,
+    "fresh": ContactStatus.IN_PROGRESS,
+    "done": ContactStatus.COMPLETED,
+}
+
+
+def test_contacts_count_as_stale_after_ten_minutes() -> None:
+    assert runner_module.STALE_AFTER == timedelta(minutes=10), runner_module.STALE_AFTER
+
+
+def test_stale_in_progress_contacts_go_back_to_pending() -> None:
+    async def scenario():
+        engine, sessions = await _temp_db()
+        try:
+            now = datetime.now(timezone.utc)
+            await _seed_stuck(sessions, now)
+            recovered = await runner_module.recover_stale_contacts(sessions, now=now)
+            return recovered, await _statuses(sessions)
+        finally:
+            await engine.dispose()
+
+    recovered, statuses = asyncio.run(scenario())
+    assert statuses == EXPECTED_AFTER_RECOVERY, statuses
+    assert recovered == 2, recovered
+
+
+def test_recovery_logs_how_many_contacts_it_reset() -> None:
+    records: list[logging.LogRecord] = []
+
+    class Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    async def scenario():
+        engine, sessions = await _temp_db()
+        try:
+            now = datetime.now(timezone.utc)
+            await _seed_stuck(sessions, now)
+            return await runner_module.recover_stale_contacts(sessions, now=now)
+        finally:
+            await engine.dispose()
+
+    handler = Collect(logging.INFO)
+    logger = logging.getLogger(runner_module.__name__)
+    saved_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        recovered = asyncio.run(scenario())
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(saved_level)
+    messages = [r.getMessage() for r in records]
+    assert any(str(recovered) in m.split() or f" {recovered} " in f" {m} " for m in messages), messages
+
+
+def test_the_dialler_recovers_stale_contacts_when_it_starts() -> None:
+    async def scenario():
+        engine, sessions = await _temp_db()
+        try:
+            await _seed_stuck(sessions, datetime.now(timezone.utc))
+            placed = []
+
+            async def place_call(contact, campaign) -> None:
+                placed.append(contact.id)
+
+            dialler = runner_module.CampaignRunner(sessions, place_call)
+            task = asyncio.create_task(dialler.run_forever())
+            try:
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + 3
+                while loop.time() < deadline:
+                    if (await _statuses(sessions))["stale-call"] == ContactStatus.PENDING:
+                        break
+                    await asyncio.sleep(0.05)
+            finally:
+                dialler.stop()
+                await asyncio.wait_for(task, 5)
+            return await _statuses(sessions), placed
+        finally:
+            await engine.dispose()
+
+    statuses, placed = asyncio.run(scenario())
+    assert statuses == EXPECTED_AFTER_RECOVERY, statuses
+    assert placed == [], "no campaign is running, so nothing should be dialled"
 
 
 def _run_all() -> int:
