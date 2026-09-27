@@ -120,7 +120,7 @@ export default function Campaigns() {
           <EmptyState compact avatar="thinking" title="No campaigns match" hint="Try another status or search." />
         </Card>
       ) : (
-        <ul className="grid gap-3 md:grid-cols-2">
+        <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {visible.map((c) => (
             <li key={c.id}>
               <CampaignCard campaign={c} />

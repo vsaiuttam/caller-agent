@@ -854,7 +854,7 @@ function LiveNow({ campaignName }: { campaignName: (id: string) => string | unde
 
   if (!loaded) {
     return (
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {[0, 1, 2].map((i) => (
           <Skeleton key={i} className="h-16 rounded-xl" />
         ))}
@@ -879,7 +879,7 @@ function LiveNow({ campaignName }: { campaignName: (id: string) => string | unde
     );
   }
   return (
-    <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {calls.map((call) => (
         <li key={call.call_id}>
           <LiveCallCard

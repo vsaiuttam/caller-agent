@@ -129,7 +129,7 @@ export function VoicePicker({
                 </span>
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium text-ink">{voice ? voice.name : "Default voice"}</span>
-                  <span className="block truncate text-2xs capitalize text-ink-muted">{voice ? voice.gender || "Voice" : "The deployment's standard speaker"}</span>
+                  <span className={cx("block truncate text-2xs text-ink-muted", voice && "capitalize")}>{voice ? voice.gender || "Voice" : "The deployment's standard speaker"}</span>
                 </span>
               </button>
               {voice && (

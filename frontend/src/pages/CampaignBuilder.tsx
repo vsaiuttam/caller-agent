@@ -284,6 +284,14 @@ export default function CampaignBuilder() {
     }
   };
 
+  // The sticky action bar sits where the Ask Samvaad launcher lives; lift it.
+  useEffect(() => {
+    document.body.dataset.actionBar = "";
+    return () => {
+      delete document.body.dataset.actionBar;
+    };
+  }, []);
+
   // Ctrl/Cmd+S saves.
   const saveRef = useRef(saveDraft);
   saveRef.current = saveDraft;
@@ -402,9 +410,9 @@ export default function CampaignBuilder() {
           </aside>
         </div>
 
-        {/* Actions: sticky to the bottom of the page's scroller. The right
-            padding leaves room for the Ask Samvaad launcher. */}
-        <div className="sticky bottom-0 z-20 -mx-4 mt-6 border-t border-line bg-plane/90 px-4 py-3 pr-16 backdrop-blur-md sm:-mx-6 sm:px-6 sm:pr-20 lg:-mx-8 lg:px-8 lg:pr-20">
+        {/* Actions: sticky to the bottom of the page's scroller. While it's mounted,
+            body[data-action-bar] lifts the Ask Samvaad launcher above it. */}
+        <div className="sticky bottom-0 z-20 -mx-4 mt-6 border-t border-line bg-plane/90 px-4 py-3 backdrop-blur-md sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
           <div className="flex items-center gap-2">
             <Button variant="ghost" icon={<IconArrowLeft size={14} />} onClick={() => prev && goTo(prev.id)} disabled={!prev} className="max-sm:!px-2.5">
               <span className="max-sm:sr-only">Back</span>
@@ -416,7 +424,7 @@ export default function CampaignBuilder() {
             <div className="ml-auto flex items-center gap-2">
               {(mode === "new" || !running || step !== "review") && (
                 <Button variant="secondary" onClick={saveDraft} loading={busy === "save"} disabled={busy !== null || (mode === "edit" && !dirty)}>
-                  {mode === "new" ? "Save draft" : "Save"}
+                  {mode === "new" ? (<><span className="max-sm:hidden">Save draft</span><span className="sm:hidden">Save</span></>) : "Save"}
                 </Button>
               )}
               {next ? (
@@ -437,7 +445,8 @@ export default function CampaignBuilder() {
                   title={blocked ? "Fix the items above first" : undefined}
                   className={cx(blocked && "cursor-not-allowed")}
                 >
-                  {launchLabel}
+                  <span className="max-sm:hidden">{launchLabel}</span>
+                  <span className="sm:hidden">{running ? "Save" : campaign?.status === "paused" ? "Resume" : "Launch"}</span>
                 </Button>
               )}
             </div>

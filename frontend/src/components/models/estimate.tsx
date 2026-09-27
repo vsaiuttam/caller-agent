@@ -78,7 +78,8 @@ export function CostBreakdown({ estimate, calls }: { estimate: Estimate; calls?:
             key={p.key}
             title={`${p.label}: ${money(p.value)} per call (${Math.round(((p.value ?? 0) / total) * 100)}%)`}
             className={cx("h-full min-w-[3px] transition-[flex-grow] duration-300", p.color)}
-            style={{ flexGrow: p.value ?? 0, flexBasis: 0 }}
+            // Shares, not raw dollars: flex-grow values summing under 1 leave the bar part-empty.
+            style={{ flexGrow: ((p.value ?? 0) / total) * 100, flexBasis: 0 }}
           />
         ))}
       </div>

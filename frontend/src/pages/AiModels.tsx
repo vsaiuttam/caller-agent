@@ -104,7 +104,7 @@ export default function AiModels() {
             {error ? (
               <ErrorNote message={error} onRetry={reload} />
             ) : loading || !providers ? (
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {[0, 1, 2].map((i) => (
                   <Skeleton key={i} className="h-40 rounded-xl" />
                 ))}
@@ -125,7 +125,7 @@ export default function AiModels() {
                 />
               </Card>
             ) : (
-              <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              <ul className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {providers.map((p) => (
                   <li key={p.id}>
                     <ProviderCard
@@ -267,12 +267,13 @@ function ProviderCard({
         {env && <Badge tone="info">From environment</Badge>}
       </div>
       {p.enabled && p.status === "error" && p.last_error && (
-        <p className="mx-4 mt-3 line-clamp-2 flex items-start gap-1.5 text-xs text-critical" title={p.last_error}>
-          <IconAlert size={12} className="mt-0.5 shrink-0" /> {p.last_error}
+        <p className="mx-4 mt-3 flex items-start gap-1.5 text-xs text-critical" title={p.last_error}>
+          <IconAlert size={12} className="mt-0.5 shrink-0" /> <span className="line-clamp-2 min-w-0 break-words">{p.last_error}</span>
         </p>
       )}
       {lastTest && p.status === "ok" && <p className="mx-4 mt-3 text-xs text-good">{lastTest}</p>}
-      <div className="mt-auto flex flex-wrap items-center gap-1.5 border-t border-line px-3 py-2.5 pt-2.5">
+      <div className="min-h-4 flex-1" aria-hidden />
+      <div className="flex flex-wrap items-center gap-1.5 border-t border-line px-3 py-2.5 pt-2.5">
         <Button size="sm" variant="secondary" icon={<IconBolt size={13} />} onClick={test} loading={testing} disabled={!p.enabled}>
           Test
         </Button>
@@ -395,6 +396,7 @@ function DefaultsSection({ providers, canAdmin }: { providers: Provider[]; canAd
                   model={current[role.key].model}
                   role={role.key}
                   disabled={!canAdmin}
+                  defaultLabel="Automatic (first working provider)"
                   onChange={(next) => setDraft({ ...current, [role.key]: next })}
                 />
               </div>

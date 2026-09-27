@@ -153,7 +153,7 @@ export function Assistant() {
             exit={{ opacity: 0, y: 8 }}
             transition={T.base}
             aria-label="Ask Samvaad, the help assistant"
-            className="fixed bottom-4 right-4 z-40 flex h-12 items-center gap-2 rounded-full border border-line bg-raised pl-2 pr-2 text-sm font-medium text-ink elev-3 transition-[border-color,transform] duration-150 hover:border-line-strong active:translate-y-px sm:pr-4"
+            className="fixed bottom-4 right-4 z-40 flex [body[data-action-bar]_&]:bottom-20 h-12 items-center gap-2 rounded-full border border-line bg-raised pl-2 pr-2 text-sm font-medium text-ink elev-3 transition-[border-color,transform] duration-150 hover:border-line-strong active:translate-y-px sm:pr-4"
           >
             <LogoMark size={30} />
             <span className="hidden sm:inline">Ask Samvaad</span>
