@@ -25,8 +25,9 @@ const link =
 export function AppFooter({ onShortcuts }: { onShortcuts: () => void }) {
   const { health, error } = useHealth();
   const status = systemStatus(health, error);
+  // pb-20 keeps the last row clear of the fixed Ask Samvaad launcher.
   return (
-    <footer className="border-t border-line px-4 py-4 text-xs text-ink-muted sm:px-6 lg:px-8">
+    <footer className="border-t border-line px-4 pb-20 pt-4 text-xs text-ink-muted sm:px-6 lg:px-8">
       <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-5 gap-y-2">
         <span className="font-medium text-ink-secondary">{BRAND.name}</span>
         <span className="tnum" title="Console version and build">
