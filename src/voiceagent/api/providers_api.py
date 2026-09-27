@@ -367,7 +367,7 @@ async def effective_defaults(db: AsyncSession) -> WorkspaceModelDefaults:
     """The stored defaults, with unset parts filled as today's behaviour:
     the env provider and its catalog defaults."""
     stored = await providers.workspace_defaults(db)
-    fallback = providers.fallback_provider()
+    fallback = await providers.default_provider(db)
     result: dict[str, dict[str, str | None]] = {}
     for role in (CONVERSATION, EXTRACTION):
         provider_id = stored[role]["provider_id"] or (fallback.id if fallback else None)

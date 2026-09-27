@@ -507,7 +507,11 @@ async def list_providers(session=None) -> list[Provider]:
         rows = (await db.scalars(select(LlmProvider).order_by(LlmProvider.created_at))).all()
         return [from_row(row) for row in rows]
 
-    return [*(await _with_session(session, load)), *env_providers()]
+    rows = await _with_session(session, load)
+    # A row of the same kind replaces the env key's entry: the one managed
+    # from the console is the one people mean.
+    kinds = {row.kind for row in rows}
+    return [*rows, *(p for p in env_providers() if p.kind not in kinds)]
 
 
 async def get_provider(provider_id: str | None, session=None) -> Provider | None:
@@ -593,7 +597,19 @@ async def provider_for(
         if usable(chosen):
             return chosen
         logger.warning("Workspace default provider %s is unusable; using the env provider", default_id)
-    return fallback_provider()
+    return await default_provider(session)
+
+
+async def default_provider(session=None) -> Provider | None:
+    """The provider used when nothing names one: today's env provider, as
+    GET /api/model-defaults reports it; with no env key at all, the first
+    usable console row, so a workspace set up entirely from the console
+    works without also choosing defaults."""
+    env = fallback_provider()
+    if env is not None:
+        return env
+    rows = [p for p in await list_providers(session) if p.source == "db" and usable(p)]
+    return rows[0] if rows else None
 
 
 # Clients per provider. Building one costs a TLS handshake on its first
@@ -887,6 +903,12 @@ def overloaded_error_types() -> tuple[type[Exception], ...]:
         from anthropic import InternalServerError as AnthropicOverloaded
 
         types.append(AnthropicOverloaded)
+        # Anthropic's 529 "overloaded" is its own class, not a subclass of
+        # InternalServerError — missing it sent busy-hour extractions
+        # straight to review instead of retrying them.
+        from anthropic import OverloadedError as AnthropicOverloaded529
+
+        types.append(AnthropicOverloaded529)
     except ImportError:  # pragma: no cover
         pass
     try:

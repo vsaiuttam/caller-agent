@@ -133,6 +133,7 @@ from .schemas import (
     ContactBulkCreate,
     ContactOut,
     DashboardStats,
+    DialerStatus,
     EstimateRequest,
     FollowupResend,
     HourBucket,
@@ -1481,6 +1482,17 @@ async def set_campaign_status(
     }[action]
     await db.commit()
     return await _campaign_out(db, campaign)
+
+
+@app.get("/api/campaigns/{campaign_id}/dialer", response_model=DialerStatus)
+async def campaign_dialer(campaign_id: str, db: AsyncSession = Depends(get_session)) -> DialerStatus:
+    """Whether this campaign is dialling right now, and if not, why not."""
+    campaign = await db.get(Campaign, campaign_id)
+    if not campaign:
+        raise HTTPException(404, "Campaign not found")
+    from ..orchestrator.status import dialer_status
+
+    return DialerStatus(**await dialer_status(db, campaign))
 
 
 # --------------------------------------------------------------------------
