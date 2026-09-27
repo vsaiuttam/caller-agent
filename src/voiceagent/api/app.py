@@ -118,6 +118,7 @@ from ..voice.session import CallNotPlaced, CallSession
 from .. import providers as provider_registry
 from ..catalog import estimate_breakdown, model_price
 from . import auth
+from .access import workspace_writer
 from .providers_api import check_campaign_choice, model_http_error
 from .providers_api import router as providers_router
 from .voices_api import router as voices_router
@@ -2204,6 +2205,89 @@ async def resend_followup(
         setattr(call, column, value)
     await db.commit()
     return {channel: result.as_dict() for channel, result in results.items()}
+
+
+@app.post("/api/calls/{call_id}/reextract", response_model=CallDetail)
+async def reextract_call(
+    call_id: str,
+    _actor: dict | None = Depends(workspace_writer),
+    db: AsyncSession = Depends(get_session),
+) -> CallDetail:
+    """Run extraction again on a call's saved transcript and return the call.
+
+    For calls whose extraction failed — most often a provider that was
+    overloaded at the time. Same retries and fallback as a live call. Only
+    the outcome is redone: follow-up messages, webhooks and write-backs to
+    connected apps already happened (or didn't) and are not repeated, since
+    a second text to the same person is worse than a stale record.
+    """
+    from ..models import Turn
+    from ..voice.pipeline import _to_context, _to_model
+
+    row = (
+        await db.execute(
+            select(Call, Contact, Campaign)
+            .join(Contact, Call.contact_id == Contact.id)
+            .join(Campaign, Call.campaign_id == Campaign.id)
+            .where(Call.id == call_id)
+        )
+    ).first()
+    if not row:
+        raise HTTPException(404, "Call not found")
+    call, contact, campaign = row
+    turns = [Turn.model_validate(turn) for turn in call.transcript or []]
+    if not turns:
+        raise HTTPException(409, "This call has no transcript to extract from.")
+
+    primary = await provider_registry.runtime(
+        getattr(campaign, "extraction_provider_id", None),
+        campaign.extraction_model,
+        EXTRACTION,
+        session=db,
+    )
+    if primary.client is None:
+        raise HTTPException(503, missing_key_message())
+    fallback = await provider_registry.extraction_fallback(primary, session=db)
+
+    usage = TokenUsage()
+    context = _to_context(campaign)
+    started = call.connected_at or call.started_at
+    outcome = await extract_outcome(
+        primary.client,
+        contact=_to_model(contact),
+        context=context,
+        turns=turns,
+        call_started_at_iso=_utc(started).isoformat() if started else datetime.now(timezone.utc).isoformat(),
+        model=primary.model,
+        effort=campaign.extraction_effort,
+        usage=usage,
+        provider=primary.provider,
+        fallback=(fallback.client, fallback.provider, fallback.model) if fallback else None,
+    )
+    qualification = qualify_outcome(context, outcome) if context.scorecard else None
+    cost = usage.cost_usd()
+
+    call.disposition = outcome.disposition.value
+    call.sentiment = outcome.sentiment.value
+    call.summary = outcome.summary
+    call.outcome = outcome.model_dump(mode="json")
+    call.scores = [s.model_dump(mode="json") for s in outcome.scores]
+    call.qualification = qualification.model_dump(mode="json") if qualification else None
+    call.score = qualification.score if qualification else None
+    call.qualification_band = qualification.band.value if qualification else None
+    call.needs_human_review = outcome.needs_human_review
+    call.review_reason = outcome.review_reason or None
+    call.extraction_model = resolve(primary.model, EXTRACTION, primary.provider)
+    # The second extraction is a real cost, added to the call's ledger.
+    call.input_tokens = (call.input_tokens or 0) + usage.input_tokens
+    call.output_tokens = (call.output_tokens or 0) + usage.output_tokens
+    call.cost_usd = (call.cost_usd or 0.0) + cost
+    if not call.is_simulation:
+        await db.execute(
+            update(Campaign).where(Campaign.id == campaign.id).values(spend_usd=Campaign.spend_usd + cost)
+        )
+    await db.commit()
+    return await get_call(call_id, db)
 
 
 @app.post("/api/calls/{call_id}/review", response_model=CallSummary)
