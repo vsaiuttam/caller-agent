@@ -9,6 +9,7 @@ import { AgentAvatar } from "../components/AgentAvatar";
 import CallResult from "../components/CallResult";
 import { IconCheck, IconPlay } from "../components/icons";
 import {
+  ButtonLink,
   Button,
   Callout,
   Card,
@@ -136,8 +137,8 @@ export default function Simulator() {
 
       <div className="min-w-0 space-y-3">
         {health && !health.can_run_simulations && (
-          <Callout tone="warning" title="No model provider is configured">
-            Set a provider key (Gemini, Anthropic or OpenAI) on the server and restart it — there's nothing to talk to yet.
+          <Callout tone="warning" title="No model provider is configured" action={<ButtonLink to="/app/ai-models?add=1" size="sm" variant="secondary">Add a provider</ButtonLink>}>
+            There's nothing to talk to yet. Add an LLM key on AI models and rehearse again.
           </Callout>
         )}
         {error && !running && (

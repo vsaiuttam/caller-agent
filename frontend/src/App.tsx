@@ -36,6 +36,7 @@ const LiveMic = lazy(() => import("./pages/LiveMic"));
 const Templates = lazy(() => import("./pages/Templates"));
 const AiModels = lazy(() => import("./pages/AiModels"));
 const Settings = lazy(() => import("./pages/Settings"));
+const Integrations = lazy(() => import("./pages/Integrations"));
 const Suppressions = lazy(() => import("./pages/Suppressions"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
@@ -67,6 +68,7 @@ export default function App() {
             <Route path="templates" element={<Templates />} />
             <Route path="ai-models" element={<AiModels />} />
             <Route path="models" element={<Moved to={`${APP}/ai-models`} />} />
+            <Route path="integrations" element={<Integrations />} />
             <Route path="settings" element={<Settings />} />
             <Route path="suppressions" element={<Suppressions />} />
             <Route path="*" element={<NotFound />} />

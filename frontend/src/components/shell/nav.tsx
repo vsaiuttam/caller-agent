@@ -13,6 +13,7 @@ import {
   IconFlask,
   IconLive,
   IconPhone,
+  IconPlug,
   IconSettings,
   IconSparkle,
 } from "../icons";
@@ -54,7 +55,8 @@ export const NAV_GROUPS: Array<{ heading?: string; items: NavItem[] }> = [
     heading: "Configure",
     items: [
       { to: "/app/ai-models", label: "AI models", hint: "Providers, defaults and what a call costs", key: "m", icon: (s) => <IconChip size={s} /> },
-      { to: "/app/settings", label: "Settings", hint: "Connected apps, services and team", key: "i", icon: (s) => <IconSettings size={s} /> },
+      { to: "/app/integrations", label: "Integrations", hint: "Apps, telephony, messaging, webhooks", key: "i", icon: (s) => <IconPlug size={s} /> },
+      { to: "/app/settings", label: "Settings", hint: "Workspace, team and security", key: "s", icon: (s) => <IconSettings size={s} /> },
       { to: "/app/suppressions", label: "Do not call", hint: "Numbers never dialled", key: "d", icon: (s) => <IconBlock size={s} /> },
     ],
   },

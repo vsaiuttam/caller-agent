@@ -21,7 +21,9 @@ import {
   IconLogout,
   IconMoon,
   IconPhone,
+  IconChip,
   IconPlug,
+  IconReview,
   IconPlus,
   IconSearch,
   IconSun,
@@ -82,7 +84,9 @@ export default function CommandPalette({
       })),
       { id: "a-new", label: "New campaign", hint: "Start from scratch", icon: <IconPlus size={15} />, group: "Actions", run: go("/app/campaigns/new") },
       { id: "a-call", label: "Place a test call", hint: "Ring your own phone", icon: <IconPhone size={15} />, group: "Actions", run: go("/app/test-lab/phone") },
-      { id: "a-app", label: "Connect an app", hint: "Give the agent tools over MCP", icon: <IconPlug size={15} />, group: "Actions", run: go("/app/settings?connect=1") },
+      { id: "a-app", label: "Connect an app", hint: "Give the agent tools over MCP", icon: <IconPlug size={15} />, group: "Actions", run: go("/app/integrations?connect=1") },
+      { id: "a-provider", label: "Add a model provider", hint: "Bring any LLM", icon: <IconChip size={15} />, group: "Actions", run: go("/app/ai-models?add=1") },
+      { id: "a-review", label: "Calls that need review", hint: "Outcomes held for a human", icon: <IconReview size={15} />, group: "Actions", run: go("/app/calls?view=review") },
       ...(auth.registration !== null && canManageTeam(auth.user)
         ? [{ id: "a-invite", label: "Invite a teammate", hint: "Team and invites", icon: <IconUsers size={15} />, group: "Actions", run: go("/app/settings?tab=team") }]
         : []),

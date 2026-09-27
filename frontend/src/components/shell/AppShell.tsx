@@ -457,7 +457,7 @@ function HealthPill() {
           </p>
         </div>
         <Link
-          to="/app/settings?tab=services"
+          to="/app/integrations?tab=telephony"
           onClick={() => setOpen(false)}
           className="flex items-center justify-between rounded-lg px-2.5 py-2 text-xs font-medium text-ink transition-colors hover:bg-subtle"
         >
