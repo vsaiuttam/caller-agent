@@ -798,6 +798,29 @@ def test_model_defaults_round_trip() -> None:
     assert got == body, got
 
 
+def test_a_new_campaign_uses_the_model_defaults_set_on_the_models_page() -> None:
+    """Saving defaults there used to break campaign creation outright.
+
+    The per-role entries share a settings row with the pre-v3 flat fields,
+    and were spread into Campaign(**fields) as `conversation=`: a 500 for
+    every new campaign. They now fill the campaign's provider and model.
+    """
+
+    async def scenario(http, sessions):
+        put = await http.put("/api/model-defaults", json={
+            "conversation": {"provider_id": "env:anthropic", "model": "claude-haiku-4-5"},
+            "extraction": {"provider_id": "env:anthropic", "model": "claude-opus-5"},
+        })
+        assert put.status_code == 200, _show(put)
+        return await http.post("/api/campaigns", json={"name": "Defaults", "goal": "Confirm the slot"})
+
+    r = _run(scenario, _fresh_ip(), **ENV_ANTHROPIC)
+    assert r.status_code == 201, _show(r)
+    got = r.json()
+    assert got["conversation_model"] == "claude-haiku-4-5", got
+    assert got["extraction_model"] == "claude-opus-5", got
+
+
 def test_model_defaults_must_name_a_known_provider_and_a_model_it_offers() -> None:
     async def scenario(http, sessions):
         created = await create_provider(http, kind="anthropic", api_key=ANTHROPIC_DB_KEY)

@@ -300,9 +300,13 @@ async def _model_defaults(db: AsyncSession) -> dict:
     """
     row = await db.get(Setting, _MODEL_DEFAULTS_KEY)
     stored = row.value if row and isinstance(row.value, dict) else {}
+    base = active_defaults()
+    # The same row holds the v3 per-role entries ("conversation": {...}),
+    # which providers.workspace_defaults reads. Only the flat fields belong
+    # here: create_campaign spreads this dict into Campaign(**fields).
     return {
-        **active_defaults(),
-        **{k: v for k, v in stored.items() if _still_usable(k, v)},
+        **base,
+        **{k: v for k, v in stored.items() if k in base and _still_usable(k, v)},
     }
 
 
@@ -1388,6 +1392,15 @@ async def create_campaign(body: CampaignCreate, db: AsyncSession = Depends(get_s
     for key, value in (await _model_defaults(db)).items():
         if not fields.get(key):
             fields[key] = value
+    # The AI models page saves per role ({provider_id, model}); that choice
+    # wins over the flat defaults above for a campaign that didn't pick.
+    for role, entry in (await provider_registry.workspace_defaults(db)).items():
+        if explicit[role] or fields.get(f"{role}_provider_id"):
+            continue
+        if entry["provider_id"]:
+            fields[f"{role}_provider_id"] = entry["provider_id"]
+        if entry["model"]:
+            fields[f"{role}_model"] = entry["model"]
 
     for role in (CONVERSATION, EXTRACTION):
         fields[f"{role}_model"] = await _settle_model(
