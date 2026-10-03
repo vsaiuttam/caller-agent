@@ -10,6 +10,7 @@ import { ROLE_LABEL, canManageTeam, useAuth, useSignOut } from "../../auth";
 import { BRAND } from "../../brand";
 import { useHealth, useLiveCalls, useStats, useStreamStatus } from "../../data";
 import { useLocalStorage } from "../../hooks";
+import { useInstallPrompt } from "../../pwa";
 import { useTheme } from "../../theme";
 import { Assistant } from "../assistant/Assistant";
 import CommandPalette from "../CommandPalette";
@@ -19,6 +20,7 @@ import {
   IconCheck,
   IconChevronRight,
   IconClose,
+  IconDownload,
   IconExternal,
   IconHelp,
   IconKeyboard,
@@ -181,6 +183,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           />
           <main id="main" tabIndex={-1} className="relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden outline-none">
             <AuthBanner />
+            <InstallBanner />
             <div className="flex-1">{children}</div>
             <AppFooter onShortcuts={() => setShortcutsOpen(true)} />
           </main>
@@ -489,6 +492,7 @@ function UserMenu({ onShortcuts, onSignOut }: { onShortcuts: () => void; onSignO
   const detail = user?.email || "Signed in with the admin password";
   const role = user ? ROLE_LABEL[user.role] : "Owner";
   const short = user?.email ? initials(name) : "";
+  const { canInstall, install } = useInstallPrompt();
   return (
     <div className="relative">
       <button
@@ -519,6 +523,11 @@ function UserMenu({ onShortcuts, onSignOut }: { onShortcuts: () => void; onSignO
             <IconUsers size={15} /> Team and invites
           </Link>
         )}
+        {canInstall && (
+          <button type="button" className={item} onClick={() => { setOpen(false); void install(); }}>
+            <IconDownload size={15} /> Install app
+          </button>
+        )}
         <button type="button" className={item} onClick={() => { setOpen(false); onShortcuts(); }}>
           <IconKeyboard size={15} /> Keyboard shortcuts
         </button>
@@ -542,6 +551,36 @@ function AuthBanner() {
         <span className="font-medium text-ink">Anyone with this link can place calls.</span> Set{" "}
         <code className="font-mono rounded bg-subtle px-1 py-0.5 text-2xs">ADMIN_PASSWORD</code> to lock it.
       </p>
+      <button
+        type="button"
+        onClick={() => setDismissed(true)}
+        aria-label="Dismiss"
+        className="flex h-8 w-8 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-subtle hover:text-ink"
+      >
+        <IconClose size={14} />
+      </button>
+    </div>
+  );
+}
+
+/** On a phone, offer the installable app once; dismissing it is remembered. */
+function InstallBanner() {
+  const { canInstall, install } = useInstallPrompt();
+  const [dismissed, setDismissed] = useLocalStorage("samvaad.installBanner.dismissed", false);
+  if (!canInstall || dismissed) return null;
+  return (
+    <div className="flex items-center gap-3 border-b border-brand/20 bg-brand/6 px-4 py-2 text-xs text-ink-secondary sm:px-6 lg:hidden">
+      <IconDownload size={14} className="shrink-0 text-brand" />
+      <p className="min-w-0 flex-1">
+        <span className="font-medium text-ink">Install {BRAND.name}</span> on your home screen: it opens full-screen, like an app.
+      </p>
+      <button
+        type="button"
+        onClick={() => void install()}
+        className="rounded-md bg-brand px-2.5 py-1.5 text-xs font-medium text-on-brand transition-colors hover:bg-brand/90"
+      >
+        Install
+      </button>
       <button
         type="button"
         onClick={() => setDismissed(true)}
