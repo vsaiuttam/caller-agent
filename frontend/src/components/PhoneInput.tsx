@@ -55,10 +55,6 @@ export const COUNTRIES: Country[] = [
 const BY_ISO = new Map(COUNTRIES.map((c) => [c.iso, c]));
 const STORE_KEY = "samvaad.phone.country";
 
-function flag(iso: string) {
-  return String.fromCodePoint(...[...iso].map((ch) => 0x1f1a5 + ch.charCodeAt(0)));
-}
-
 function rememberedCountry(fallback: string): Country {
   try {
     const iso = window.localStorage.getItem(STORE_KEY);
@@ -153,26 +149,25 @@ export function PhoneInput({
         disabled && "opacity-60",
       )}
     >
-      <span className="relative flex shrink-0 items-center border-r border-line bg-subtle/60">
+      {/* The visible part is a compact "IN +91"; the native select sits over
+          it, invisible, so the open list still shows full country names. */}
+      <span className="relative flex shrink-0 items-center gap-1.5 border-r border-line bg-subtle/60 pl-3 pr-2 text-sm text-ink">
+        <span className="rounded bg-surface px-1 py-px text-[0.6875rem] font-semibold tracking-wide text-ink-secondary">{country.iso}</span>
+        <span className="tnum">+{country.dial}</span>
+        <IconChevronDown size={13} className="text-ink-muted" />
         <select
           aria-label="Country code"
           value={country.iso}
           disabled={disabled}
           onChange={(e) => pickCountry(e.target.value)}
-          className="h-full cursor-pointer appearance-none bg-transparent pl-3 pr-7 text-sm text-ink outline-none"
+          className="absolute inset-0 h-full w-full cursor-pointer appearance-none opacity-0 disabled:cursor-not-allowed"
         >
           {COUNTRIES.map((c) => (
             <option key={c.iso} value={c.iso}>
-              {flag(c.iso)} {c.name} (+{c.dial})
+              {c.name} (+{c.dial})
             </option>
           ))}
         </select>
-        {/* The closed select shows the full option text; this overlays a compact one. */}
-        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 flex items-center gap-1.5 bg-subtle pl-3 pr-7 text-sm text-ink">
-          <span>{flag(country.iso)}</span>
-          <span className="tnum">+{country.dial}</span>
-        </span>
-        <IconChevronDown size={13} className="pointer-events-none absolute right-2 text-ink-muted" />
       </span>
       <input
         id={id}
