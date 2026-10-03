@@ -128,7 +128,7 @@ PROVIDERS: list[ProviderSpec] = [
         key_env="NVIDIA_API_KEY",
         base_url="https://integrate.api.nvidia.com/v1",
         console="https://build.nvidia.com",
-        note="Free evaluation credits, 40 requests/minute. Not for campaigns.",
+        note="Free evaluation credits, ~40 requests/minute, variable latency. Nemotron Lightning on the call (thinking off), Ultra after it. No tool calls.",
     ),
 ]
 
@@ -780,19 +780,22 @@ def chat_params(provider, model: str, *, max_tokens: int, effort: str | None) ->
     a non-reasoning model it is a 400 on OpenAI and refused by strict
     servers — and the token cap uses the field the provider accepts.
     """
-    if provider is None:
-        params: dict[str, Any] = {"max_tokens": max_tokens}
-        if effort:
-            params["reasoning_effort"] = effort
-        return params
-
     from .catalog import MODELS_BY_ID
 
-    params = {getattr(provider, "max_tokens_param", "max_tokens"): max_tokens}
     spec = MODELS_BY_ID.get(model)
-    reasons = spec.reasoning if spec is not None else getattr(provider, "kind", "") == "gemini"
-    if effort and reasons:
-        params["reasoning_effort"] = effort
+    if provider is None:
+        params: dict[str, Any] = {"max_tokens": max_tokens}
+        if effort and not (spec is not None and spec.thinking_toggle):
+            params["reasoning_effort"] = effort
+    else:
+        params = {getattr(provider, "max_tokens_param", "max_tokens"): max_tokens}
+        reasons = spec.reasoning if spec is not None else getattr(provider, "kind", "") == "gemini"
+        if effort and reasons:
+            params["reasoning_effort"] = effort
+    if spec is not None and spec.thinking_toggle:
+        # Models that think unless the chat template says otherwise. The
+        # OpenAI SDK passes extra_body through to the request JSON.
+        params["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
     return params
 
 

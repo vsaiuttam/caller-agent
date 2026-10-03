@@ -56,6 +56,7 @@ PERSONA_MODELS = {
     # sharing a quota pool with the agent would have a long rehearsal rate-limit
     # itself halfway through.
     "gemini": "gemini-3.5-flash-lite",
+    "nvidia": "nvidia/nemotron-3.5-lightning-30b-a3b",
 }
 PERSONA_MODEL = PERSONA_MODELS["anthropic"]
 PERSONA_MAX_TOKENS = 200
@@ -66,7 +67,13 @@ def persona_model(provider=None, fallback: str | None = None) -> str:
     of its own, the agent's model plays it too: that costs a shared quota
     pool, but it is the one model this key is known to reach."""
     if provider is None:
-        return PERSONA_MODELS.get((active().id if active() else ""), PERSONA_MODEL)
+        # The env provider. Without a persona model of its own, fall back to
+        # the agent's model like the v3 path below: the old fallback was a
+        # Claude id, a 404 on every provider but Anthropic.
+        env = active().id if active() else ""
+        if env in PERSONA_MODELS:
+            return PERSONA_MODELS[env]
+        return fallback or PERSONA_MODEL
     kind = getattr(provider, "kind", None) or provider.id
     return PERSONA_MODELS.get(kind) or fallback or PERSONA_MODEL
 

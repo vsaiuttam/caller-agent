@@ -65,6 +65,11 @@ class ModelSpec:
     # Accepts `reasoning_effort` on the chat/completions shape. Sent to a
     # model that doesn't, it is a 400 — see providers.chat_params.
     reasoning: bool = False
+    # Thinks by default unless told not to through the chat template
+    # (NVIDIA-hosted Nemotron/GLM). On a call a silent reasoning pass is
+    # dead air: measured 6-8 s before Nemotron Lightning's first word with
+    # thinking on, 0.7-1.1 s with it off. providers.chat_params turns it off.
+    thinking_toggle: bool = False
 
     @property
     def cache_write_per_mtok(self) -> float | None:
@@ -438,6 +443,50 @@ MODELS: list[ModelSpec] = [
         roles=(CONVERSATION,),
         tagline="Near-instant and nearly free. English-first; weak in Indian languages.",
     ),
+    # NVIDIA's hosted endpoint (build.nvidia.com): free evaluation credits,
+    # ~40 requests/minute, latency that varies run to run. Measured from
+    # India on 2026-10-03 with thinking off. Prices are 0 because the free
+    # endpoint doesn't bill; a paid NIM deployment would.
+    ModelSpec(
+        id="nvidia/nemotron-3.5-lightning-30b-a3b",
+        name="Nemotron 3.5 Lightning 30B",
+        family="Nemotron",
+        provider="nvidia",
+        context_tokens=131_072,
+        input_per_mtok=0.0,
+        output_per_mtok=0.0,
+        speed="fastest",
+        roles=(CONVERSATION, EXTRACTION),
+        thinking_toggle=True,
+        tagline="The NVIDIA default on the line: 0.7-1.1 s to first word, natural Hinglish.",
+        strengths=(
+            "Measured 0.7-1.1 s to first word (Gemini Flash Lite: ~1.6 s)",
+            "Natural Hinglish replies",
+            "Free on NVIDIA's evaluation endpoint",
+        ),
+        watch_out=(
+            "Doesn't call tools reliably (it describes the tool instead), so "
+            "connected apps don't run mid-call on this model. The free endpoint "
+            "is rate-limited and its latency varies; not for large campaigns."
+        ),
+        recommended_for=("The in-call path", "Testing and pilots"),
+    ),
+    ModelSpec(
+        id="nvidia/nemotron-3-ultra-550b-a55b",
+        name="Nemotron 3 Ultra 550B",
+        family="Nemotron",
+        provider="nvidia",
+        context_tokens=1_000_000,
+        input_per_mtok=0.0,
+        output_per_mtok=0.0,
+        speed="deliberate",
+        roles=(EXTRACTION,),
+        thinking_toggle=True,
+        tagline="The NVIDIA default after the call: careful, clean JSON outcomes.",
+        strengths=("Valid JSON outcomes in testing (~8.5 s)", "Large context for long calls"),
+        watch_out="Too slow for the live call; used only after it ends.",
+        recommended_for=("Post-call extraction",),
+    ),
     ModelSpec(
         id="llama-3.3-70b-versatile",
         name="Llama 3.3 70B Versatile",
@@ -625,6 +674,12 @@ PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
         "conversation_model": "gpt-4.1-mini",
         "conversation_effort": "low",
         "extraction_model": "gpt-5-mini",
+        "extraction_effort": "high",
+    },
+    "nvidia": {
+        "conversation_model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "conversation_effort": "low",
+        "extraction_model": "nvidia/nemotron-3-ultra-550b-a55b",
         "extraction_effort": "high",
     },
     "groq": {
