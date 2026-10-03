@@ -1,28 +1,43 @@
 /**
  * Vani (वाणी, "voice") — the Samvaad agent, the product's face.
  *
- * A calm, composed mark rather than a cartoon: a dark orb with a thin
- * headset, two capsule eyes and a voice waveform where a mouth would be.
- * The brand colour lives in the rim light, the mic and the waveform. Every
- * state is a pose of the same parts, so switching state is a smooth morph:
+ * A round speech-bubble character (the same bubble as the logo, tail and
+ * all) wearing a call-centre headset. Every state is a pose built from the
+ * same parts, so switching state is a smooth morph rather than a swap:
  *
- *   idle       a slow breath in the halo; the waveform rests as a flat line
- *   ringing    the halo pulses with the ring, eyes widen slightly
- *   listening  eyes turn toward the earpiece, which glows; halo ripples
- *   thinking   eyes look up, an arc orbits the halo, the waveform scans
- *   speaking   the waveform moves with the voice, sound arcs leave the mic side
- *   ended      eyes soften into arcs, the waveform settles into a smile
- *   error      eyes narrow, the waveform goes flat, an alert badge appears
+ *   idle       breathes, blinks now and then
+ *   ringing    wiggles with the ring, eyebrows up, little "o" mouth
+ *   listening  tilts toward the ear cup, which pulses rings
+ *   thinking   eyes drift up and away, thought dots rise
+ *   speaking   mouth talks, sound waves ripple off the bubble's tail
+ *   ended      happy eyes, a grin and a goodbye wave
+ *   error      worried brows, a frown, an alert badge
  *
- * Under prefers-reduced-motion every state is a still pose that still reads.
- * Drawn on a 120-unit grid.
+ * Under prefers-reduced-motion every state is a still pose that still reads
+ * (open mouth + waves for speaking, rings drawn for listening, and so on).
+ *
+ * Drawn on a 120-unit grid; mouth and brow shapes share one path structure so
+ * framer-motion can interpolate between them.
  */
 
 import { useEffect, useId, useState } from "react";
-import { AnimatePresence, m, useReducedMotion, type TargetAndTransition, type Transition } from "framer-motion";
+import {
+  AnimatePresence,
+  m,
+  useReducedMotion,
+  type TargetAndTransition,
+  type Transition,
+} from "framer-motion";
 import { BRAND } from "../brand";
 
-export type AgentState = "idle" | "ringing" | "listening" | "thinking" | "speaking" | "ended" | "error";
+export type AgentState =
+  | "idle"
+  | "ringing"
+  | "listening"
+  | "thinking"
+  | "speaking"
+  | "ended"
+  | "error";
 
 export type AvatarSize = "sm" | "md" | "lg";
 
@@ -38,45 +53,55 @@ const STATE_LABEL: Record<AgentState, string> = {
   error: "something went wrong",
 };
 
-// --- Palette and geometry -------------------------------------------------------
+// --- Shapes -------------------------------------------------------------------
 
-const CORE_TOP = "#2A2438";
-const CORE_BOTTOM = "#15121D";
-const EYE = "#F6EEE8";
-const HEADSET = "#3B3550";
-const ACCENT = "#FF8A3D";
-const ACCENT_SOFT = "#FFB37A";
-const LISTEN = "#38BDF8";
-const ALERT = "#E5484D";
+const BODY =
+  "M60 24C38 24 24 38 24 58C24 78 38 92 60 92C67 92 73 90.6 78 88L90 94L86.5 82.5C92.5 76.5 96 68 96 58C96 38 82 24 60 24Z";
 
-const C = 60; // centre
-const R = 34; // orb radius
+/** All: M x y Q cx cy x y Q cx cy x y Z — upper lip then lower lip. */
+const MOUTH = {
+  smile: "M52 67 Q60 69.5 68 67 Q60 77 52 67 Z",
+  listen: "M54.5 68 Q60 69.2 65.5 68 Q60 72.6 54.5 68 Z",
+  oh: "M56 68 Q60 62.5 64 68 Q60 74.5 56 68 Z",
+  hmm: "M55 70 Q60 68.2 66 68.8 Q60.5 71.2 55 70 Z",
+  talkOpen: "M53.5 66.5 Q60 62.5 66.5 66.5 Q60 78 53.5 66.5 Z",
+  talkMid: "M53 67.5 Q60 65.5 67 67.5 Q60 74 53 67.5 Z",
+  talkClosed: "M54 68.5 Q60 68 66 68.5 Q60 71 54 68.5 Z",
+  grin: "M50 66 Q60 69 70 66 Q60 80 50 66 Z",
+  frown: "M53 73 Q60 66 67 73 Q60 70 53 73 Z",
+} as const;
 
-/** Five waveform bars across the lower face. */
-const BAR_X = [49, 54.5, 60, 65.5, 71];
-const BAR_W = 3;
-const BAR_Y = 73;
+/** [left, right], all: M x y Q cx cy x y. */
+const BROWS = {
+  rest: ["M43 45.5 Q47.5 43.5 52 45.5", "M68 45.5 Q72.5 43.5 77 45.5"],
+  excited: ["M43 44.5 Q47.5 40.5 52 43.5", "M68 43.5 Q72.5 40.5 77 44.5"],
+  thinking: ["M43 46 Q47.5 44.5 52 45.5", "M68 42.5 Q72.5 39.5 77 41.5"],
+  worried: ["M42.5 47 Q47 46 52 43.5", "M68 43.5 Q73 46 77.5 47"],
+} as const;
 
-/** Bar heights per pose; `lift` raises each bar's centre (the smile). */
-const BARS: Record<string, { h: number[]; lift?: number[] }> = {
-  rest: { h: [2.4, 2.4, 2.4, 2.4, 2.4] },
-  listen: { h: [2.4, 3.6, 4.6, 3.6, 2.4] },
-  smile: { h: [2.6, 2.6, 2.6, 2.6, 2.6], lift: [-2.6, -0.6, 0, -0.6, -2.6] },
-  flat: { h: [1.8, 1.8, 1.8, 1.8, 1.8] },
-  ringing: { h: [3, 5, 6.5, 5, 3] },
-  speak: { h: [6, 11, 8, 12, 5] },
-};
-
-/** Talking cycles, one row per bar, offset so the voice looks uneven and real. */
-const TALK: number[][] = [
-  [3, 7, 4, 8, 3, 5, 3],
-  [5, 12, 6, 10, 4, 11, 5],
-  [7, 9, 13, 6, 11, 8, 7],
-  [4, 11, 7, 12, 5, 9, 4],
-  [3, 5, 8, 4, 7, 3, 3],
+const SOUND_WAVES = [
+  "M97 86.5 Q101.5 93 97 99.5",
+  "M102.5 82 Q109.5 93 102.5 104",
+  "M108 77.5 Q117.5 93 108 108.5",
 ];
 
-const SOUND_ARCS = ["M98 52 Q103 60 98 68", "M104 47 Q111.5 60 104 73", "M110 42 Q120 60 110 78"];
+const THOUGHT_DOTS: Array<[number, number, number]> = [
+  [88, 16, 2],
+  [95, 10.5, 2.8],
+  [103.5, 6, 3.6],
+];
+
+const RING_MARKS = [
+  "M20 30 L14.5 25.5",
+  "M16.5 38.5 L10 37",
+  "M100 30 L105.5 25.5",
+  "M103.5 38.5 L110 37",
+];
+
+const INK = "#3A1D12";
+const HEADSET = "#2B2833";
+const HEADSET_PAD = "#4A4656";
+const MIC_GLOW = "#2DD4BF";
 
 const loop = (duration: number, extra: Transition = {}): Transition => ({
   duration,
@@ -86,12 +111,7 @@ const loop = (duration: number, extra: Transition = {}): Transition => ({
 });
 
 const STILL: Transition = { duration: 0 };
-const MORPH: Transition = { duration: 0.32, ease: [0.22, 1, 0.36, 1] };
-
-interface Pose {
-  animate: TargetAndTransition;
-  transition: Transition;
-}
+const MORPH: Transition = { duration: 0.28, ease: [0.22, 1, 0.36, 1] };
 
 // --- Component ------------------------------------------------------------------
 
@@ -112,12 +132,30 @@ export function AgentAvatar({
   const prefersReduced = useReducedMotion();
   const still = prefersReduced === true || !animated;
   const id = useId().replace(/[^a-zA-Z0-9]/g, "");
-  const blink = useBlink(!still && state !== "ended" && state !== "error");
+  const blink = useBlink(!still && state !== "ended");
   const px = PX[size];
-  const small = size === "sm";
 
-  const eyes = eyeMotion(state, still);
-  const halo = haloMotion(state, still);
+  const body = bodyMotion(state, still);
+  const mouth = mouthMotion(state, still);
+  const brows =
+    state === "error"
+      ? BROWS.worried
+      : state === "thinking"
+        ? BROWS.thinking
+        : state === "ringing"
+          ? BROWS.excited
+          : BROWS.rest;
+  const browsVisible = state === "error" || state === "thinking" || state === "ringing";
+
+  const eyeDrift: Pose =
+    state === "thinking"
+      ? still
+        ? { animate: { x: 2.2, y: -2.2 }, transition: STILL }
+        : {
+            animate: { x: [0, 2.2, 2.2, -1.2, 0], y: [0, -2.2, -2.2, -1, 0] },
+            transition: loop(3.6),
+          }
+      : { animate: { x: state === "listening" ? 1.4 : 0, y: 0 }, transition: MORPH };
 
   return (
     <svg
@@ -129,183 +167,234 @@ export function AgentAvatar({
       className={`shrink-0 overflow-visible ${className}`}
     >
       <defs>
-        <radialGradient id={`${id}-core`} cx="0.38" cy="0.3" r="0.85">
-          <stop offset="0" stopColor={CORE_TOP} />
-          <stop offset="1" stopColor={CORE_BOTTOM} />
-        </radialGradient>
-        <linearGradient id={`${id}-rim`} x1="26" y1="26" x2="94" y2="94" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor={ACCENT_SOFT} />
-          <stop offset="0.5" stopColor={ACCENT} />
-          <stop offset="1" stopColor={ACCENT} stopOpacity="0.15" />
-        </linearGradient>
-        <linearGradient id={`${id}-bar`} x1="0" y1="60" x2="0" y2="86" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor={ACCENT_SOFT} />
-          <stop offset="1" stopColor={ACCENT} />
+        <linearGradient id={`${id}-body`} x1="30" y1="24" x2="92" y2="94" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#FFC58F" />
+          <stop offset="0.55" stopColor="#FF9A52" />
+          <stop offset="1" stopColor="#EF6F2A" />
         </linearGradient>
       </defs>
 
-      {/* Halo: breathes, pulses or ripples by state */}
-      <m.circle
-        cx={C}
-        cy={C}
-        r={R + 9}
-        fill="none"
-        stroke={state === "listening" ? LISTEN : state === "error" ? ALERT : ACCENT}
-        strokeWidth="1.4"
-        style={{ originX: 0.5, originY: 0.5 }}
+      {/* Ground shadow */}
+      <m.ellipse
+        cx="60"
+        cy="110"
+        rx="24"
+        ry="3.5"
+        fill="currentColor"
+        className="text-ink"
         initial={false}
-        animate={halo.animate}
-        transition={halo.transition}
+        animate={{ opacity: 0.1, scaleX: state === "ringing" && !still ? [1, 0.92, 1] : 1 }}
+        transition={state === "ringing" && !still ? loop(0.6) : MORPH}
       />
 
-      {/* Listening: ripples off the halo */}
+      {/* Listening: rings pulse out of the right ear cup (behind the head) */}
       <AnimatePresence>
         {state === "listening" &&
-          !small &&
-          [0, 1].map((i) => (
+          [0, 1, 2].map((i) => (
             <m.circle
-              key={`ripple-${i}`}
-              cx={C}
-              cy={C}
-              r={R + 9}
+              key={`ring-${i}`}
+              cx="98.5"
+              cy="57"
+              r="10"
               fill="none"
-              stroke={LISTEN}
-              strokeWidth="1.2"
-              style={{ originX: 0.5, originY: 0.5 }}
-              initial={{ opacity: 0, scale: 1 }}
-              animate={still ? { opacity: 0.3 - i * 0.12, scale: 1.1 + i * 0.1 } : { opacity: [0.5, 0], scale: [1, 1.28] }}
+              stroke="var(--color-info)"
+              strokeWidth="1.6"
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={
+                still
+                  ? { opacity: 0.55 - i * 0.18, scale: 1 + i * 0.45 }
+                  : { opacity: [0.7, 0], scale: [0.8, 2] }
+              }
               exit={{ opacity: 0 }}
-              transition={still ? STILL : loop(2, { ease: "easeOut", delay: i * 1 })}
+              transition={still ? STILL : loop(1.8, { ease: "easeOut", delay: i * 0.6 })}
             />
           ))}
       </AnimatePresence>
 
-      {/* Thinking: an arc orbits the halo */}
-      <AnimatePresence>
-        {state === "thinking" && (
-          <m.circle
-            key="orbit"
-            cx={C}
-            cy={C}
-            r={R + 9}
-            fill="none"
-            stroke={ACCENT}
-            strokeWidth="2.6"
-            strokeLinecap="round"
-            strokeDasharray="18 300"
-            style={{ originX: 0.5, originY: 0.5 }}
-            initial={{ opacity: 0, rotate: 0 }}
-            animate={still ? { opacity: 1, rotate: -60 } : { opacity: 1, rotate: 360 }}
-            exit={{ opacity: 0 }}
-            transition={still ? STILL : { rotate: { duration: 1.6, repeat: Infinity, ease: "linear" }, opacity: { duration: 0.2 } }}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* The orb and everything on it */}
+      {/* The character — everything that moves together */}
       <m.g
-        style={{ originX: 0.5, originY: 0.5 }}
+        style={{ originX: 0.5, originY: 1 }}
         initial={false}
-        animate={bodyMotion(state, still).animate}
-        transition={bodyMotion(state, still).transition}
+        animate={body.animate}
+        transition={body.transition}
       >
-        {/* Headset band, behind the orb's top edge */}
-        <path d="M27 58 C27 37 42 23 60 23 C78 23 93 37 93 58" fill="none" stroke={HEADSET} strokeWidth="3.4" strokeLinecap="round" />
+        <path d={BODY} fill={`url(#${id}-body)`} />
+        {/* Sheen */}
+        <ellipse cx="45" cy="37" rx="11" ry="5.5" fill="#fff" opacity="0.3" transform="rotate(-28 45 37)" />
 
-        <circle cx={C} cy={C} r={R} fill={`url(#${id}-core)`} />
-        <circle cx={C} cy={C} r={R - 0.8} fill="none" stroke={`url(#${id}-rim)`} strokeWidth="1.6" />
-        {/* Soft top light */}
-        <ellipse cx="50" cy="38" rx="14" ry="6" fill="#fff" opacity="0.06" transform="rotate(-20 50 38)" />
-
-        {/* Earpieces */}
-        <rect x="22" y="50" width="8" height="17" rx="4" fill={HEADSET} />
-        <rect x="90" y="50" width="8" height="17" rx="4" fill={HEADSET} />
-        <m.rect
-          x="92.4"
-          y="53.5"
-          width="3.2"
-          height="10"
-          rx="1.6"
-          initial={false}
-          animate={{ fill: state === "listening" ? LISTEN : "#5A536F", opacity: state === "listening" ? 1 : 0.8 }}
-          transition={MORPH}
+        {/* Headset band */}
+        <path
+          d="M25 57 C25 35 40.5 20 60 20 C79.5 20 95 35 95 57"
+          fill="none"
+          stroke={HEADSET}
+          strokeWidth="4.5"
+          strokeLinecap="round"
         />
 
-        {/* Mic boom from the left earpiece */}
-        <path d="M26 66 C27 76 34 81 42 80.5" fill="none" stroke={HEADSET} strokeWidth="2.4" strokeLinecap="round" />
-        <circle cx="44" cy="80.2" r="3.2" fill={HEADSET} />
-        <m.circle
-          cx="44"
-          cy="80.2"
-          r="1.5"
-          fill={ACCENT}
-          initial={false}
-          animate={
-            state === "speaking" && !still
-              ? { opacity: [0.5, 1, 0.5], scale: [1, 1.3, 1] }
-              : { opacity: state === "speaking" ? 1 : 0.55, scale: 1 }
-          }
-          transition={state === "speaking" && !still ? loop(0.8) : MORPH}
-        />
+        {/* Cheeks */}
+        <m.g initial={false} animate={{ opacity: state === "ended" || state === "ringing" ? 0.5 : 0.28 }} transition={MORPH}>
+          <ellipse cx="40.5" cy="64.5" rx="5" ry="3" fill="#FF5C5C" />
+          <ellipse cx="79.5" cy="64.5" rx="5" ry="3" fill="#FF5C5C" />
+        </m.g>
 
-        {/* Eyes: capsules (most states) */}
-        <m.g initial={false} animate={eyes.animate} transition={eyes.transition}>
+        {/* Brows */}
+        {brows.map((d, i) => (
+          <m.path
+            key={i}
+            fill="none"
+            stroke={INK}
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            initial={false}
+            animate={{ d, opacity: browsVisible ? 1 : 0 }}
+            transition={MORPH}
+          />
+        ))}
+
+        {/* Eyes: open (most states) */}
+        <m.g initial={false} animate={eyeDrift.animate} transition={eyeDrift.transition}>
           <m.g
-            style={{ transformBox: "fill-box", transformOrigin: "center" }}
             initial={false}
             animate={{
               opacity: state === "ended" ? 0 : 1,
-              scaleY: blink ? 0.1 : state === "error" ? 0.55 : state === "ringing" ? 1.12 : 1,
+              scaleY: blink ? 0.12 : state === "error" ? 0.82 : state === "ringing" ? 1.08 : 1,
             }}
-            transition={{ duration: blink ? 0.07 : 0.18 }}
+            transition={{ duration: blink ? 0.07 : 0.16 }}
           >
-            <rect x="47" y="49.5" width="5" height="11" rx="2.5" fill={EYE} />
-            <rect x="68" y="49.5" width="5" height="11" rx="2.5" fill={EYE} />
+            <ellipse cx="48" cy="55" rx="4.4" ry="5.6" fill={INK} />
+            <ellipse cx="72" cy="55" rx="4.4" ry="5.6" fill={INK} />
+            <circle cx="49.6" cy="52.8" r="1.5" fill="#fff" />
+            <circle cx="73.6" cy="52.8" r="1.5" fill="#fff" />
           </m.g>
         </m.g>
 
-        {/* Eyes: soft arcs (ended) */}
+        {/* Eyes: happy arcs (ended) */}
         <m.g initial={false} animate={{ opacity: state === "ended" ? 1 : 0 }} transition={MORPH}>
-          <path d="M46 56 Q49.5 51.5 53 56" fill="none" stroke={EYE} strokeWidth="2.6" strokeLinecap="round" />
-          <path d="M67 56 Q70.5 51.5 74 56" fill="none" stroke={EYE} strokeWidth="2.6" strokeLinecap="round" />
+          <path d="M43.5 56.5 Q48 50.5 52.5 56.5" fill="none" stroke={INK} strokeWidth="2.8" strokeLinecap="round" />
+          <path d="M67.5 56.5 Q72 50.5 76.5 56.5" fill="none" stroke={INK} strokeWidth="2.8" strokeLinecap="round" />
         </m.g>
 
-        {/* Waveform */}
-        {BAR_X.map((x, i) => {
-          const bar = barMotion(state, still, i);
-          return (
-            <m.rect
-              key={i}
-              x={x - BAR_W / 2}
-              width={BAR_W}
-              rx={BAR_W / 2}
-              fill={state === "error" ? "#8F8AA3" : `url(#${id}-bar)`}
-              initial={false}
-              animate={bar.animate}
-              transition={bar.transition}
-            />
-          );
-        })}
+        {/* Mouth */}
+        <m.path fill={INK} initial={false} animate={mouth.animate} transition={mouth.transition} />
+
+        {/* Ear cups */}
+        <rect x="15.5" y="46" width="12" height="22" rx="5.5" fill={HEADSET} />
+        <rect x="92.5" y="46" width="12" height="22" rx="5.5" fill={HEADSET} />
+        <rect x="18.5" y="49.5" width="6" height="15" rx="3" fill={HEADSET_PAD} />
+        <m.rect
+          x="95.5"
+          y="49.5"
+          width="6"
+          height="15"
+          rx="3"
+          initial={false}
+          animate={{ fill: state === "listening" ? "#22D3EE" : HEADSET_PAD }}
+          transition={MORPH}
+        />
+
+        {/* Mic boom */}
+        <path d="M21.5 67 C22.5 79 32 84.5 42 81.8" fill="none" stroke={HEADSET} strokeWidth="3" strokeLinecap="round" />
+        <circle cx="44.5" cy="81" r="3.8" fill={HEADSET} />
+        <m.circle
+          cx="44.5"
+          cy="81"
+          r="1.9"
+          fill={MIC_GLOW}
+          initial={false}
+          animate={
+            state === "speaking" && !still
+              ? { opacity: [0.5, 1, 0.5], scale: [1, 1.35, 1] }
+              : { opacity: state === "speaking" ? 1 : 0.45, scale: 1 }
+          }
+          transition={state === "speaking" && !still ? loop(0.7) : MORPH}
+        />
       </m.g>
 
-      {/* Speaking: sound arcs leave the right side */}
+      {/* Speaking: waves ripple off the bubble's tail */}
       <AnimatePresence>
         {state === "speaking" &&
-          !small &&
-          SOUND_ARCS.map((d, i) => (
+          SOUND_WAVES.map((d, i) => (
             <m.path
-              key={`arc-${i}`}
+              key={`wave-${i}`}
               d={d}
               fill="none"
-              stroke={ACCENT}
-              strokeWidth="2"
+              stroke="var(--color-brand)"
+              strokeWidth="2.6"
               strokeLinecap="round"
-              initial={{ opacity: 0, x: -2 }}
-              animate={still ? { opacity: 0.8 - i * 0.25, x: 0 } : { opacity: [0, 0.9, 0], x: [-2, 2] }}
+              initial={{ opacity: 0, x: -3 }}
+              animate={still ? { opacity: 0.9 - i * 0.25, x: 0 } : { opacity: [0, 1, 0], x: [-3, 2] }}
               exit={{ opacity: 0 }}
-              transition={still ? STILL : loop(1.3, { ease: "easeOut", delay: i * 0.2 })}
+              transition={still ? STILL : loop(1.2, { ease: "easeOut", delay: i * 0.18 })}
             />
           ))}
+      </AnimatePresence>
+
+      {/* Thinking: dots rise */}
+      <AnimatePresence>
+        {state === "thinking" &&
+          THOUGHT_DOTS.map(([cx, cy, r], i) => (
+            <m.circle
+              key={`dot-${i}`}
+              cx={cx}
+              cy={cy}
+              r={r}
+              fill="currentColor"
+              className="text-ink-muted"
+              initial={{ opacity: 0, y: 3 }}
+              animate={still ? { opacity: 0.8, y: 0 } : { opacity: [0.25, 1, 0.25], y: [0, -1.5, 0] }}
+              exit={{ opacity: 0 }}
+              transition={still ? STILL : loop(1.4, { delay: i * 0.22 })}
+            />
+          ))}
+      </AnimatePresence>
+
+      {/* Ringing: little vibration marks */}
+      <AnimatePresence>
+        {state === "ringing" &&
+          RING_MARKS.map((d, i) => (
+            <m.path
+              key={`ring-mark-${i}`}
+              d={d}
+              fill="none"
+              stroke="var(--color-brand)"
+              strokeWidth="2.6"
+              strokeLinecap="round"
+              initial={{ opacity: 0 }}
+              animate={still ? { opacity: 1 } : { opacity: [0, 1, 0] }}
+              exit={{ opacity: 0 }}
+              transition={still ? STILL : loop(0.6, { delay: (i % 2) * 0.1 })}
+            />
+          ))}
+      </AnimatePresence>
+
+      {/* Ended: a wave goodbye */}
+      <AnimatePresence>
+        {state === "ended" && (
+          <m.g
+            key="hand"
+            style={{ originX: 0.5, originY: 1 }}
+            initial={{ opacity: 0, scale: 0.4 }}
+            animate={
+              still
+                ? { opacity: 1, scale: 1, rotate: -10 }
+                : { opacity: 1, scale: 1, rotate: [0, 20, -12, 20, -12, 14, 0] }
+            }
+            exit={{ opacity: 0, scale: 0.4 }}
+            transition={
+              still
+                ? STILL
+                : {
+                    opacity: { duration: 0.2 },
+                    scale: { type: "spring", stiffness: 420, damping: 18 },
+                    rotate: { duration: 1.6, ease: "easeInOut", delay: 0.15 },
+                  }
+            }
+          >
+            <ellipse cx="15" cy="35.5" rx="6.2" ry="7" fill={`url(#${id}-body)`} />
+            <ellipse cx="9.8" cy="38.5" rx="2.4" ry="3.4" fill={`url(#${id}-body)`} transform="rotate(-32 9.8 38.5)" />
+            <path d="M12.5 30.5 v3.5 M15.5 29.5 v4 M18.5 30.5 v3.5" stroke="#E46325" strokeWidth="1.1" strokeLinecap="round" opacity="0.6" />
+          </m.g>
+        )}
       </AnimatePresence>
 
       {/* Error: alert badge */}
@@ -316,11 +405,11 @@ export function AgentAvatar({
             initial={{ opacity: 0, scale: 0.3 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.3 }}
-            transition={still ? STILL : { type: "spring", stiffness: 500, damping: 22 }}
+            transition={still ? STILL : { type: "spring", stiffness: 500, damping: 20 }}
           >
-            <circle cx="91" cy="31" r="8" fill={ALERT} stroke="#fff" strokeWidth="2" />
-            <path d="M91 27 V32" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
-            <circle cx="91" cy="35.2" r="1.25" fill="#fff" />
+            <circle cx="99" cy="27" r="8.5" fill="#E5484D" stroke="#fff" strokeWidth="2" />
+            <path d="M99 22.5 V28" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" />
+            <circle cx="99" cy="31.5" r="1.35" fill="#fff" />
           </m.g>
         )}
       </AnimatePresence>
@@ -330,89 +419,78 @@ export function AgentAvatar({
 
 // --- Motion per state -------------------------------------------------------------
 
+interface Pose {
+  animate: TargetAndTransition;
+  transition: Transition;
+}
+
 function bodyMotion(state: AgentState, still: boolean): Pose {
   if (still) {
-    return { animate: { rotate: state === "listening" ? -3 : 0, x: 0, y: 0 }, transition: STILL };
+    const rotate = state === "listening" ? -4 : state === "thinking" ? 3 : state === "error" ? -2 : 0;
+    return { animate: { rotate, y: 0, x: 0, scale: 1 }, transition: STILL };
   }
   switch (state) {
     case "ringing":
       return {
-        animate: { rotate: [0, -3, 3, -2, 2, 0, 0], x: 0, y: 0 },
-        transition: loop(1.4, { times: [0, 0.08, 0.16, 0.24, 0.32, 0.4, 1] }),
+        animate: { rotate: [0, -6, 6, -5, 5, -3, 0, 0], y: 0, x: 0, scale: 1 },
+        transition: loop(1.3, { times: [0, 0.08, 0.16, 0.24, 0.32, 0.4, 0.48, 1] }),
       };
     case "listening":
-      return { animate: { rotate: -3, x: 0, y: [0, -0.8, 0] }, transition: { rotate: MORPH, y: loop(3) } };
+      return {
+        animate: { rotate: -4, y: [0, -1, 0], x: 0, scale: 1 },
+        transition: { rotate: MORPH, y: loop(2.8) },
+      };
+    case "thinking":
+      return {
+        animate: { rotate: 3, y: [0, -1.2, 0], x: 0, scale: 1 },
+        transition: { rotate: MORPH, y: loop(3.2) },
+      };
+    case "speaking":
+      return {
+        animate: { rotate: 0, y: [0, -1.4, 0, -0.7, 0], x: 0, scale: 1 },
+        transition: { rotate: MORPH, y: loop(0.95) },
+      };
+    case "ended":
+      return {
+        animate: { rotate: 0, y: [0, -4, 0], x: 0, scale: 1 },
+        transition: { rotate: MORPH, y: { duration: 0.55, repeat: 1, ease: "easeOut" } },
+      };
     case "error":
       return {
-        animate: { rotate: 0, x: [0, -2, 2, -1, 0], y: 0 },
-        transition: { rotate: MORPH, x: { duration: 0.4, ease: "easeInOut" } },
+        animate: { rotate: -2, x: [0, -2.5, 2.5, -1.5, 1, 0], y: 0, scale: 1 },
+        transition: { rotate: MORPH, x: { duration: 0.45, ease: "easeInOut" } },
       };
-    default:
-      return { animate: { rotate: 0, x: 0, y: [0, -1, 0] }, transition: { rotate: MORPH, y: loop(4) } };
-  }
-}
-
-function haloMotion(state: AgentState, still: boolean): Pose {
-  const base = state === "listening" ? 0.55 : state === "error" ? 0.6 : 0.28;
-  if (still) return { animate: { opacity: base, scale: 1 }, transition: STILL };
-  switch (state) {
-    case "ringing":
-      return { animate: { opacity: [0.25, 0.8, 0.25], scale: [1, 1.06, 1] }, transition: loop(0.7) };
-    case "speaking":
-      return { animate: { opacity: [0.3, 0.55, 0.3], scale: [1, 1.025, 1] }, transition: loop(1.1) };
-    case "thinking":
-      return { animate: { opacity: 0.18, scale: 1 }, transition: MORPH };
     case "idle":
-      return { animate: { opacity: [0.18, 0.36, 0.18], scale: [1, 1.03, 1] }, transition: loop(4) };
     default:
-      return { animate: { opacity: base, scale: 1 }, transition: MORPH };
+      return {
+        animate: { rotate: 0, x: 0, y: [0, -1.5, 0], scale: [1, 1.018, 1] },
+        transition: { rotate: MORPH, y: loop(3.4), scale: loop(3.4) },
+      };
   }
 }
 
-function eyeMotion(state: AgentState, still: boolean): Pose {
-  if (state === "thinking") {
-    return still
-      ? { animate: { x: 1.5, y: -2 }, transition: STILL }
-      : { animate: { x: [0, 1.8, 1.8, -1, 0], y: [0, -2, -2, -1, 0] }, transition: loop(3.6) };
-  }
-  return { animate: { x: state === "listening" ? 2 : 0, y: 0 }, transition: still ? STILL : MORPH };
-}
-
-function barAt(height: number, lift = 0): TargetAndTransition {
-  return { height, y: BAR_Y - height / 2 + lift };
-}
-
-function barMotion(state: AgentState, still: boolean, i: number): Pose {
+function mouthMotion(state: AgentState, still: boolean): Pose {
   if (state === "speaking" && !still) {
-    const hs = TALK[i];
     return {
-      animate: { height: hs, y: hs.map((h) => BAR_Y - h / 2) },
-      transition: loop(1.05, { delay: i * 0.04 }),
+      animate: {
+        d: [MOUTH.talkMid, MOUTH.talkOpen, MOUTH.talkClosed, MOUTH.talkOpen, MOUTH.talkMid, MOUTH.talkClosed, MOUTH.talkMid],
+      },
+      transition: loop(1.1),
     };
   }
-  if (state === "thinking" && !still) {
-    // A pulse scans left to right.
-    return {
-      animate: { height: [2.4, 6, 2.4, 2.4], y: [BAR_Y - 1.2, BAR_Y - 3, BAR_Y - 1.2, BAR_Y - 1.2] },
-      transition: loop(1.2, { delay: i * 0.12, times: [0, 0.2, 0.4, 1] }),
-    };
-  }
-  const pose =
-    state === "speaking"
-      ? BARS.speak
-      : state === "listening"
-        ? BARS.listen
-        : state === "ended"
-          ? BARS.smile
-          : state === "error"
-            ? BARS.flat
-            : state === "ringing"
-              ? BARS.ringing
-              : BARS.rest;
-  return { animate: barAt(pose.h[i], pose.lift?.[i] ?? 0), transition: still ? STILL : MORPH };
+  const shape: Record<AgentState, string> = {
+    idle: MOUTH.smile,
+    ringing: MOUTH.oh,
+    listening: MOUTH.listen,
+    thinking: MOUTH.hmm,
+    speaking: MOUTH.talkOpen,
+    ended: MOUTH.grin,
+    error: MOUTH.frown,
+  };
+  return { animate: { d: shape[state] }, transition: still ? STILL : MORPH };
 }
 
-/** Blink every few seconds, at slightly irregular intervals. */
+/** Blink every few seconds, at slightly irregular intervals so it feels alive. */
 function useBlink(enabled: boolean): boolean {
   const [blink, setBlink] = useState(false);
   useEffect(() => {
@@ -427,8 +505,8 @@ function useBlink(enabled: boolean): boolean {
         timer = window.setTimeout(() => {
           setBlink(false);
           schedule();
-        }, 120);
-      }, 3200 + Math.random() * 3600);
+        }, 130);
+      }, 2400 + Math.random() * 3200);
     };
     schedule();
     return () => window.clearTimeout(timer);
