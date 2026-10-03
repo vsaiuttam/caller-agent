@@ -15,8 +15,11 @@ export const BRAND = {
   tagline: "AI voice agents that sound human.",
   description:
     "Design a calling campaign, rehearse it, then watch every conversation happen live. Transcripts, outcomes and follow-ups are saved for you.",
-  /** Used by the agent character's accessible label. */
-  agentName: `${NAME} agent`,
+  /** The agent character: वाणी, "voice". Its accessible label and captions. */
+  agentName: "Vani",
+  agentNativeName: "वाणी",
+  agentMeaning: "voice",
+  agentRole: `the ${NAME} calling agent`,
   copyright: `© ${new Date().getFullYear()} ${NAME}`,
   repoUrl: REPO,
   /** The README is the documentation. */

@@ -14,6 +14,7 @@ import {
   Skeleton,
   toast,
 } from "../components/ui";
+import { PhoneInput, isValidPhone } from "../components/PhoneInput";
 import { formatDateTime } from "../format";
 import { useAsync, useDocumentTitle } from "../hooks";
 
@@ -29,7 +30,7 @@ export default function Suppressions() {
   const [query, setQuery] = useState("");
 
   const number = phone.replace(/[\s\-().]/g, "");
-  const valid = E164.test(number);
+  const valid = E164.test(number) && isValidPhone(number);
 
   const add = async (event: FormEvent) => {
     event.preventDefault();
@@ -65,17 +66,9 @@ export default function Suppressions() {
 
       <Card className="mb-4">
         <CardHeader title="Block a number" />
-        <form onSubmit={add} className="grid gap-3 px-5 py-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_auto] sm:items-start">
-          <Field label="Phone number" error={touched && phone && !valid ? "Use + and the country code." : null} hint={!touched || valid ? "e.g. +14155550123" : undefined}>
-            <Input
-              type="tel"
-              className="tnum"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              onBlur={() => setTouched(true)}
-              aria-invalid={touched && !!phone && !valid}
-              placeholder="+14155550123"
-            />
+        <form onSubmit={add} className="grid gap-3 px-5 py-4 sm:grid-cols-[minmax(0,17rem)_minmax(0,1fr)_auto] sm:items-start">
+          <Field label="Phone number" group error={touched && phone && !valid ? "That number looks too short or too long for this country." : null}>
+            <PhoneInput value={phone} onChange={setPhone} onBlur={() => setTouched(true)} invalid={touched && !!phone && !valid} />
           </Field>
           <Field label="Reason" optional>
             <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Requested by email" />

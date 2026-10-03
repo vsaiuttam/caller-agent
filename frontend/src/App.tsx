@@ -15,6 +15,7 @@ import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./auth";
 import { Logo } from "./components/Logo";
+import { WakingNotice } from "./components/WakingNotice";
 import { Skeleton, Toaster } from "./components/ui";
 import { APP, LEGACY_SECTIONS, LOGIN, loginFor } from "./routes";
 
@@ -123,6 +124,7 @@ function Splash() {
     <div className="flex min-h-[100dvh] flex-col items-center justify-center gap-5" aria-busy="true" aria-label="Loading">
       <Logo size={36} />
       <Skeleton className="h-1.5 w-40 rounded-full" />
+      <WakingNotice />
     </div>
   );
 }

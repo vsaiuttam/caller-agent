@@ -12,6 +12,7 @@ import { BRAND } from "../../brand";
 import { rise } from "../../motion";
 import { AgentAvatar, type AgentState } from "../AgentAvatar";
 import { IconAlert, IconEye, IconEyeOff } from "../icons";
+import { WakingNotice } from "../WakingNotice";
 import { Skeleton, cx, inputClass } from "../ui";
 import { SiteFooter } from "./SiteFooter";
 import { SiteHeader, SkipLink } from "./SiteHeader";
@@ -28,7 +29,10 @@ export function AuthLayout({ mood, children }: { mood: AgentState; children: Rea
             <div aria-hidden className="flame-glow absolute -left-24 -top-24 h-[28rem] w-[28rem]" />
             <div className="relative">
               <AgentAvatar state={mood} size="lg" />
-              <p className="mt-8 max-w-sm text-display-md font-semibold text-ink">{BRAND.tagline}</p>
+              <p className="mt-4 text-xs font-medium text-ink-muted">
+                {BRAND.agentName} · <span lang="hi">{BRAND.agentNativeName}</span>, “{BRAND.agentMeaning}” — {BRAND.agentRole}
+              </p>
+              <p className="mt-6 max-w-sm text-display-md font-semibold text-ink">{BRAND.tagline}</p>
               <p className="mt-3 max-w-sm text-sm leading-relaxed text-ink-secondary">{BRAND.description}</p>
             </div>
             <p className="relative mt-10 text-xs text-ink-muted">
@@ -143,6 +147,9 @@ export function AuthSkeleton() {
       <Skeleton className="mt-5 h-4 w-20" />
       <Skeleton className="mt-2 h-11 w-full" />
       <Skeleton className="mt-6 h-11 w-full" />
+      <div className="mt-5 flex justify-center">
+        <WakingNotice />
+      </div>
     </div>
   );
 }

@@ -600,7 +600,7 @@ function ClosingBand() {
       <div aria-hidden className="flame-glow absolute inset-0" />
       <Reveal className="relative">
         <div className="mx-auto flex max-w-2xl flex-col items-center px-4 text-center sm:px-6">
-          <AgentAvatar state="idle" size="md" label={`The ${BRAND.agentName}`} />
+          <AgentAvatar state="idle" size="md" label={`${BRAND.agentName}, ${BRAND.agentRole}`} />
           <h2 id="cta-title" className="mt-6 text-display-lg font-semibold text-ink">
             Try it on your own phone first
           </h2>

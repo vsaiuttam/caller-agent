@@ -1,8 +1,9 @@
-import { useState, type DragEvent } from "react";
+import { useState, type DragEvent, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api";
-import { IconUpload, IconUsers } from "../icons";
-import { Button, Callout, Card, CardHeader, ConfirmDialog, Textarea, cx, toast } from "../ui";
+import { IconPlus, IconUpload, IconUsers } from "../icons";
+import { PhoneInput, countryOf, isValidPhone } from "../PhoneInput";
+import { Button, Callout, Card, CardHeader, ConfirmDialog, Field, Input, Textarea, cx, toast } from "../ui";
 import { useBuilder } from "./context";
 
 export function ContactsStep() {
@@ -100,6 +101,8 @@ export function ContactsStep() {
           <span className="text-2xs text-ink-muted">.xlsx · .xls · .csv</span>
         </label>
 
+        <AddContact />
+
         <details className="group" open={!!pasted}>
           <summary className="cursor-pointer rounded text-xs font-medium text-ink-muted transition-colors hover:text-ink">Or paste rows</summary>
           <Textarea
@@ -194,5 +197,45 @@ export function ContactsStep() {
         confirmLabel="Clear contacts"
       />
     </Card>
+  );
+}
+
+/** One contact typed in by hand: a name, a country and a local number. */
+function AddContact() {
+  const { draft, update } = useBuilder();
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [touched, setTouched] = useState(false);
+  const valid = isValidPhone(phone);
+  const duplicate = valid && draft.contacts.some((c) => c.phone_e164 === phone);
+  const error = !touched || !phone ? null : !valid ? "That number looks too short or too long for this country." : duplicate ? "That number is already in the list." : null;
+
+  const add = (event: FormEvent) => {
+    event.preventDefault();
+    setTouched(true);
+    if (!name.trim() || !valid || duplicate) return;
+    const timezone = countryOf(phone)?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    update({ contacts: [...draft.contacts, { full_name: name.trim(), phone_e164: phone, timezone, attributes: {} }] });
+    toast.success(`${name.trim()} added`, "Imported when you save or launch.");
+    setName("");
+    setPhone("");
+    setTouched(false);
+  };
+
+  return (
+    <form onSubmit={add} className="rounded-xl border border-line bg-subtle/40 p-4">
+      <p className="mb-3 text-xs font-medium text-ink-secondary">Add a contact</p>
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_auto] sm:items-start">
+        <Field label="Name">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ananya Rao" autoComplete="off" />
+        </Field>
+        <Field label="Phone number" group error={error}>
+          <PhoneInput value={phone} onChange={setPhone} onBlur={() => setTouched(true)} invalid={!!error} />
+        </Field>
+        <Button type="submit" variant="secondary" icon={<IconPlus size={14} />} disabled={!name.trim() || !phone} className="sm:mt-[22px]">
+          Add
+        </Button>
+      </div>
+    </form>
   );
 }

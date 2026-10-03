@@ -13,6 +13,7 @@ import { IconPhone } from "../components/icons";
 import { Button, ButtonLink, Callout, Card, CardHeader, EmptyState, Field, Input, Switch, toast } from "../components/ui";
 import { useHealth } from "../data";
 import { useLocalStorage } from "../hooks";
+import { PhoneInput, isValidPhone } from "../components/PhoneInput";
 import { CampaignField, useTestLab } from "./TestLab";
 
 const E164 = /^\+[1-9]\d{6,14}$/;
@@ -32,7 +33,7 @@ export default function PhoneTest() {
   const [phase, setPhase] = useState<CallPhase | null>(null);
 
   const number = normalise(phone);
-  const valid = E164.test(number);
+  const valid = E164.test(number) && isValidPhone(number);
   const inProgress = !!call && phase !== "done" && phase !== "failed";
   const telephonyReady =
     !health || (["twilio", "telnyx"].includes(health.telephony_mode.toLowerCase()) && health.checks.telephony !== false);
@@ -79,20 +80,16 @@ export default function PhoneTest() {
 
           <Field
             label="Phone number"
-            hint="International format, e.g. +919876543210 or +14155550123."
-            error={touched && phone && !valid ? "Start with + and the country code, digits only." : null}
+            group
+            hint="Pick the country, then type the number as you would dial it locally."
+            error={touched && phone && !valid ? "That number looks too short or too long for this country." : null}
           >
-            <Input
-              type="tel"
-              inputMode="tel"
-              autoComplete="tel"
-              placeholder="+91 98765 43210"
+            <PhoneInput
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              onChange={setPhone}
               onBlur={() => setTouched(true)}
-              aria-invalid={touched && !!phone && !valid}
+              invalid={touched && !!phone && !valid}
               disabled={inProgress}
-              className="tnum"
             />
           </Field>
 
