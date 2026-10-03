@@ -37,6 +37,10 @@ fetches the reply's TwiML. These keep that short:
     person listening.
   * Sarvam synthesis starts per sentence as the model streams, so audio for
     the first sentence is ready while the second is still being generated.
+  * If the turn is still being written TWILIO_EARLY_GRACE_MS after the
+    first sentence's audio is ready, that sentence plays at once and the
+    rest follows at /twilio/wait. A short turn still goes out whole, inside
+    <Gather>, so the caller can talk over it.
   * `prepare_call` synthesizes the greeting and the acknowledgements while
     the phone rings, in the call's language.
   * One Sarvam client per TTS language for the process, so each turn skips
@@ -96,6 +100,9 @@ GATHER_TIMEOUT = int(os.getenv("TWILIO_GATHER_TIMEOUT", "10"))
 # How long a webhook holds Twilio's request open waiting for the reply.
 # Twilio abandons a webhook at 15s.
 REPLY_WAIT_SECONDS = float(os.getenv("TWILIO_REPLY_WAIT", "9"))
+# How long a ready first sentence waits for the rest of its turn before it
+# is played on its own. 0 turns early release off.
+EARLY_GRACE_SECONDS = max(0.0, float(os.getenv("TWILIO_EARLY_GRACE_MS", "350")) / 1000)
 # A phone line carries 8 kHz audio. Anything richer is a bigger file for
 # Twilio to download before it can start playing.
 SARVAM_TWILIO_SAMPLE_RATE = int(os.getenv("SARVAM_TWILIO_SAMPLE_RATE", "8000"))
@@ -289,12 +296,44 @@ class TwilioSpeaker:
         self._pending: list[tuple[str, asyncio.Future[str | None] | None]] = []
         # Whether an interim has gone out in the turn now being spoken.
         self._interim_sent = False
+        # Releases the turn's first sentence early when the rest is slow.
+        self._early: asyncio.Task[None] | None = None
 
     async def say(self, text: str) -> None:
         """Buffer a chunk and start synthesizing it. Queues nothing yet."""
         text = text.strip()
         if text:
-            self._pending.append((text, self._synthesis(text)))
+            future = self._synthesis(text)
+            self._pending.append((text, future))
+            if (
+                future is not None
+                and len(self._pending) == 1
+                and not self._interim_sent
+                and EARLY_GRACE_SECONDS > 0
+            ):
+                self._early = asyncio.create_task(self._release_early(future))
+
+    async def _release_early(self, first: asyncio.Future[str | None]) -> None:
+        """Play the first sentence now if the turn is still being written.
+
+        Waits for its audio, then a short grace for flush(). A turn that
+        finishes inside the grace goes out whole, in <Gather>, as before.
+        """
+        try:
+            await asyncio.shield(first)
+        except Exception:  # noqa: BLE001 - the reply falls back to <Say>
+            return
+        await asyncio.sleep(EARLY_GRACE_SECONDS)
+        if not self._pending or self._pending[0][1] is not first:
+            return  # flushed, stopped or already sent
+        pending, self._pending = self._pending, []
+        self._interim_sent = True
+        await self._queue(pending, interim=True)
+
+    def _cancel_early(self) -> None:
+        if self._early is not None and not self._early.done():
+            self._early.cancel()
+        self._early = None
 
     def _synthesis(self, text: str) -> asyncio.Future[str | None] | None:
         if VOICE_PROVIDER != "sarvam":
@@ -303,9 +342,12 @@ class TwilioSpeaker:
 
     async def flush(self) -> None:
         """Queue the buffered turn as ONE reply for the webhook."""
-        self._interim_sent = False
+        self._cancel_early()
+        sent_ahead, self._interim_sent = self._interim_sent, False
         pending, self._pending = self._pending, []
-        if pending:
+        if pending or sent_ahead:
+            # After an interim, an empty reply still has to go out: it is
+            # what gives Twilio the <Gather> that listens for the answer.
             await self._queue(pending)
 
     async def flush_interim(self) -> None:
@@ -344,6 +386,7 @@ class TwilioSpeaker:
         Nothing buffered here has reached the caller — Twilio only plays a
         turn once it is flushed — so the honest answer is nothing.
         """
+        self._cancel_early()
         self._pending.clear()
         return ""
 

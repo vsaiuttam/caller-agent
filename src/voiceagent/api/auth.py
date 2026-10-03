@@ -59,7 +59,7 @@ DEFAULT_TTL_HOURS = 12.0
 # Reachable without a token: monitoring, and what the login and register
 # pages themselves need.
 OPEN_PATHS = frozenset(
-    {"/api/health", "/api/auth/login", "/api/auth/status", "/api/auth/register"}
+    {"/api/health", "/api/ping", "/api/auth/login", "/api/auth/status", "/api/auth/register"}
 )
 
 # More than this many failed logins from one client in the window is a 429.

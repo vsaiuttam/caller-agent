@@ -1,0 +1,19 @@
+# Render's free plan sleeps a web service after 15 idle minutes, and the next
+# visitor waits ~70 s for it to boot. A ping every 10 minutes keeps it awake.
+# One always-on free service uses ~744 of the 750 free instance hours a month.
+# GitHub may delay or skip scheduled runs under load, and pauses them after 60
+# days without a commit; the console still says "Waking the server" if so.
+name: keep-warm
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping the API
+        run: curl -fsS --max-time 120 -o /dev/null -w "%{http_code} in %{time_total}s\n" https://voiceagent-api-vzpp.onrender.com/api/ping

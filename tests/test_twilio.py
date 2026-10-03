@@ -194,6 +194,50 @@ def test_speech_is_synthesized_per_sentence_while_the_model_writes() -> None:
         asyncio.run(scenario())
 
 
+def test_a_slow_turn_plays_its_first_sentence_while_the_rest_is_written() -> None:
+    """The first sentence goes out on its own; the rest follows at /wait.
+
+    The second webhook response is the one that listens (<Gather>), so the
+    caller can still answer once the whole turn has played.
+    """
+
+    async def fake_synthesize(text: str) -> bytes:
+        await asyncio.sleep(0.02)
+        return _wav(1.0)
+
+    async def scenario() -> None:
+        room = "t-early"
+        state, listener, speaker, control = _open_call(room)
+        llm = FakeLLM([["First sentence.", "Second sentence."]], gap=1.5)
+        session = CallSession(
+            llm=llm,  # type: ignore[arg-type]
+            listener=listener,
+            speaker=speaker,
+            control=control,
+            greeting="Hello.",
+            max_duration_seconds=10,
+        )
+        run = asyncio.create_task(session.run())
+
+        async with _http() as http:
+            await http.post(f"/twilio/voice/{room}", data={"CallSid": "CA9"})
+            started = time.perf_counter()
+            r = await http.post(f"/twilio/gather/{room}", data={"SpeechResult": "Go on."})
+            assert time.perf_counter() - started < 1.2, "waited for the whole turn"
+            assert r.text.count("<Play>") == 1 and "<Gather" not in r.text, r.text
+            assert f"/twilio/wait/{room}" in r.text, r.text
+
+            r = await http.post(f"/twilio/wait/{room}")
+            assert r.text.count("<Play>") == 1 and "<Gather" in r.text, r.text
+
+            await http.post(f"/twilio/status/{room}", data={"CallStatus": "completed"})
+
+        await asyncio.wait_for(run, timeout=5)
+
+    with _voice("sarvam", fake_synthesize):
+        asyncio.run(scenario())
+
+
 def test_a_reply_the_caller_talked_over_is_not_played_to_them() -> None:
     """New speech makes any still-queued reply stale.
 

@@ -443,6 +443,12 @@ async def estimate(body: EstimateRequest, db: AsyncSession = Depends(get_session
 # --------------------------------------------------------------------------
 
 
+@app.get("/api/ping")
+async def ping() -> dict:
+    """Liveness only: no database, no auth. The keep-warm job calls it."""
+    return {"ok": True}
+
+
 @app.get("/api/health")
 async def health(db: AsyncSession = Depends(get_session)) -> dict:
     """What is actually wired up, named honestly.
